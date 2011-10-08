@@ -1,0 +1,3 @@
+287 - Presenters from Scratch
+Clean up complex view logic with the help of presenters, and doing this from scratch gives you a lot of flexibility. Here I show not only how to create presenters, but how to test them using Test Unit and RSpec.
+[views refactoring]
