@@ -1,0 +1,201 @@
+<p>Below is a screenshot from an application that displays a long list of products. To reduce the size of the page we want to add pagination to this page.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/753/original/E051I01.png" width="804" height="523" alt="The page that shows the list of products."/>
+</div>
+
+<p>There are two gems to consider if you want to use pagination in a Rails application: <a href="https://github.com/mislav/will_paginate">will_paginate</a> and <a href="https://github.com/amatsuda/kaminari">Kaminari</a>. At the end of this episode we&rsquo;ll explain some of the differences between these two gems and give some tips to help you choose which one to use, but for now we&rsquo;ll concentrate on will_paginate.</p>
+
+<h3>Adding will_paginate to Our Application</h3>
+
+<p>The will_paginate gem has been around for a few years and it had issues working with Rails 3 for a while. The new 3.0 release of will_paginate works well under Rails 3.0 and 3.1 so we can use it with our application. To install it we add a reference to it in the <code>Gemfile</code>, making sure that we specify that at least version 3.0 is used, and then run <code>bundle</code>.</p>
+
+<p class="codeFilePath">/Gemfile</p>
+<pre class="ruby">source &#x27;http://rubygems.org&#x27;
+
+gem &#x27;rails&#x27;, &#x27;3.1.0&#x27;
+gem &#x27;rack&#x27;, &#x27;1.3.3&#x27; # temporarily to hide warning
+gem &#x27;sqlite3&#x27;
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem &#x27;sass-rails&#x27;, &quot;  ~&gt; 3.1.0&quot;
+  gem &#x27;coffee-rails&#x27;, &quot;~&gt; 3.1.0&quot;
+  gem &#x27;uglifier&#x27;
+end
+
+gem &#x27;jquery-rails&#x27;
+gem &#x27;will_paginate&#x27;, &#x27;&gt; 3.0&#x27;</pre>
+
+<p>Now that we have will_paginate installed we can use it in our application. We want to add pagination to the <code>ProductsController</code>&rsquo;s <code>index</code> action. With previous versions of will_paginate we did this by calling the <code>paginate</code> method on the collection we wanted to paginate, like this:</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">class ProductsController &lt; ApplicationController
+  def index
+    @products = Product.order(&quot;name&quot;).paginate
+  end
+  # Other actions omitted.
+end</pre>
+
+<p>This method is still available in Rails 3.0 but we&rsquo;ll use the new <code>page</code> method instead.  We pass it the page number we want to display, in this case the <code>page</code> parameter from the query string.</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">def index
+  @products = Product.order(&quot;name&quot;).page(params[:page])
+end</pre>
+
+<p>We add pagination to the view by calling <code>will_paginate</code>, passing it the paginated collection of products.</p>
+
+<p class="codeFilePath">/app/views/users/index.html.erb</p>
+<pre class="ruby">&lt;h1&gt;Products&lt;/h1&gt;
+
+&lt;%= will_paginate @products %&gt;
+
+&lt;% for product in @products %&gt;
+  &lt;div class=&quot;product&quot;&gt;
+    &lt;h2&gt;&lt;%= link_to product.name, product %&gt;&lt;/h2&gt;
+    &lt;div class=&quot;details&quot;&gt;
+      &lt;%= number_to_currency(product.price) %&gt; |
+      Released &lt;%= product.released_at.strftime(&quot;%B %e, %Y&quot;) %&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+&lt;% end %&gt;
+
+&lt;p&gt;&lt;%= link_to &quot;New Product&quot;, new_product_path %&gt;&lt;/p&gt;</pre>
+
+<p>When we reload the page now we&rsquo;ll have instant pagination.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/754/original/E051I02.png" width="804" height="497" alt="The page now has pagination."/>
+</div>
+
+
+<h3>Changing The Number of Items in The List</h3>
+
+<p>The list of items on each page is still fairly long as the default is to show 30 items per page. We can change this with the <code>per_page</code> method. We&rsquo;ll show five items per page so that we can see the effect more easily.</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">def index
+  @products = Product.order(&quot;name&quot;).page(params[:page]).per_page(5)
+end</pre>
+
+<p>When we reload the page now only five items are shown.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/755/original/E051I03.png" width="804" height="529" alt="Now only five items per page are shown."/>
+</div>
+
+<h3>Customizing The Pagination</h3>
+
+<p>Next we&rsquo;ll look at customizing the way the pagination looks. The default look isn&rsquo;t very pretty, but we can do a lot to improve it with CSS. The <a href="http://mislav.uniqpath.com/will_paginate/">documentation</a> has some nice examples of different pagination styles and we&rsquo;ll choose one that looks like the pagination on digg.com. We&rsquo;ll add its CSS to our application&rsquo;s stylesheet.</p>
+
+<p class="codeFilePath">/app/assets/stylesheets/application.scss.css</p>
+<pre class="css">.pagination {
+  background: white;
+  cursor: default;
+  height: 22px;
+  a, span, em {
+    padding: 0.2em 0.5em;
+    display: block;
+    float: left;
+    margin-right: 1px;
+  }
+  .disabled {
+    color: #999999;
+    border: 1px solid #dddddd;
+  }
+  .current {
+    font-style: normal;
+    font-weight: bold;
+    background: #2e6ab1;
+    color: white;
+    border: 1px solid #2e6ab1;
+  }
+  a {
+    text-decoration: none;
+    color: #105cb6;
+    border: 1px solid #9aafe5;
+    &amp;:hover, &amp;:focus {
+      color: #000033;
+      border-color: #000033;
+    }
+  }
+  .page_info {
+    background: #2e6ab1;
+    color: white;
+    padding: 0.4em 0.6em;
+    width: 22em;
+    margin-bottom: 0.3em;
+    text-align: center;
+    b {
+      color: #000033;
+      background: #2e6ab1 + 60;
+      padding: 0.1em 0.25em;
+    }
+  }
+}</pre>
+
+<p>All of the styles are nested under a <code>pagination</code> class as will_paginate uses that class in the <code>div</code> it wraps the pagination HTML in. When we reload our products page again we&rsquo;ll see the improved pagination.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/756/original/E051I04.png" width="804" height="529" alt="The pagination with our CSS applied."/>
+</div>
+
+<p>There&rsquo;s more that we can do with CSS that we might think, such as hiding the &ldquo;previous&rdquo; and &ldquo;next&rdquo; links when we&rsquo;re displaying the first or last page. We do this by modifying the <code>disabled</code> class in the stylesheet so that disabled items are hidden.</p>
+
+<p class="codeFilePath">/app/assets/stylesheets/application.scss.css</p>
+<pre class="css">.pagination {
+  .disabled {
+    display: none;
+  }
+  /* Rest of stylesheet omitted. */
+}</pre>
+
+<p>If we reload the page now while we&rsquo;re on the first page of products the &ldquo;Previous&rdquo; link will be hidden.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/757/original/E051I05.png" width="804" height="529" alt="The &ldquo;Previous&rdquo; is now hidden when we&rsquo;re on the first page."/>
+</div>
+
+<h3>Rendering Custom Pagination</h3>
+
+<p>If we wanted to customize the pagination further there are various options that we can pass to the <code>will_paginate</code> method. If, say, we wanted to change the &ldquo;previous&rdquo; label to a less than sign and the &ldquo;next&rdquo; label to a greater than sign we can do so like this:</p>
+
+<p class="codeFilePath">/app/views/products/index.html.erb</p>
+<pre class="ruby">&lt;%= will_paginate @products, previous_label: h(&quot;&lt;&quot;), next_label: h(&quot;&gt;&quot;) %&gt;</pre>
+
+<p>Note that that values we supply for the labels aren&rsquo;t HTML-escaped by default so we need to use the <code>h</code> method here to make them safe. When we reload the page again and we&rsquo;ll see the changes.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/758/original/E051I06.png" width="804" height="299" alt="The &ldquo;Previous&rdquo; and &ldquo;Next&rdquo;labels are now customized."/>
+</div>
+
+<p>The <a href="http://rdoc.info/github/mislav/will_paginate/master/WillPaginate/ViewHelpers:will_paginate">RDoc documentation</a> contains more information on the options we can pass in and there is enough flexibility in them to let us customize the way the pagination works in almost any way we could want. There is even a <code>:renderer</code> option that lets us specify a class that can handle all of the rendering logic.</p> 
+
+<p>Sometimes, though, it can be easier to code the pagination directly into the view instead of using the <code>will_paginate</code> method. Let&rsquo;s say that we just want to have &ldquo;previous&rdquo; and &ldquo;next&rdquo; links with some information in between. It&rsquo;s easy to create a link on the page, but how do we get the correct page parameters for the previous and next pages? One way to do this is to use <code>params.merge</code>. Will_paginate provides methods on our collection called <code>previous_page</code> and <code>next_page</code> which will return the value for the previous or next page or <code>nil</code> if there is none so we can use these methods to set the <code>page</code> parameter for the links</p>
+
+<p>Between the links we want to show a &ldquo;page x of y&rdquo; message and we can do so by using of the <code>current_page</code> and <code>total_page</code> methods. When we put it all together our pagination code looks like this:</p>
+
+<p class="codeFilePath">/app/views/products/index.html.erb</p>
+<pre class="ruby">&lt;% if @products.previous_page %&gt;
+  &lt;%= link_to &quot;&lt; Previous&quot;, params.merge(:page =&gt; @products.previous_page ) %&gt;
+&lt;% end %&gt;
+Page &lt;%= @products.current_page %&gt; of &lt;%= @products.total_pages %&gt;
+&lt;% if @products.next_page %&gt;
+  &lt;%= link_to &quot;Next &gt;&quot;, params.merge(:page =&gt; @products.next_page ) %&gt;
+&lt;% end %&gt;</pre>
+
+<p>When we reload the page now we&rsquo;ll see our custom pagination. We could now apply some CSS to make it prettier but the point is that this is all custom made without the use of the <code>will_paginate</code> method and it works just how we want it to.</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/759/original/E051I07.png" width="803" height="528" alt="Our custom pagination."/>
+</div>
+
+<h3>Comparing will_paginate with Kaminari</h3>
+
+<p>As you can see <code>will_paginate</code> is a great gem for handling pagination. We haven&rsquo;t covered all of its features here so you&rsquo;re encouraged to check the README on the <a href="https://github.com/mislav/will_paginate">will_paginate&rsquo;s home page</a> and the wiki for more information.</p>
+
+<p>How does will_paginate compare with <a href="https://github.com/amatsuda/kaminari">Kaminari</a>? We covered Kaminari back in episode 254 [<a href="http://railscasts.com/episodes/254-pagination-with-kaminari">watch</a>, <a href="http://asciicasts.com/episodes/254-pagination-with-kaminari">read</a>] and functionally both gems are very similar. The differences appear when you begin to customize the pagination. Kaminari uses several partials to render the pagination and you override these to customize the way it looks and behaves. By comparison will_paginate handles customization by setting options on Ruby classes so choosing which gem to use depends on which technique you prefer. One thing to note is that rendering many partials has an effect on performance so Kaminari can be a bit slower than will_paginate but not so much slower that you&rsquo;d notice for most applications.</p>
+
+<p>A more significant factor in deciding which to use is that some Ruby gems depend on either will_paginate or Kaminari. <a href="http://activeadmin.info/">ActiveAdmin</a>, for example, depends on Kaminari. The two pagination gems don&rsquo;t play well together, so if one of your application&rsquo;s gems depends on either will_paginate or Kaminari then you&rsquo;ll need to use that gem for all of your application&rsquo;s pagination. These cases aside, you can&rsquo;t go wrong with either pagination gem.</p>
