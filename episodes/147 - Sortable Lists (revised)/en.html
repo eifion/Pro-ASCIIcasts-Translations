@@ -1,0 +1,240 @@
+<p>Below is a page from a website that shows a list of Frequently Asked Questions. We want to add the ability to reorder the items in the list by dragging and dropping them and to have the updated order persisted to the database without having to reload the page. In the past we&rsquo;ve done this by using <a href="http://www.prototypejs.org/">Prototype</a> and <a href="http://madrobby.github.com/scriptaculous/">Scriptaculous</a>&rsquo;s <a href="http://madrobby.github.com/scriptaculous/sortable/">Sortable</a> helper, but these are no longer included with Rails, so how do we achieve this in Rails 3.1?</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/783/original/E147RI01.png" width="800" height="391" alt="Our list of FAQs"/>
+</div>
+
+<h3>Introducing jQuery UI</h3>
+
+<p>Instead of using Prototype we&rsquo;ll use <a href="http://jqueryui.com/">jQuery UI</a>. This comes with a <a href="http://jqueryui.com/demos/sortable/">Sortable</a> plugin that makes it easy to make a list sortable with drag and drop. The plugin is  configurable with a large number of options that we can use to customize the behaviour to suit our application.</p> 
+
+<p>Adding jQuery UI to our Rails application is simple. We don&rsquo;t even need to download anything; all we need to do is add a line to the <code>application.js</code> file.</p>
+
+``` /app/assets/javascripts/application.js
+// This is a manifest file that'll be compiled into including all the files listed below.
+// Add new JavaScript/Coffee code in separate files in this directory and they'll automatically
+// be included in the compiled file accessible from http://example.com/assets/application.js
+// It's not advisable to add code directly here, but if you do, it'll appear at the bottom of the
+// the compiled file.
+//
+//= require jquery
+//= require jquery-ui
+//= require jquery_ujs
+//= require_tree .
+```
+
+<h3>Modifying The View</h3>
+
+<p>The template that lists the FAQs looks like this:</p>
+
+``` /app/views/faqs/index.html.erb
+<h1>FAQs</h1>
+
+<ul>
+<% @faqs.each do |faq| %>
+  <li>
+    <%= link_to h(faq.question), faq %>
+  </li>
+<% end %>
+</ul>
+
+<p><%= link_to "New FAQ", new_faq_path %></p>
+```
+
+<p>We&rsquo;ll need to give the list an id so that we can reference it from JavaScript. We&rsquo;ll also need to give each item in the list an id so that we can identify it when we post the updated order back to the server when we move the items around. The items need to have ids in the format &lt;model_name&gt;_&lt;model_id&gt; and we can use a helper method called content_tag_for to generate these for us. After we&rsquo;ve made these changes the template will look like this:</p>
+
+``` /app/views/faqs/index.html.erb
+<h1>FAQs</h1>
+
+<ul id="faqs">
+<% @faqs.each do |faq| %>
+  <%= content_tag_for :li, faq do %>
+    <%= link_to h(faq.question), faq %>
+  <% end %>
+<% end %>
+</ul>
+
+<p><%= link_to "New FAQ", new_faq_path %></p>
+```
+
+<p>Note that it&rsquo;s important that the <code>content_tag_for</code> block has an equals sign in its opening tag as it outputs content.</p>
+
+<h3>Adding Sortable to The List</h3>
+
+<p>Next we&rsquo;ll add the script necessary to make the list sortable. All we need to do is get the list and call <code>sortable()</code> on it. We&rsquo;ll wrap this code in the <code>jQuery</code> function so that it only runs when the page&rsquo;s DOM has loaded.</p>
+
+``` /app/assets/javascripts/faq.js.coffee
+jQuery ->;
+  $('#faqs').sortable();
+```  
+  
+<p>When we reload the page now we&rsquo;ll be able to drag the items in the list around.</p>
+
+<p>There are <a href="http://jqueryui.com/demos/sortable/#options">various options</a> that we can pass to sortable. We&rsquo;ll use the <code>axis</code> option so that the list only sorts vertically and also add an <code>update</code> callback which will be triggered when an item is dropped.</p>
+
+```/app/assets/javascripts/faq.js.coffee
+jQuery ->
+  $('#faqs').sortable(
+    axis: 'y'
+    update: ->
+      alert('updated!')
+  );
+```  
+  
+<p>When we drag an item now it will only move vertically and when we drop it the callback will be triggered and we&rsquo;ll see an alert.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/784/original/E147RI02.png" width="800" height="392" alt="An alert now shows when we drop an item."/>
+</div>
+
+<h3>Storing The Updated Order</h3>
+
+<p>When an item is dropped we&rsquo;ll need to send some information back to the server so that we can store the updated order. As our application currently stands it will change back to the default when we reload the page.</p> 
+
+<p>The <code>Faq</code> model needs a <code>position</code> field to store each item&rsquo;s position. We&rsquo;ll create a migration for this, then run <code>rake db:migrate</code> to add the new field to the database.</p> 
+
+``` terminal
+$ rails g migration add_position_to_faqs position:integer
+```
+
+<p>Next we&rsquo;ll update the <code>FaqsController</code>&rsquo;s <code>index</code> action so that it fetches the FAQs in the order of the position field.</p>
+
+``` /app/controllers/faqs_controller.rb
+def index
+  @faqs = Faq.order("position")
+end
+```
+
+<p>When the order of the FAQs changes we&rsquo;ll need a new action to handle the data that&rsquo;s sent back to the server. The <code>FaqsController</code> has the standard seven RESTful actions but none of these do quite what we need. The <code>update</code> action comes close but we need to update multiple items at once. We&rsquo;ll add a <code>sort</code> action to the controller but just have it render <code>nothing</code> for now.</p>
+
+``` /app/controllers/faqs_controller.rb
+def sort
+  render nothing: true
+end
+```
+
+<p>We&rsquo;ll need to add this custom action to the routes file, in the <code>faqs</code> resource. The <code>sort</code> action will work with a number of <code>Faq</code>s so we use <code>collection</code> and <code>post</code> for <code>sort</code>.  It might make more sense to use <code>put</code> here but <code>post</code> is a lot more convenient.</p>
+
+``` /config/routes.rb
+Faqapp::Application.routes.draw do
+  root to: 'faqs#index'
+  resources :faqs do
+    collection { post :sort }
+  end
+end
+```
+
+<p>Back in the CoffeeScript file we can now update the code in the callback function so that instead of showing an <code>alert</code> it makes a POST request to our new <code>sort</code> action. It&rsquo;s best not to put URLs directly into the CoffeeScript so we&rsquo;ll add the callback URL as a new <code>data</code> attribute in the list.</p>
+
+``` /app/views/faqs/index.html.erb
+<ul id="faqs" data-update-url="<%= sort_faqs_url %>">
+```  
+  
+<p>We can fetch this URL in our CoffeeScript code and use it to send the updated position information back to the <code>sort</code> action. We can fetch this information by  calling <code>$(this).sortable('serialize')</code>. This will wrap up all the items in a format that we can send back to the server.</p>
+
+``` /app/assets/javascripts/faq.js.coffee
+jQuery ->
+  $('#faqs').sortable(
+    axis: 'y'
+    update: ->
+      $.post($(this).data('update-url'), $(this).sortable('serialize'))
+  )
+```  
+
+<p>When we reload the page now and change the position of an item it will trigger an AJAX call to the <code>sort</code> action. When we take a look at the development log we&rsquo;ll see how the parameters are passed in as a <code>faq</code> parameter with an array of <code>faq</code> <code>id</code>s. These are sent in the order that the updated list is in.</p>
+
+``` terminal
+Started POST "/faqs/sort" for 127.0.0.1 at 2011-10-17 22:05:47 +0100
+  Processing by FaqsController#sort as */*
+  Parameters: {"faq"=>["1", "2", "5", "3", "4", "6"]}
+Rendered text template (0.0ms)
+Completed 200 OK in 21ms (Views: 20.2ms | ActiveRecord: 0.0ms)
+```
+
+<p>In the <code>FaqsController</code>&rsquo;s <code>sort</code> action we can now read those parameters and update each <code>Faq</code>&rsquo;s position by looping through each of them with its <code>index</code>.</p>
+
+``` /app/controllers/faqs_controller.rb
+def sort
+  params[:faq].each_with_index do |id, index|
+    Faq.update_all({position: index+1}, {id: id})
+  end
+  render nothing: true
+end
+```
+
+<p>We use <code>update_all</code> here so that all of the updates are made in a single query and set each <code>Faq</code>&rsquo;s position to be the <code>index + 1</code> (as the index is zero-based) where its <code>id</code> is the id from the parameter. When we change a FAQs position in the list now and reload the page the item will stay in that position.</p>
+
+<h3>Adding Handles</h3>
+
+<p>There&rsquo;s currently no visual clue that the items on the page are draggable. To improve this we can add a handle to each item that tells the users that the items can be dragged. We&rsquo;ll add a handle to each item in the template and give it a <code>class</code> so that we can refer to it in our CoffeeScript.</p>
+
+``` /app/views/faqs/index.html.erb
+<ul id="faqs" data-update-url="<%= sort_faqs_url %>">
+<% @faqs.each do |faq| %>
+  <%= content_tag_for :li, faq do %>
+    <span class="handle">[drag]</span>
+    <%= link_to h(faq.question), faq %>
+  <% end %>
+<% end %>
+</ul>
+```
+
+All we need to do now is specify a <code>handle</code> option in the <code>sortable</code> function.
+
+``` /app/assets/javascripts/faqs.js.coffee
+jQuery ->
+  $('#faqs').sortable(
+    axis: 'y'
+    handle: '.handle'
+    update: ->
+      $.post($(this).data('update-url'), $(this).sortable('serialize'))
+  )
+```  
+
+<p>We&rsquo;ll add some styling to the handles, too, giving them a <code>move</code> cursor as an indication that they can be dragged.</p>
+
+/app/assets/stylesheets/faqs.css.scss
+#faqs .handle {
+  font-size: 12px;
+  color: #777;
+  cursor: move;
+}When we reload the page now we&rsquo;ll have a handle by each item that we can use to drag the items around.
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/785/original/E147RI03.png" width="800" height="391" alt="Each item now has a handle."/>
+</div>
+
+<h3>Adding a New Item</h3>
+
+<p>If we add a new Frequently Asked Question it will have a <code>null</code> <code>position</code> attribute. It would be better if it the new item was automatically given a <code>position</code> with a value that would place it at the bottom of the list.</p> 
+
+<p>We can do this by using the <a href="https://github.com/swanandp/acts_as_list"><code>acts_at_list</code> gem</a>. This gem has been around for a while but it&rsquo;s being actively maintained by Swanand Pagnis so it&rsquo;s fine to use. As usual, we add this gem to our application by adding it to the <code>Gemfile</code> and then running <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not" required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'acts_as_list'
+```
+
+<p>Once we&rsquo;ve installed <code>acts_as_list</code> we just need to add it to our <code>Faq</code> model.</p>
+
+``` /app/models/faq.rb
+class Faq < ActiveRecord::Base
+  acts_as_list
+end
+```
+
+<p>The <code>position</code> attribute of any new <code>Faq</code>s we create now will be automatically set.</p>
