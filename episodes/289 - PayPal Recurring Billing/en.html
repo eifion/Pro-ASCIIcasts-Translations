@@ -1,0 +1,563 @@
+
+<p>From episode 141[<a href="http://railscasts.com/episodes/141-paypal-basics">watch</a>, <a href="http://railscasts.com/episodes/141-paypal-basics?view=asciicast">read</a>] a short series of episodes covered various aspects of using PayPal in Rails applications. One topic that wasn&rsquo;t covered in that series was handling recurring payments. In this episode we&rsquo;ll see what&rsquo;s involved in adding this functionality to an existing application.</p>
+
+<p>The application we&rsquo;ll be working with is the one we used in the previous episode which sells llama kisses. The home screen is shown below.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/772/original/E289I01.png" width="828" height="525" alt="The Llama Kisses site."/>
+</div>
+
+<p>The Llama Kisses application offers a number of plans, each of which has a monthly subscription. When we sign up for a plan we need to enter our credit card details but some customers may prefer to pay via PayPal rather than by entering their credit card details directly. This could be because they don&rsquo;t have a credit card, because paying by credit card would incur hefty fees or because they simply don&rsquo;t trust your site with their credit card information. We want to do as little as possible to discourage potential customers so we&rsquo;ll add the option to pay through PayPal to our site.</p>
+
+<h3>Creating Test Accounts on PayPal</h3>
+
+<p>PayPal can be a little intimidating at first. It provides a large number of similar services and it can be difficult to know which one to choose. <a href="https://www.x.com/developers/paypal/products/recurring-payments">This page</a>, for example, shows six different ways to handle recurring payments. As we&rsquo;re already accepting credit card payments and we only want to use PayPal as an alternative payment method <a href="https://www.x.com/developers/paypal/products/express-checkout">Express Checkout</a> is the best choice for us.</p>
+
+<p>The next choice we need to make is what we should use to integrate Express Checkout into our application. In <a href="http://railscasts.com/episodes/144-active-merchant-basics">episode 144</a> we used <a href="http://activemerchant.org/">Active Merchant</a>, but this is a little heavy for just adding simple PayPal integration and it doesn&rsquo;t support recurring payments. There are some forks of Active Merchant have modified it to support recurring payment but we&rsquo;re going to avoid Active Merchant completely.</p>
+
+<p>Another option is to communicate directly with PayPal&rsquo;s API. If you choose to do this then the <a href="https://cms.paypal.com/cms_content/CA/en_US/files/developer/PP_NVPAPI_DeveloperGuide.pdf">Name-Value Pair API PDF document</a> is worth reading before getting started as it has a good section on the Express Checkout API. Communication directly with the API means that your application doesn&rsquo;t need any more external dependencies but it does mean much more work.</p>
+
+<p>The solution we will be using in this episode is a little-known gem by Nando Vieira called <a href="https://github.com/fnando/paypal-recurring">PayPal-Recurring</a>. This uses the Name-Value API and gives us a nice Ruby interface to interact with it. The gem&rsquo;s source code is easy to read and well documented which means that if we ever need to work out how it&rsquo;s talking to PayPal we can just read the relevant part of the source code.</p>
+
+<h3>Installing PayPal-Recurring</h3>
+
+<p>PayPal-Recurring is installed like most gems, by adding a reference to it in the application&rsquo;s <code>Gemfile</code> and then running <code>bundle</code>.</p>
+
+``` /Gemfile
+source "http://rubygems.org"
+
+gem "rails", "3.1.1"
+gem "sqlite3"
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem "sass-rails",   "~> 3.1.4"
+  gem "coffee-rails", "~> 3.1.1"
+  gem "uglifier", ">= 1.0.3"
+end
+
+gem "jquery-rails"
+gem "stripe"
+gem "paypal-recurring"
+```
+
+<h3>Setting up Test Accounts</h3>
+
+<p>PayPal-Recurring needs configuring before we can use it so we&rsquo;ll create a new initializer file and put the configuration information there. Before we do, however, we&rsquo;ll need to set up test accounts on PayPal&rsquo;s sandbox. We already signed up for an account here so we can log in and set up the two test accounts we&rsquo;ll need. Clicking &ldquo;Create a preconfigured account&rdquo; will take us to a page where we can create these.</p> 
+
+<p>First we&rsquo;ll create an account for a buyer with the email address <code>buyer@asciicasts.com</code>. We&rsquo;ll need to select the &ldquo;Buyer&rdquo; account type, fill in the first part of the email address, and give them some money to play with. The form will contain a numeric password and we&rsquo;ll need to copy this so that we can use it to log in as this user later.</p>
+
+<p>For the seller we&rsquo;ll use <code>seller@asciicasts.com</code>, but instead of giving them the obvious &ldquo;Seller&rdquo; account type we&rsquo;ll need to select &ldquo;Website Payments Pro&rdquo;. We don&rsquo;t need to give the seller any money but again we should copy the numeric password that&rsquo;s given.</p>
+
+<p>Now we have accounts for both a buyer and a seller and PayPal will give each one a unique login email address as shown below.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/773/original/E289I02.png" width="828" height="654" alt="Our two test accounts set up in the PayPal sandbox."/>
+</div>
+
+<p>This seller address isn&rsquo;t the one we should use with PayPal-Recurring, however. To get this we need to click the &ldquo;API Credentials&rdquo; link in the left menu. This takes us to another page that will show us the credentials that we need to use.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/774/original/E289I03.png" width="828" height="561" alt="The PayPal page that shows the credentials we need to use."/>
+</div>
+
+<p>We&rsquo;ll use this information in our new initializer file to configure PayPal-Recurring.</p>
+
+``` /app/config/initializers/paypal.rb
+PayPal::Recurring.configure do |config|
+  config.sandbox = true
+  config.username = "seller_1318669800_biz_api1.asciicasts.com"
+  config.password = "1318669837"
+  config.signature = "AFcWxV21C7fd0v3bYYYRCpSSRl31A1bAwEaPIqEwy9MooKcQYeYYQw0m"
+end
+```
+
+<p>As this file contains sensitive information and we won&rsquo;t use the same settings on the production server we should add this file to our <code>.gitignore</code> file.</p> 
+
+<h3>Adding Express Checkout to Our Application</h3>
+
+<p>There are a couple of ways that we can use Express Checkout to our application. We can use a checkout button, or we can use a pair of radio buttons that allow payment via either PayPal or credit card. We&rsquo;re going to use a combination of these. To get started we&rsquo;ll add the following code to our new subscription view, immediately above the email field.</p>
+
+``` /app/views/subscriptions/new.html.erb
+<div class="field">
+  <%= radio_button_tag :pay_with, :card, true %>
+  <%= label_tag :pay_with_card do %>
+    <%= image_tag "visa.png" %>
+    <%= image_tag "mastercard.png" %>
+    <%= image_tag "discover.png" %>
+    <%= image_tag "american_express.png" %>
+    <%= image_tag "jcb.png" %>
+  <% end %>
+  <%= radio_button_tag :pay_with, :paypal %>
+  <%= label_tag :pay_with_paypal do %>
+    <%= image_tag "paypal.png" %>
+  <% end %>
+</div>
+  
+<div id="paypal_checkout" style="display:none">
+  <%= image_tag("https://www.paypal.com/en_US/i/btn/btn_xpressCheckout.gif") %>
+</div>
+```
+
+<p>This code will add two radio buttons to the page, one with images for various credit cards and one with a PayPal icon, and a PayPal checkout button which is styled to be hidden by default. When someone selects the PayPal button we want to show this button and hide the email and credit card fields and also the &ldquo;submit&rdquo; button as users paying by PayPal won&rsquo;t need to fill these in. We&rsquo;ll do this by wrapping these fields in a <code>div</code> with an <code>id</code> of <code>billing_fields</code> so that we can find and modify them in our application&rsquo;s JavaScript.</p>
+
+```/app/view/subscriptions/new.html.erb
+<div id="billing_fields">
+  <div class="field">
+    <%= f.label :email %>
+    <%= f.text_field :email %>
+  </div>
+  <% if @subscription.stripe_card_token.present? %>
+    Credit card has been provided.
+  <% else %>
+    <div class="field">
+      <%= label_tag :card_number, "Credit Card Number" %>
+      <%= text_field_tag :card_number, nil, name: nil %>
+    </div>
+    <div class="field">
+      <%= label_tag :card_code, "Security Code on Card (CVV)" %>
+      <%= text_field_tag :card_code, nil, name: nil %>
+    </div>
+    <div class="field">
+      <%= label_tag :card_month, "Card Expiration" %>
+      <%= select_month nil, {add_month_numbers: true}, {name: nil, id: "card_month"} %>
+      <%= select_year nil, {start_year: Date.today.year, end_year: Date.today.year+15}, {name: nil, id: "card_year"} %>
+    </div>
+  <% end %>
+  <div id="stripe_error">
+    <noscript>JavaScript is not enabled and is required for this form. First enable it in your web browser settings.</noscript>
+  </div>
+  <div class="actions">
+    <%= f.submit "Subscribe" %>
+  </div>
+</div>
+```
+
+<p>If we reload the form now we&rsquo;ll see the new radio buttons.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/775/original/E289I05.png" width="801" height="587" alt="The signup form now has PayPal and credit card radio buttons."/>
+</div>
+
+<p>Now our users can choose to pay by either credit card or by PayPal. Next we&rsquo;ll write the CoffeeScript code that will show or hide the PayPal checkout button and the credit card fields depending on the payment option they choose. There is already some CoffeeScript code in this application related to this form and a setupForm function is called when the page&rsquo;s DOM loads. We&rsquo;ll modify this function so that it adds code to show the checkout button and hide the credit card fields when they choose to pay by PayPal and to hide the checkout and show the credit card fields when they click the credit card radio button.</p>
+ 
+```/app/assets/javascripts/subscriptions.js.coffee
+setupForm: ->
+  $("#pay_with_paypal").click ->
+    $("#paypal_checkout").show()
+    $("#billing_fields").hide()
+    true
+    
+  $("#pay_with_card").click ->
+    $("#paypal_checkout").hide()
+    $("#billing_fields").show()
+    true
+        
+  $("#new_subscription").submit ->
+    $("input[type=submit]").attr("disabled", true)
+    if $("#card_number").length
+      subscription.processCard()
+      false
+    else
+      true
+```      
+
+<p>When we reload the page again and choose to pay with PayPal the checkout button is shown and the credit card fields are hidden. When we click the credit card radio button the fields are shown again and the button is hidden.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/776/original/E289I06.png" width="801" height="384" alt="The credit card fields now hide when we select the PayPal radio button."/>
+</div>
+
+<p>The PayPal button isn&rsquo;t actually linked to anything yet, but we&rsquo;ll change that now. We&rsquo;ll link the button to a <code>paypal_checkout_path</code> that we haven&rsquo;t created yet and pass in the <code>id</code> of the selected plan as we&rsquo;ll need to tell PayPal which plan a user is signing up for.</p>
+
+``` /app/views/subscriptions/new.html.erb
+<div id="paypal_checkout" style="display:none">
+  <%= link_to image_tag("https://www.paypal.com/en_US/i/btn/btn_xpressCheckout.gif"), paypal_checkout_path(:plan_id => @subscription.plan_id) %>
+</div>
+```
+
+<p>We&rsquo;ll create a <code>paypal_checkout_path</code> in the routes file and point it to a new <code>paypal_checkout</code> action in the <code>SubscriptionsController</code>.</p>  
+
+``` /config/routes.rb
+Saas::Application.routes.draw do
+  root to: "plans#index"
+  resources :subscriptions
+  resources :plans
+  get "paypal/checkout", to: "subscriptions#paypal_checkout"
+end
+```
+
+<p>Note that we haven&rsquo;t made the new route a named route. Rails will do this automatically for us based on the path we&rsquo;ve specified.</p>
+
+<p>In the <code>SubscriptionsController</code> we can now write the new <code>paypal_checkout</code> action.</p>
+
+```/app/controllers/subscriptions_controller.rb
+def paypal_checkout
+  plan = Plan.find(params[:plan_id])
+  ppr = PayPal::Recurring.new(
+    return_url: new_subscription_url(:plan_id => plan.id),
+    cancel_url: root_url,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
+
+<p>In this action we find the plan with the <code>plan_id</code> parameter than was passed in then create a new <code>PayPal::Recurring</code> object to create a new payment. The parameters that this object takes are all fairly self-explanatory. We then call <code>checkout</code> on that object to trigger the PayPal API and return a response. If the response is valid we&rsquo;ll redirect to the response&rsquo;s <code>checkout_url</code> which is the PayPal URL where the user can sign in. If not we&rsquo;ll <code>raise</code> the errors so that we can see what&rsquo;s gone wrong.</p>
+
+<p>When we click the PayPal button on the new subscription form we&rsquo;re now taken to the login page on the PayPal Sandbox site. We can see the name of the plan we&rsquo;ve selected in the order summary section so it looks like our code is working.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/777/original/E289I07.png" width="801" height="519" alt="PayPal&rsquo;s login page now shows when we click the checkout button for a subscription."/>
+</div>
+
+<p>We can log in to this page with the details from the buyer test account that we set up earlier. Doing this will take us to a page that lets us review the transaction we&rsquo;re about to make. When we agree to it we&rsquo;ll be taken back to our application&rsquo;s new subscription page but with two new parameters in the URL, one called <code>token</code> and one called <code>PayerID</code>. We need these to finish the payment with PayPal so we&rsquo;ll add new fields to the <code>Subscription</code> model to store them. If the <code>PayerID</code> parameter exists we&rsquo;ll set the subscription&rsquo;s <code>payment_customer_token</code> to its value and store the temporary token as a <code>paypal_payment_token</code>.</p>
+
+``` /app/controllers/subscriptions_controller.rb
+def new
+  plan = Plan.find(params[:plan_id])
+  @subscription = plan.subscriptions.build
+  if params[:PayerID]
+    @subscription.paypal_customer_token = params[:PayerID]
+    @subscription.paypal_payment_token = params[:token]
+  end
+end
+```
+
+<p>The <code>paypal_payment_token</code> is only temporary so we&rsquo;ll add it as a virtual attribute in our <code>Subscription</code> model.</p>
+
+
+```/app/models/subscription.rb
+attr_accessor :stripe_card_token, :paypal_payment_token
+```
+
+<code>The other parameter, the payment_customer_token, is more permanent so we&rsquo;ll store it in the subscriptions table. We&rsquo;ll create a migration to add the new field and then run rake db:migrate to add it to the database. While we&rsquo;re doing this there&rsquo;s another token that PayPal will give us as part of this process that we&rsquo;ll need to store later. We&rsquo;ll add this now too as the paypal_recurring_profile_token.</code>
+
+``` terminal
+$ rails g migration add_paypal_to_subscriptions paypal_customer_token:string paypal_recurring_profile_token:string
+```
+
+<p>The <code>paypal_customer_token</code> and <code>paypal_payment_token</code> fields are now stored in a subscription object when the new subscription page is shown, but they need to be passed through the form when it&rsquo;s POSTed back to create a new subscription. We&rsquo;ll add two new hidden fields to the form to store these values so that they&rsquo;re sent when the form is submitted.</p>
+
+``` /app/views/subscriptions/new.html.erb
+<%= f.hidden_field :paypal_customer_token %>
+<%= f.hidden_field :paypal_payment_token %>
+```
+
+<p>When the user returns to the subscriptions form after signing in through PayPal the credit card fields are shown again on the page. There is some logic in the view code already that hides these fields if a Stripe payment has already been made and we can expand this to also check to see if the PayPal token is present.</p>
+
+``` /app/views/subscriptions/new.html.erb
+<% if @subscription.stripe_card_token.present? ||
+      @subscription.paypal_payment_token.present? %>
+  Payment has been provided. Click &amp;ldquo;Subscribe&amp;rdquo; to complete the subscription.
+<% else %>
+  <!-- Credit card fields omitted. -->
+<% end %>
+```
+
+<p>When we reload the page now the credit card fields are hidden, but the payment type fields are still showing, even though we know that the user is paying by PayPal.   We can use the same check to hide these but before we do we&rsquo;ll tidy up the code a little by moving the logic into the model. We&rsquo;ll create a new <code>payment_provided?</code> method in the subscription model and use that in the view to determine whether these fields should be shown or not.</p>
+
+``` /app/models/subscription.rb
+def payment_provided?
+  stripe_card_token.present? || paypal_payment_token.present?
+end
+```
+
+<p>We can also use this method to hide the payment options when the payment has been made.</p>
+
+``` /app/views/subscriptions/new.html.erb
+<% unless payment_provided? %>
+<div class="field">
+  <%= radio_button_tag :pay_with, :card, true %>
+  <%= label_tag :pay_with_card do %>
+    <%= image_tag "visa.png" %>
+   <%= image_tag "mastercard.png" %>
+    <%= image_tag "discover.png" %>
+    <%= image_tag "american_express.png" %>
+    <%= image_tag "jcb.png" %>
+  <% end %>
+  <%= radio_button_tag :pay_with, :paypal %>
+  <%= label_tag :pay_with_paypal do %>
+    <%= image_tag "paypal.png" %>
+  <% end %>
+</div>
+<% end %>
+```
+
+<p>We can also use it tidy up the code that hides the credit card fields.</p>
+
+```/app/views/subscriptions/new.html.erb
+<% if @subscription.payment_provided? %>
+  Payment has been provided. Click &amp;ldquo;Subscribe&amp;rdquo; to complete the subscription.
+<% else %>
+  <!-- Credit card fields omitted. -->
+<% end %>
+```
+
+<p>When we reload the page again the payment selection area is hidden and we only have to enter our email address and click &ldquo;subscribe&rdquo; to complete the subscription.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/778/original/E289I08.png" width="800" height="374" alt="The payment selection area of the form is now hidden once the payment has been authorized."/>
+</div>
+
+<p>Users shouldn&rsquo;t really have to enter even an email address. We can get this from the information that was supplied when they signed in to PayPal by using the temporary token that was returned to fetch the checkout details and therefore the email address.</p>
+
+``` /app/controllers/subscriptions_controller.rb
+def new
+  plan = Plan.find(params[:plan_id])
+  @subscription = plan.subscriptions.build
+  if params[:PayerID]
+    @subscription.paypal_customer_token = params[:PayerID]
+    @subscription.paypal_payment_token = params[:token]
+    @subscription.email = PayPal::Recurring.new(token: params[:token]).checkout_details.email
+  end
+end
+```
+
+<p>The subscription form will now make a request to PayPal when it loads after returning from the PayPal site and fetch the email address that was used to log in.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/779/original/E289I09.png" width="800" height="374" alt="The email address is now filled with the address supplied to PayPal.	"/>
+</div>
+
+<p>The final step is to handle the payment processing when the user clicks &ldquo;subscribe&rdquo;.  So far no actual payment has been made: the user has authorized a payment but we haven&rsquo;t yet taken the money. We already have a <code>save_with_payment</code> method inside the Subscription model which handles credit card payments through Stripe. We&rsquo;ll modify this method so that it also handles PayPal payments. The code in <code>save_with_payment</code> Stripe-specfic so we&rsquo;ll rename it to <code>save_with_stripe_payment</code>. We can then create a new, more generic, <code>save_with_payment</code> method that will call either <code>save_with_stripe_payment</code> or a new <code>save_with_paypal_payment</code> method.</p>
+
+``` /app/models/subscription.rb
+def save_with_payment
+  if valid?
+    if paypal_payment_token.present?
+      save_with_paypal_payment
+    else
+      save_with_stripe_payment
+    end
+  end
+end
+```
+
+<p>Next we&rsquo;ll need to write this new <code>save_with_paypal_payment</code> method. There are two things that need to happen to make a recurring payment. We need to request the first payment and then make a recurring profile so that payments will be made each month. The code to request the first payment looks something like this:</p>
+
+``` /app/models/subscription.rb
+def save_with_paypal_payment
+  ppr = PayPal::Recurring.new(
+    token: paypal_payment_token,
+    payer_id: paypal_customer_token,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.request_payment
+  if response.errors.present?
+    raise response.errors.inspect
+  end
+  # 2. Make recurring profile
+end
+```
+
+<p>This code creates a new <code>PayPal::Recurring</code> object, passing in some details such as the <code>token</code> and <code>payer_id</code>, then requests the payment. This is similar to the code we have in the <code>paypal_checkout</code> method in the <code>SubscriptionsController</code>. It&rsquo;s important that the information that&rsquo;s passed to PayPal matches up, especially the <code>description</code> and <code>amount</code> and so we&rsquo;ll refactor it out into its own model so that we don&rsquo;t have <code>PayPal::Recurring</code> objects spread across our models and controllers.</p>
+
+<h3>Refactoring into the PaypalPayment class</h3>
+
+<p>We&rsquo;ll refactor the code that creates <code>PayPal::Recurring</code> objects out into a new <code>PaypalPayment</code> class which we&rsquo;ll place under <code>app/models</code>. You might expect this class to belong under the <code>/lib</code> directory as we&rsquo;re not creating a new ActiveRecord model but models don&rsquo;t always have to inherit from ActiveRecord. If a class represents information that&rsquo;s specific to an application and our class does as it works mostly with a <code>Subscription</code>, then this is the right place to put it. As we&rsquo;ll be working with a subscription object we&rsquo;ll pass one in to the <code>initialize</code> method and assign it to an instance variable.</p>
+
+``` /app/models/paypal_payment.rb
+class PaypalPayment
+  def initialize(subscription)
+    @subscription = subscription
+  end
+end
+```
+
+<p>We can now start our refactoring. After we&rsquo;ve finished we should have much cleaner code with most of the PayPal-specific logic in our new <code>PaypalPayment</code> class.</p> 
+
+<p>The first change we&rsquo;ll make is to move the code in the <code>save_with_paypal_payment</code> method in the <code>Subscription</code> model into a new <code>make_recurring_payment</code> method in the <code>PaypalPayment</code> class. We&rsquo;ll need to create a new <code>PaypalPayment</code> object more than once in this class so we&rsquo;ll also create a paypal method to make this easier.</p>
+
+``` /app/models/subscription.rb
+def paypal
+  PaypalPayment.new(self)
+end
+  
+def save_with_paypal_payment
+  paypal.make_recurring
+end
+```
+
+<p>The code we&rsquo;ve removed from <code>save_with_paypal_payment</code> will go into our new <code>make_recurring_payment</code> method.</p>
+
+```/app/models/paypal_payment.rb
+def make_recurring
+ ppr = PayPal::Recurring.new(
+    token: @subscription.paypal_payment_token,
+    payer_id: @subscription.paypal_customer_token,
+    description: @subscription.plan.name,
+    amount: @subscription.plan.price,
+    currency: "USD"
+  )
+  response = ppr.prequest_payment
+  if response.errors.present?
+    raise response.errors.inspect
+  end
+  # 2. Make recurring profile
+end
+```
+
+<p>Note that as we&rsquo;re no longer in the <code>Subscription</code> class we need to get the tokens and the plan from the <code>@subscription</code> instance variable.</p>
+
+<p>We can now extract any calls to <code>PayPal::Recurring</code> from the <code>SubscriptionController</code> and move them into our new <code>PaypalPayment</code> class. We&rsquo;ll start with this line in the <code>new</code> action.</p>
+
+``` /app/controllers/subscription_controller.rb
+@subscription.email = PayPal::Recurring.new(token: params[:token]).checkout_details.email
+```
+
+<p>We can replace it with this:</p>
+
+``` /app/controllers/subscription_controller.rb
+@subscription.email = @subscription.paypal.checkout_details.email
+```
+
+<p>Note that instead of getting the token from the <code>params</code> we now get it from the <code>subscription</code> object. We&rsquo;ll need to write the <code>checkout_details</code> method now.</p>
+
+`` /app/models/paypal_payment.rb
+def checkout_details
+  PayPal::Recurring.new(token: @subscription.paypal_payment_token).checkout_details
+end
+```
+
+<p>We&rsquo;re already seeing some duplication between the methods in the <code>PaypalPayment</code> class but before we try to refactor this out we&rsquo;ll get all of our mess into here and then clean it up. The next piece of code we&rsquo;ll deal with is the SubscriptionsController&rsquo;s paypal_checkout method, shown below.</p>
+
+``` /app/controllers/subscriptions_controller.rb
+def paypal_checkout
+  plan = Plan.find(params[:plan_id])
+  ppr = PayPal::Recurring.new(
+    return_url: new_subscription_url(:plan_id => plan.id),
+    cancel_url: root_url,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
+
+<p>We can extract most of this code out into the <code>PaypalPayment</code> class but we&rsquo;ll need a <code>subscription</code> to pass in so we&rsquo;ll build a new one from the <code>plan</code>.  The only information we need back from the new method we&rsquo;ll write is the checkout URL so we&rsquo;ll call our it <code>checkout_url</code>.</p>
+
+<p>There are a couple of pieces of information in the code above that we won&rsquo;t be able to access from the model layer, namely the <code>new_subscription_url</code> and the <code>root_url</code>. We&rsquo;ll pass these as parameters from the controller in an <code>options</code> hash.</p>
+
+```/app/controllers/subscriptions_controller.rb
+def paypal_checkout
+  plan = Plan.find(params[:plan_id])
+  subscription = plan.subscriptions.build
+  redirect_to subscription.paypal.checkout_url(
+    return_url: new_subscription_url(:plan_id => plan.id),
+    cancel_url: root_url)
+end
+```
+
+<p>The new <code>checkout_url</code> model will look like this:</p>
+
+``` /app/models/paypal_payment.rb
+def checkout_url(options)
+  ppr = PayPal::Recurring.new(
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  ).merge(options)
+
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
+
+<h3>Tidying Up The Paypal Payment Class</h3>
+
+<p>We&rsquo;ve moved all of the PayPal-related code into our <code>PaypalPayment</code> class now but it&rsquo;s a bit of a mess with a lot of duplication between its three main methods. To tidy it up we&rsquo;ll create a new private <code>process</code> method in the class. This method will take an argument that will be the method we want to call on the <code>PayPal::Recurring</code> object and also a hash of options and it will return a <code>response</code> object that we can call methods on if need be. Doing this will allow us to remove much of the duplication in the class. After we&rsquo;ve done this the <code>PaypalPayment</code> class will look like this:</p>
+
+``` /app/models/paypal_payment.rb
+class PaypalPayment
+  def initialize(subscription)
+    @subscription = subscription
+  end
+  
+  def checkout_details
+    process :checkout_details
+  end
+
+  def checkout_url(options)
+    process(:checkout, options).checkout_url
+  end
+  
+  def make_recurring
+    process :request_payment
+    # 2. Make recurring profile
+  end
+  
+  private
+  def process(action, options = {})
+    options = options.reverse_merge(
+      token: @subscription.paypal_payment_token,
+      payer_id: @subscription.paypal_customer_token,
+      description: @subscription.plan.name,
+      amount: @subscription.plan.price,
+      currency: "USD"
+    )
+    response = PayPal::Recurring.new(options).send(action)
+    raise response.errors.inspect if response.errors.present?
+    response
+  end
+end
+```
+
+<p>We&rsquo;re supplying more information than we need for some of the PayPal actions, but that&rsquo;s OK as the PayPal-Recurring gem will filter out the unnecessary ones.</p>  
+
+<h3>Finishing the make_recurring Method</h3>
+
+<p>Now that we&rsquo;re done with our refactoring we can focus again on the <code>make_recurring</code> method as we still need to write the code to make a recurring profile. With the refactoring we&rsquo;ve done this will be easy; all we need to do is call <code>process</code> and pass it <code>create_recurring_profile</code> as the action, along with a number of options that define how often the payment should be made.</p>
+
+``` /app/models/paypal_payment.rb
+def make_recurring
+  process :request_payment
+  process :create_recurring_profile, period: :monthly, frequency: 1, start_at: Time.zone.now
+end
+```
+
+<p>If you&rsquo;re ever curious as to what options you can pass to PayPal-Recurring and what they do you can find out by looking at the <a href="https://github.com/fnando/paypal-recurring/blob/master/lib/paypal/recurring/request.rb">relevant source code file</a>. Each option is listed there and is mapped the the equivalent option in the PayPal Name-Value Pair API.</p> 
+
+<p>We still need to finish the <code>save_with_paypal</code> method in the Subscription model as we&rsquo;re not storing the <code>profile_id</code> that PayPal returns after we make a recurring profile. The <code>make_recurring</code> method that&rsquo;s called here returns a <code>response</code> which contains a <code>profile_id</code> and we need to store this in the database. When we created a migration for the <code>paypal_payment_token</code> field earlier we also created a  <code>paypal_recurring_profile_token</code> field and we can store this value here.</p>
+
+``` /app/models/subscription.rb
+def save_with_paypal_payment
+  response = paypal.make_recurring
+  self.paypal_recurring_profile_token = response.profile_id
+  save!
+end
+```
+
+<p>We now have all of the code needed to make recurring PayPal payments so let&rsquo;s try it out and see if it works.  If we select the &ldquo;I&rsquo;m in Heaven&rdquo; plan from the home page then click the &ldquo;PayPal&rdquo; radio button on the subscription page and click the &ldquo;Pay With PayPal&rdquo; button we&rsquo;ll be redirected to PayPal&rsquo;s website. We can log in with the test username and password we created earlier and once we&rsquo;ve logged in and confirmed that we want to make the payment we&rsquo;ll be redirected back to our site to finish our subscription.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/780/original/E289I10.png" width="822" height="375" alt="Once we've been through the PayPal process we're returned to the subscription form to complete the process."/>
+</div>
+
+<p>When we click the &ldquo;Subscribe&rdquo; button we&rsquo;ll have successfully created a new subscription through PayPal.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/781/original/E289I11.png" width="822" height="375" alt="Our subscription has been successfully made."/>
+</div>
+
+<p>That&rsquo;s it for this episode on PayPal. It was longer than usual but it&rsquo;s still not feature complete as we need to handle customers who have insufficient funds or who cancel their subscriptions. These may be covered in a future episode.</p>
