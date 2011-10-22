@@ -1,0 +1,284 @@
+
+<p>If you have a Rails application that communicates with an external web service you should be using <a href="https://www.relishapp.com/myronmarston/vcr">VCR</a> to help with testing. This Ruby gem, written by Myron Marston, can be used in your tests to record external HTTP requests to &lsquo;cassettes&rsquo;. Once a test has been run once VCR will use the request and response it recorded earlier to mock the real request and response. This gives us the benefit of testing the actual API without the penalty of the time it takes to make an external request and also means that we can run our tests offline once the cassette has been recorded.</p>
+
+<h3>Using VCR to Record a SOAP Request</h3>
+
+<p>In this episode we&rsquo;ll use VCR to add features via test-driven development to the application we built last time. This application communicates with a SOAP API to fetch information about a Zip code. We haven&rsquo;t written the code that talks to the API yet, so when we enter a Zip code and click &lsquo;Lookup&rsquo; we don&rsquo;t see any data. We&rsquo;ll use VCR and test-driven development to add this code.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/790/original/E291I01.png" width="800" height="390" alt="Our zip code lookup application."/>
+</div>
+
+<p>We already have our test environment set up in the same way we showed in <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a> and an empty request spec. We&rsquo;ll write the code in that spec to test-drive the new functionality.</p>
+
+```/spec/request/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+end
+```
+
+<p>The spec we&rsquo;ll write will check that the correct city name is shown when we enter a Zip code. The beauty of high-level request specs is that we can duplicate the steps we took in the browser, so we can write code to visit the zip code page, fill in the text field and click the &ldquo;Lookup&rdquo; button.</p>
+
+``` /spec/request/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210" do
+    visit root_path
+    fill_in "zip_code", with: "90210"
+    click_on "Lookup"
+    page.should have_content("Beverly Hills") 
+  end
+end
+```
+
+<p>Unsurprisingly the test fails when we run it as we haven&rsquo;t written that functionality yet. To get it to pass we&rsquo;ll paste in the code we wrote last time.</p>
+
+```/app/models/zip_code.rb
+class ZipCode
+  attr_reader :state, :city, :area_code, :time_zone
+
+  def initialize(zip)
+    client = Savon::Client.new("http://www.webservicex.net/uszip.asmx?WSDL")
+    response = client.request :web, :get_info_by_zip, body: { "USZip" =&gt; zip }
+    data = response.to_hash[:get_info_by_zip_response][:get_info_by_zip_result][:new_data_set][:table]
+    @state = data[:state]
+    @city = data[:city]
+    @area_code = data[:area_code]
+    @time_zone = data[:time_zone]
+  end
+end
+```
+
+<p>If we look at the output from our test suite now we&rsquo;ll see that the test has passed and that it&rsquo;s made a SOAP request to get the external data. In this case it&rsquo;s taken nearly three seconds for the test to run. If we add more tests that communicate with external data then we&rsquo;ll soon have an unacceptably slow test suite.</p>
+
+<h3>Speeding up Tests With VCR</h3>
+
+<p>We&rsquo;ll use VCR to make this test run faster. To use it we&rsquo;ll need to add the <code>vcr</code> gem to our application along with another gem to handle HTTP mocking. VCR supports a number of HTTP mocking libraries the most popular of which are <a href="https://github.com/chrisk/fakeweb">FakeWeb</a> and <a href="https://github.com/bblimke/webmock">WebMock</a>. FakeWeb is a little faster but WebMock supports a wider range of HTTP libraries. We used FakeWeb in <a href="http://railscasts.com/episodes/276-testing-time-web-requests">episode 276</a> so we&rsquo;ll use it again here. All we need to do is add both gems to the <code>:test</code> group and then run <code>bundle</code> to install.</p>
+
+```/Gemfile
+group :test do
+  gem 'capybara'
+  gem 'guard-rspec'
+  gem 'vcr'
+  gem 'fakeweb'
+end
+```
+
+<p>Before we can use VCR we&rsquo;ll need to configure it. We need to tell VCR where to put its cassettes and which library to stub with. We&rsquo;ll do this in a new <code>vcr.rb</code> file in the <code>/spec/support</code> directory.</p>
+
+``` /spec/support/vcr.rb
+VCR.config do |c|
+  c.cassette_library_dir  = Rails.root.join("spec", "vcr")
+  c.stub_with :fakeweb
+end
+```
+
+<p>Note that if you&rsquo;re using version 2.0 of VCR, currently in beta, this command is <code>configure</code> rather than <code>config</code>. For more information on the configuration options we can pass in take a look at the Relish documentation for <a href="https://www.relishapp.com/myronmarston/vcr">VCR</a>. There&rsquo;s a lot of useful information here, including a whole section on configuration.</p>
+
+<p>Now that we&rsquo;ve set up VCR our test fails again with a error message telling us that &ldquo;Real HTTP connections are disabled.&rdquo;. </p>
+
+``` terminal
+1) ZipCodeLookup shows Beverly Hills given 90210
+   Failure/Error: click_on "Lookup"
+   FakeWeb::NetConnectNotAllowedError:
+     Real HTTP connections are disabled. 
+     Unregistered request: 
+GET http://www.webservicex.net/uszip.asmx?WSDL. You can use VCR 
+to automatically record this request and replay it later.  For
+more details, visit the VCR documentation at: 
+http://relishapp.com/myronmarston/vcr/v/1-11-3
+```
+
+<p>By default VCR is configured so that it will throw an exception if any external HTTP requests are made outside of a VCR recorder so we&rsquo;ll modify our spec to use it. We enable VCR in our spec by calling <code>VCR.use_cassette</code>, giving the cassette a name and putting the rest of the spec&rsquo;s code in a block. Any external HTTP requests made inside the block will now be recorded to the cassette. (Note the slash in the cassette&rsquo;s name. This means that the cassette will be stored in a subdirectory.)</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210" do
+    VCR.use_cassette "zip_code/90210" do
+      visit root_path
+      fill_in "zip_code", with: "90210"
+      click_on "Lookup"
+      page.should have_content("Beverly Hills") 
+    end
+  end
+end
+```
+
+<p>The next time we run the spec the external HTTP request will be made and stored in the cassette. The web service we call can be a little slow to run and this will cause the spec can take a while to complete. When we run the same spec a second time, though, it runs far more quickly as VCR replays the request and fetches the response from the cassette. (For the run we&rsquo;ve just done this was 15.49 seconds vs 1.09).</p>
+
+<p>The cassettes are stored in the <code>/spec/vcr</code> directory. As we called our cassette <code>zip_code/90210</code> its data will be stored in a <code>90210.yml</code> file under a <code>zip_code</code> subdirectory. This file contains everything that VCR recorded, starting with the WSDL file and followed by the request and the response.</p>
+
+<h3>Managing Cassettes</h3>
+
+<p>VCR is working well for us so far but the more we use it the more difficult it will become to manage all of the cassettes. It would be useful if there was an automated way to mange the cassettes and fortunately there is. The <a href="https://www.relishapp.com/myronmarston/vcr/docs/test-frameworks/usage-with-rspec">RSpec page of the Relish documentation</a> mentions a <code>use_vcr_cassette</code> macro and while this is useful we&rsquo;re going to take a different approach and use RSpec tags instead. What we&rsquo;d like to be able to do is add a <code>:vcr</code> tag to the specs that need to use VCR so that they use it automatically and create a cassette based on the spec&rsquo;s name, something like this.</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210", :vcr do
+    visit root_path
+    fill_in "zip_code", with: "90210"
+    click_on "Lookup"
+    page.should have_content("Beverly Hills") 
+  end
+end
+```
+
+<p>We can do this by adding some RSpec configuration to the <code>vcr.rb</code> file we created earlier.</p>
+
+```/spec/support/vcr.rb
+RSpec.configure do |c|
+  c.treat_symbols_as_metadata_keys_with_true_values = true
+  c.around(:each, :vcr) do |example|
+    name = example.metadata[:full_description].split(/\s+/, 2).join("/").underscore.gsub(/[^\w\/]+/, "_")
+    VCR.use_cassette(name) { example.call }
+  end
+end
+```
+
+<p>The first line in the code above allows us to add tags without needing to specify <code>true</code>. This means that we can just add a <code>:vcr</code> tag without needing to write <code>:vcr =&gt; true</code>. This requires the latest version of RSpec so if it doesn&rsquo;t work for you might need to upgrade.</p> 
+
+<p>Next we have an <code>around</code> block. This is executed every time a spec with the <code>:vcr</code> tag is found. The first line in the block looks rather complicated but all it does is  determine a name for the cassette, based on the spec&rsquo;s description. We use this name to create a new <code>cassette</code> and then call the spec. Now, each time we tag a spec with <code>:vcr</code> it will use VCR with a cassette with a name based on the spec&rsquo;s description.</p>
+
+<p>When we run our spec now it still passes and the cassette called <code>shows_beverly_hills_given_90210.yml</code> is created in a <code>zip_code_lookup</code> directory, these names being based on the descriptions passed to <code>it</code> and <code>describe</code>.</p> 
+
+<h3>Configuring Cassettes</h3>
+
+<p>Sometimes we need to configure the behaviour of individual cassettes. For example there&rsquo;s a <code>record</code> option that allows us to specify exactly when VCR should record requests to a cassette. The default is <code>:once</code> which means that a cassette will be recorded once and played back every time the spec is run afterwards. Alternatively, <code>:new_episodes</code> is useful. If we use this option any additional requests that are found will be added to an existing cassette. If some requests are sensitive and we don&rsquo;t ever want to hit them, only ever play them back, we can use <code>:none</code>. Finally <code>:all</code> works well while we&rsquo;re still developing an application and experimenting with the API. This will never play a cassette back, but will always make the external request. We can specify this option when we call <code>use_cassette</code>, like this:</p>
+
+``` ruby
+VCR.use_cassette('example', :record =&gt; :new_episodes) do
+  response = Net::HTTP.get_response('localhost', '/', 7777)
+  puts "Response: #{response.body}"
+end
+```
+
+<p>It would be useful if we could pass one of these options in through our spec when we specify the <code>:vcr</code> tag by adding another option called <code>record</code>, like this:</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210", :vcr, record: :all do
+     #spec omitted
+  end
+end
+```
+
+<p>We can do this by modify the <code>around</code> block we wrote when we modified RSpec&rsquo;s configuration. In this block we call <code>example.metadata</code> and this contains a hash of a lot of information about each spec, including any options we pass in. We can extract these options from the hash using <code>slice</code>. We&rsquo;ll get the <code>:record</code> option and also the <code>:match_requests_on</code> option. There is a problem here, however. The <code>metadata</code> isn&rsquo;t a simple hash and it seems to persist a key called <code>:example_group</code>. We&rsquo;ll use the <code>except</code> method to exclude that key. We can then pass in the options to <code>use_cassette</code>.</p>
+
+``` /spec/support/vcr.rb
+RSpec.configure do |c|
+  c.treat_symbols_as_metadata_keys_with_true_values = true
+  c.around(:each, :vcr) do |example|
+    name = example.metadata[:full_description].split(/\s+/, 2).join("/").underscore.gsub(/[^\w\/]+/, "_")
+    options = example.metadata.slice(:record, :match_requests_on).except(:example_group)
+    VCR.use_cassette(name, options) { example.call }
+  end
+end
+```
+
+<p>As we&rsquo;ve specified <code>:all</code> the external request will now be made each time the spec runs, with the consequent delay in the time it takes to run. </p>
+
+<h3>Protecting Sensitive Data</h3>
+
+<p>Often when working with an API you&rsquo;ll have a secret key that you don&rsquo;t want to be included in the recordings and it&rsquo;s important to filter these out. We don&rsquo;t have one for our request, but for the sake of an example we&rsquo;ll say that the <code>uri</code> field for the request should be kept secret.</p>
+
+```/spec/vcr/zip_code_lookup/shows_beverley_hills_given_90210.yml
+--- 
+- !ruby/struct:VCR::HTTPInteraction 
+  request: !ruby/struct:VCR::Request 
+    method: :get
+    uri: http://www.webservicex.net:80/uszip.asmx?WSDL
+    body: 
+    headers: 
+    # Rest of file omitted.
+```    
+
+<p>We filter sensitive by using an option called <code>filter_sensitive_data</code> inside our <code>VCR.config</code> block. This option takes two arguments: the first is a string that will be written to the cassette as a placeholder for the sensitive information while the second is a block that should return the text that we want to be replaced.</p>
+
+``` /spec/support/vcr.rb
+VCR.config do |c|
+  c.cassette_library_dir  = Rails.root.join("spec", "vcr")
+  c.stub_with :fakeweb
+  c.filter_sensitive_data('&lt;WSDL&gt;') { "http://www.webservicex.net:80/uszip.asmx?WSDL" }
+end
+```
+
+<p>When the spec next runs our &lsquo;sensitive&rsquo; data has been replaced.</p>
+
+``` /spec/vcr/zip_code_lookup/shows_beverley_hills_given_90210.yml
+--- 
+- !ruby/struct:VCR::HTTPInteraction 
+  request: !ruby/struct:VCR::Request 
+    method: :get
+    uri: &lt;WSDL&gt;
+    body: 
+    headers: 
+    # Rest of file omitted.
+```
+
+<h3>Handling Redirects to External Sites</h3>
+
+<p>Sometimes we need to redirect users to an external website and then have them return to our site with a unique token. This can happen when they need to authenticate through a third party such as Twitter, or when they make a payment with PayPal. We don&rsquo;t have such a situation on this site, but we can simulate it by writing a spec that performs a search on the Railscasts site.</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+it "searches RailsCasts" do
+  visit "http://railscasts.com"
+  fill_in "search", with: "how I test"
+  click_on "Search Episodes"
+  page.should have_content('#275')
+end	
+```
+
+<p>This test will fail because Capybara doesn&rsquo;t know how to visit external websites. It uses <code>Rack::Test</code> underneath which is designed to test Rack applications and doesn&rsquo;t know how to handle HTTP at all.  We can work around this by using <a href="https://github.com/jeroenvandijk/capybara-mechanize">Capybara-mechanize</a> by Jeroen van Dijk. This gem uses <a href="https://github.com/tenderlove/mechanize">Mechanize</a> underneath to visit external URLs. It&rsquo;s installed in the same way as the other gems we&rsquo;ve used by adding to the <code>:test</code> group and running <code>bundle</code>.</p>
+
+``` /Gemfile
+group :test do
+  gem 'capybara'
+  gem 'guard-rspec'
+  gem 'vcr'
+  gem 'fakeweb'
+  gem 'capybara-mechanize'
+end
+```
+
+<p>Once it&rsquo;s installed we&rsquo;ll need to require it in the <code>spec_helper</code> file.</p>
+
+```/spec/spec_helper.rb
+# This file is copied to spec/ when you run 'rails generate rspec:install'
+ENV["RAILS_ENV"] ||= 'test'
+require File.expand_path("../../config/environment", __FILE__)
+require 'rspec/rails'
+require 'capybara/rspec'
+require 'capybara/mechanize'
+# rest of file omitted.
+```
+
+<p>Finally we&rsquo;ll need to modify the spec so that it uses <code>mechanize</code> as its driver.</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+it "searches RailsCasts", :vcr do
+  Capybara.current_driver = :mechanize
+  visit "http://railscasts.com"
+  fill_in "search", with: "how I test"
+  click_on "Search Episodes"
+  page.should have_content('#275')
+end
+```
+
+<p>With all this in place our spec now passes again. As with our other spec this one will make an external request the first time it runs and store the result in a cassette based on its name.</p>
+
+<h3>Tidying up The Output</h3>
+
+<p>When we run tests that use VCR they show a lot of information that can make the test output noisy.  We can stop this output from being displayed, though, by adding a couple of lines of code to the spec_helper file, as long we we&rsquo;re using the Savon library as we did in the previous episode.</p>
+
+``` /spec/spec_helper.rb
+HTTPI.log = false
+Savon.log = false
+```
+
+<p>Now when we run our specs the output is much cleaner.</p>
