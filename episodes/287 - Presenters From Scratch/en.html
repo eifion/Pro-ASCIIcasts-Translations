@@ -1,7 +1,7 @@
 <p>In this episode we&rsquo;ll create a presenter from scratch. The example application we&rsquo;ll use to demonstrate this is the one we used in the previous episode on Draper [<a href="http://railscasts.com/episodes/286-draper">watch</a>, <a href="http://asciicasts.com/episodes/286-draper">read</a>]. This application has a user profile page that shows a user&rsquo;s avatar along with other information that they have entered.</p>
  
 <div class="imageWrapper">
-  <img src="/system/photos/751/original/E287I01.png" width="800" height="595" alt="The profile page for a user who has entered all of their details."/>
+  <img src="/system/photos/751/original/E287I01.png" width="800" height="595" alt="The profile page for a user who has entered all of its details."/>
 </div>
 
 <p>As users don&rsquo;t have to enter information in every field this page needs to be able to display default values instead. We can see this for the user &ldquo;MrMystery&rdquo; who has only supplied his username.</p>
@@ -66,7 +66,7 @@ end</pre>
 
 <p>Now we can begin to extract the view logic into this class, but how should we do this? First we&rsquo;ll need to instantiate our new <code>UserPresenter</code> class somewhere. With Draper and other presenter libraries it&rsquo;s common to do this in a controller action, but we&rsquo;re not going to take that approach here as it&rsquo;s arguable the controllers shouldn&rsquo;t be aware of presenters at all.</p>
 
-<p>Instead of modifying the controller we&rsquo;ll create a new helper method that will create a presenter instance. We&rsquo;ll call this method <code>present</code>. It will take the model that we want to create a presenter for and a block that returns a presenter object. We&rsquo;ll put all of the view template&rsquo;s code inside the block so that we have the presenter available to our view.</p>
+<p>Instead of modifying the controller we&rsquo;ll create a new helper method that will create a presenter instance. We&rsquo;ll call this method <code>present</code>. It will take the model that we want to create a presenter for and a block that receives a presenter object. We&rsquo;ll put all of the view template&rsquo;s code inside the block so that we have the presenter available to our view.</p>
 
 <p class="codeFilePath">/app/views/users/show.html.erb</p>
 <pre class="ruby">&lt;% present @user do |user_presenter| %&gt;
@@ -340,7 +340,7 @@ class UserPresenterTest &lt; ActionView::TestCase
   end
 end</pre>
 
-<p>When we run our test by running rake test it passes.</p>
+<p>When we run our test by running <code>rake test</code> it passes.</p>
 
 <pre class="terminal">$ rake test
 Loaded suite /Users/eifion/.rvm/gems/ruby-1.9.2-p180@global/gems/rake-0.9.2/lib/rake/rake_test_loader
@@ -352,7 +352,7 @@ Finished in 0.155069 seconds.
 
 <p>Being able to access our presenters from tests means that we can use Test-Driven Development to write our presenters, starting off with a failing presenter test and then modifying the presenter so that the test passes.</p>
 
-<p>To test a presenter with RSpec we first make a <code>presenters</code> directory under <code>/spec</code> and add a <code>user_presenter_spec.rb</code> file there. We&rsquo;ll write a spec that tests the same thing that our last test did. The key to writing presenter specs is to include <code>ActionView::TestCase::Behavior</code>. This gives us a view variable containing the template in the same way that inheriting from  <code>ActionView::TestCase</code> did when we were using Test::Unit.</p>
+<p>To test a presenter with RSpec we first make a <code>presenters</code> directory under <code>/spec</code> and add a <code>user_presenter_spec.rb</code> file there. We&rsquo;ll write a spec that tests the same thing that our last test did. The key to writing presenter specs is to include <code>ActionView::TestCase::Behavior</code>. This gives us a <code>view</code> variable containing the template in the same way that inheriting from  <code>ActionView::TestCase</code> did when we were using Test::Unit.</p>
 
 <p>The spec itself will be very similar to the test we wrote. Again we create a new presenter and check that its <code>website</code> method returns the correct text.</p>
 
@@ -377,7 +377,7 @@ end</pre>
 Finished in 0.06957 seconds
 1 example, 0 failures</pre>
 
-<p>Instead of including the <code>Behavior</code> module in every presenter spec we can make a change to the config block in the SpecHelper file so that it&rsquo;s automatically included in every spec. This will include the Behavior module in every file under the spec/helpers directory so there&rsquo;s no need to add it to our presenter specs.</p>
+<p>Instead of including the <code>Behavior</code> module in every presenter spec we can make a change to the config block in the <code>spec_helper.rb</code> file so that it&rsquo;s automatically included in every spec. This will include the <code>Behavior</code> module in every file under the <code>/spec/presenters</code> directory so there&rsquo;s no need to add it to our presenter specs.</p>
 
 <p class="codeFilePath">/spec/spec_helper.rb</p>
 <pre class="ruby">RSpec.configure do |config|
