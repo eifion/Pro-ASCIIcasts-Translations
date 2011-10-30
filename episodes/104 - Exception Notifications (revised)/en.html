@@ -1,0 +1,97 @@
+<p>As Rails your applications become more complex exceptions are bound to happen. Below, however, we have a very simple application with a big, red button on it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/791/original/E104RI01.png" width="800" height="280" alt="The page with the Big Red Button."/>
+</div>
+
+<p>This simple application raises an exception when we click the big red button.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/792/original/E104RI02.png" width="800" height="280" alt="The exception that's shown when we click the button."/>
+</div>
+
+<p>When an exception is raised in a production application the end user won&rsquo;t see this much detail. Instead they&rsquo;re shown a generic error page. Our goal as developers should be to ensure that this page is never shown so to help weed out errors we need to be notified whenever an exception is raised.</p>
+
+<p>There are a variety of ways of adding exception notifications to an application but we&rsquo;re going to use the <a href="https://github.com/smartinez87/exception_notification">Exception Notification gem</a>. This is a classic plugin but it&rsquo;s being well maintained by Sebastian Martinez. It&rsquo;s easy to set up and works by sending an email each time an exception is raised. As it&rsquo;s a piece of Rack middleware it&rsquo;s easy to configure, too. All we need to do is add one line to the relevant environment&rsquo;s config file.</p>
+
+<h3>Installing Exception Notification</h3> 
+
+<p>Installing Exception Notification is simple. All we need to do is add it to the <code>Gemfile</code> and run <code>bundle</code>.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'exception_notification'
+```
+
+<p>Once it has installed we can configure it in one of the config files in the <code>/config/environment</code> directory. Normally we&rsquo;d add it to the <code>production.rb</code> file, but as we&rsquo;re just trying it out we&rsquo;ll add it to <code>development.rb</code> first to see how it works. At the bottom of the file&rsquo;s block we&rsquo;ll add the following line of code.</p>
+
+``` /config/environment/development.rb
+config.middleware.use ExceptionNotifier,
+  sender_address: 'noreply@asciicasts.com',
+  exception_recpients: 'eifion@asciicasts.com'
+```  
+<p>There are a number of options we could pass in here but for now we&rsquo;ll just set the  <code>sender_address</code> and <code>exception_recipients</code>. We&rsquo;ve used a simple string for the recipients but if we want to send email to more than one address we can use an array.</p>  
+
+<p>As <code>ExceptionNotifier</code> sends email we need to configure <code>action_mailer.delivery_method</code>. Setting up a delivery method in development mode can be awkward so we&rsquo;ll use a gem called <a href="https://github.com/ryanb/letter_opener">Letter Opener</a> to make this easier. This gem opens any emails that the application tries to send in a web browser. As before we add this gem to the <code>Gemfile</code> and run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'letter_opener', group: :development
+```
+
+<p>With this gem installed we can use <code>:letter_opener</code> as the delivery method.</p>
+
+``` /config/environment/development.rb
+config.action_mailer.delivery_method = :letter_opener
+```
+
+<p>If we press the big button in our application now the exception is shown again but this time another window opens showing the email that would be sent.</p> 
+
+￼
+<p>This email contains full information about the exception that was raised. Note that the title will contains the word <code>[ERROR]</code> so that we can easily filter them out into a separate folder.</p>
+
+<h3>Customizing Exception Notifier</h3>
+
+<p>There are a number of ways we can customize the Exception Notifier middleware. For example we can add options to specify the email prefix (instead of the default <code>[ERROR]</code>) or change the content of the email by passing in a <code>:sections</code> option . We can even add our own sections containing any additional information we want to include. We won&rsquo;t change any of these now but there is another option that isn&rsquo;t well documented that we will change. Before we do we&rsquo;ll take a look at <a href="https://github.com/smartinez87/exception_notification/blob/master/lib/exception_notifier.rb">relevant part of the source code</a> to see how it works. The <code>ExceptionNotifier</code> class contains an option called <code>default_ignore_exceptions</code> and the source code for this file lists the exceptions that Exception Notifier will ignore.</p>
+
+``` exception_notification /lib/exception_notifier.rb
+def self.default_ignore_exceptions
+  [].tap do |exceptions|
+    exceptions << ::ActiveRecord::RecordNotFound if defined? ::ActiveRecord::RecordNotFound
+    exceptions << ::AbstractController::ActionNotFound if defined? ::AbstractController::ActionNotFound
+    exceptions << ::ActionController::RoutingError if defined? ::ActionController::RoutingError
+  end
+end
+```
+
+<p>These errors are ignored as they usually throw a 404 error rather than a 500. If our application throws an exception that we don&rsquo;t want to receive an email about we can add it to the list of ignored exceptions. The exception that our application throws deliberately is a <code>RuntimeError</code> so we&rsquo;ll add this to the list.</p>
+
+```/config/environments/development.rb
+config.middleware.use ExceptionNotifier,
+  sender_address: 'noreply@asciicasts.com',
+  exception_recpients: 'eifion@asciicasts.com',
+  ignore_exceptions: ExceptionNotifier.default_ignore_exceptions + [RuntimeError]
+```  
+  
+<p>We&rsquo;ll need to restart the server for this change to take effect. After we do the exception will still be thrown when we click the big red button but we won&rsquo;t receive an email. In a production application we wouldn&rsquo;t want to ignore RuntimeErrors as they&rsquo;re important but there are other exceptions that we could ignore, such as those raised when bots visit our application.</p>
+
+<p>Now that we have Exception Notifier configured how we want it we need to move the code we&rsquo;ve written in <code>development.rb</code> over to <code>production.rb</code>. We&rsquo;ll also need to set up the delivery method in production mode so that sends real email rather than using Letter Opener.</p>
+
+<h3>Alternatives</h3>
+
+<p>That&rsquo;s how we set up the Exception Notification gem. It&rsquo;s easy to use and it works well. If you want a solution that doesn&rsquo;t send email notifications there are a number of alternatives available. One of these is <a href="http://www.whoopsapp.com/">Whoops</a>. This stores exception notifications in a Mongo database and presents them through a user interface. Another is <a href="http://airbrakeapp.com/pages/home">Airbrake</a>, previously known as Hoptoad. This is a paid solution but it offers more features such as Github integration.</p>
+
+<p>If none of these solutions suit then you could always create your own by using a mountable engine. We showed you exactly how do to do this in <a href="http://railscasts.com/episodes/277-mountable-engines">episode 277</a> and it&rsquo;s really not hard to do.</p>
