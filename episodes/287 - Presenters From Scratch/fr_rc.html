@@ -1,0 +1,414 @@
+<p>Dans cet &eacute;pisode, nous allons cr&eacute;er un presenter from scratch. L&#x27;application d&#x27;exemple que nous allons utiliser est celle utilis&eacute;e dans l&#x27;&eacute;pisode sur Draper [<a href="http://railscasts.com/episodes/286-draper">regarder</a>, <a href="http://asciicasts.com/episodes/286-draper">lire</a>]. Cette application contient un profile utilisateur affichant un avatar ainsi que les informations saisies par l&#x27;utilisateur.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/751/original/E287I01.png" width="800" height="595" alt="Page de profile d&#x27;un utilisateur ayant saisi tous ses d&eacute;tails."/>
+</div>
+
+<p>Comme les utilisateurs ne sont pas oblig&eacute;s de remplir tous les champs, cette page doit pouvoir afficher des valeurs par d&eacute;faut. Nous pouvons le voir pour l&#x27;utilisateur &ldquo;MrMystery&rdquo; qui n&#x27;a donn&eacute; que son nom d&#x27;utilisateur.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/752/original/E287I02.png" width="800" height="470" alt="Page de profile d&#x27;un utilisateur ayant saisi peu de d&eacute;tails."/>
+</div>
+
+<p>Devoir g&eacute;rer des valeurs par d&eacute;faut signifie une logique complexe dans le code de la vue.</p>
+
+``` /app/views/users/show.html.erb
+<div id="profile">
+  <%= link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url %>
+  <h1><%= link_to_if @user.url.present?, (@user.full_name.present? ? @user.full_name : @user.username), @user.url %></h1>
+  <dl>
+    <dt>Username:</dt>
+    <dd><%= @user.username %></dd>
+    <dt>Member Since:</dt>
+    <dd><%= @user.member_since %></dd>
+    <dt>Website:</dt>
+    <dd>
+    <% if @user.url.present? %>
+      <%= link_to @user.url, @user.url %>
+    <% else %>
+      <span class="none">None given</span>
+    <% end %>
+    </dd>
+    <dt>Twitter:</dt>
+    <dd>
+    <% if @user.twitter_name.present? %>
+      <%= link_to @user.twitter_name, "http://twitter.com/#{@user.twitter_name}" %>
+    <% else %>
+      <span class="none">None given</span>
+    <% end %>
+    </dd>
+    <dt>Bio:</dt>
+    <dd>
+    <% if @user.bio.present? %>
+      <%=raw Redcarpet.new(@user.bio, :hard_wrap, :filter_html, :autolink).to_html %>
+    <% else %>
+      <span class="none">None given</span>
+    <% end %>
+    </dd>
+  </dl>
+</div>
+```
+
+<p>Cette page contient de nombreux <code>if</code>. Chacun d&#x27;eux permet d&#x27;afficher soit la valeurs saisie par l&#x27;utilisateur, soit la valeur par d&eacute;faut. Comme cette logique est uniquement relative &agrave; la vue, une bonne id&eacute;e serait d&#x27;utiliser une classe presenter pour &eacute;laguer un peu le code de la vue. Un presenter est une classe ayant connaissance d&#x27;un mod&egrave;le et d&#x27;une vue, c&#x27;est une bonne pratique, orient&eacute;e objet, pour g&eacute;rer une logique de vue complexe. Nous allons en utiliser un dans notre application, de fa&ccedil;on &agrave; pouvoir all&eacute;ger notre vue.</p>
+
+<h3>&Eacute;crire notre premier presenter</h3>
+
+<p>Un presenter est une simple classe Ruby. Pour ranger nos presenters, nous allons cr&eacute;er un dossier <code>presenters</code> dans le dossier <code>app</code> de notre application. Nous allons ensuite cr&eacute;er le fichier <code>user_presenter.rb</code>. Dans les versions pr&eacute;c&eacute;dentes de Rails, nous aurions d&ucirc; ajouter ce nouveau dossier aux <code>config.autoload_paths</code> dans le fichier <code>/config/application.rb</code>. Depuis Rails&nbsp;3.1, ce n&#x27;est plus n&eacute;cessaire, si nous relan&ccedil;ons notre serveur, le dossier sera automatiquement pris en compte.</p>
+
+<p>Le presenter doit connaitre le mod&egrave;le et la vue avec lesquels il va devoir travailler. Nous allons donc les lui fournir sous forme de param&egrave;tres pour sa m&eacute;thode <code>initialize</code> et les stocker dans des variables d&#x27;instance.</p>
+
+``` /app/presenters/user_presenter.rb
+class UserPresenter
+  def initialize(user, template)
+    @user = user
+    @template = template
+  end
+end
+```
+
+<p>Nous pouvons maintenant commencer d&#x27;extraire la logique de la vue pour la placer dans notre classe. Cependant, est-ce la bonne chose &agrave; faire&nbsp;? Tout d&#x27;abord, nous allons devoir instancier notre classe <code>UserPresenter</code> quelque part. Draper et les autres librairies de pr&eacute;sentation, il est d&#x27;usage de faire cela dans l&#x27;action du contr&ocirc;leur mais ce n&#x27;est pas ce que nous allons faire car il est discutable que le contr&ocirc;leur ait acc&egrave;s aux presenters.</p>
+
+<p>Au lieu de modifier le contr&ocirc;leur, nous allons &eacute;crire un nouveau helper qui va instancier le presenter. Nous appellerons cette m&eacute;thode <code>present</code>, elle prendra en param&egrave;tre le mod&egrave;le pour lequel nous voulons cr&eacute;er un presenter et un bloc recevant un objet presenter. Nous placerons tout le template de la vue dans le bloc de fa&ccedil;on &agrave; ce que le presenter soit accessible.</p>
+
+``` /app/views/users/show.html.erb
+<% present @user do |user_presenter| %>
+<div id="profile">
+	<!-- Rest of view code omitted -->
+</div>
+<% end %>
+```
+
+<p>Nous allons &eacute;crire le helper dans <code>ApplicationHelper</code>. En plus du mod&egrave;le, nous allons passer un argument optionnel de fa&ccedil;on &agrave; choisir la classe &agrave; utiliser pour le presenter. Si la classe n&#x27;est pas sp&eacute;cifi&eacute;e, nous la d&eacute;terminerons &agrave; partir du nom du mod&egrave;le suivi de <code>Presenter</code>, dans notre cas, le nom sera donc <code>UserPresenter</code>. Nous allons ensuite appeler <code>constantize</code> sur la cha&icirc;ne pour retourner une classe.</p>
+
+<p>Maintenant que nous avons notre classe presenter, nous allons l&#x27;instancier en appelant <code>klass.new</code> &agrave; qui nous passerons notre mod&egrave;le <code>object</code> et <code>self</code>, qui sera le template ayant les helpers auxquels nous voulons acc&eacute;der. Si un bloc a &eacute;t&eacute; pass&eacute; &agrave; la m&eacute;thode, nous allons appeler <code>yield</code> avec le presenter en param&egrave;tre puis retourner ce dernier.</p>
+
+``` /app/helpers/application_helper.rb
+module ApplicationHelper
+  def present(object, klass = nil)
+    klass ||= &quot;{object.class}Presenter&quot;.constantize
+    presenter = klass.new(object, self)
+    yield presenter if block_given?
+    presenter
+  end
+end
+```
+
+<p>Avec notre m&eacute;thode <code>present</code>, nous avons maintenant un moyen pratique d&#x27;acc&eacute;der &agrave; notre presenter depuis n&#x27;importe quel objet de n&#x27;importe quel template et nous pouvons commencer de d&eacute;placer le code du template vers le presenter. Nous commencerons par le code affichant l&#x27;avatar.</p>
+
+``` /app/views/users/show.html.erb
+<%= link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url %>
+```
+
+<p>Nous allons le remplacer par un appel &agrave; une nouvelle m&eacute;thode, <code>avatar</code> issue de <code>UserPresenter</code>.</p>
+
+``` /app/views/users/show.html.erb
+<%= user_presenter.avatar %>
+```
+
+<p>Nous allons copier/coller la logique de la vue dans cette m&eacute;thode.</p>
+
+``` /app/presenters/user_presenter.rb
+def avatar
+  link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url
+end
+```
+
+<p>Chaque helper que nous appelons dans notre presenter doit &ecirc;tre appel&eacute; sur le template mais au lieu de mettre <code>@template</code> partout, nous allons utiliser la m&ecirc;me fa&ccedil;on de faire que Draper et utiliser la m&eacute;thode <code>h</code> et ajouter cette m&eacute;thode &agrave; notre presenter pour qu&#x27;elle retourne le template. Nous pouvons ensuite l&#x27;utiliser pour les appels &agrave; <code>link_to_if</code> et <code>image_tag</code> de fa&ccedil;on &agrave; ce qu&#x27;ils passent par le template.</p>
+
+<p>Le code que nous avons copi&eacute; appelle un helper que nous avons &eacute;crit&nbsp;: <code>avatar_name</code>. Celui-ci est d&eacute;fini dans <code>UsersHelper</code>.</p>
+
+``` /app/helpers/users_helper.rb
+module UsersHelper
+  def avatar_name(user)
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end
+```
+
+<p>Chaque fois que nous avons un helper prenant en param&egrave;tre le mod&egrave;le utilis&eacute; par notre presenter, il est pr&eacute;f&eacute;rable de le d&eacute;placer dans le presenter. Nous allons donc mettre <code>avatar_name</code> dans <code>UserPresenter</code> et en faire une m&eacute;thode priv&eacute;e. Comme nous avons acc&egrave;s &agrave; l&#x27;utilisateur courant dans notre presenter, nous pouvons supprimer son param&egrave;tre <code>user</code> et faire appel &agrave; sa variable d&#x27;instance, <code>@user</code>.</p>
+
+``` /app/presenters/user_presenter.rb
+class UserPresenter
+  def initialize(user, template)
+    @user = user
+    @template = template
+  end
+
+  def avatar
+    h.link_to_if @user.url.present?, h.image_tag("avatars/#{avatar_name}", class: "avatar"), @user.url
+  end
+
+  private
+  def h
+    @template
+  end
+
+  def avatar_name
+    if @user.avatar_image_name.present?
+      @user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end
+```
+
+<p>Si nous rechargeons la page de profile d&#x27;un utilisateur, elle est exactement comme avant, notre presenter fonctionne donc correctement.</p>
+
+<h3>Cr&eacute;er un presenter de base</h3>
+
+<p>Toute application utilisant des presenters en utilise &eacute;videmment plusieurs. Nous allons donc vouloir rendre g&eacute;n&eacute;rique leur fonctionnement. Chaque presenter que nous cr&eacute;ons a les m&ecirc;mes m&eacute;thodes <code>initalize</code> et <code>h</code>, nous pouvons les mettre dans une classe de base et faire en sorte que nos presenters en h&eacute;ritent.</p>
+
+<p>Nous allons devoir changer le nom du mod&egrave;le pass&eacute; &agrave; la m&eacute;thode <code>initialize</code> dans notre classe de base pour le rendre plus g&eacute;n&eacute;rique, <code>object</code> par exemple. Cela ne nous laisse aucun moyen de r&eacute;f&eacute;rencer directement notre objet utilisateur dans <code>UserPresenter</code>. Nous pourrions appeler <code>@object</code> mais nous allons plut&ocirc;t cr&eacute;er une m&eacute;thode de classe, dans <code>BasePresenter</code>, nomm&eacute;e <code>presents</code> et prenant un nom en param&egrave;tre. Cette m&eacute;thode va d&eacute;finir une m&eacute;thode ayant pour nom le param&egrave;tre pass&eacute; et retournant le mod&egrave;le contenu dans <code>@object</code>.</p>
+
+``` /app/presenters/base_presenter.rb
+class BasePresenter
+  def initialize(object, template)
+    @object = object
+    @template = template
+  end
+  
+  def self.presents(name)
+    define_method(name) do
+      @object
+    end
+  end
+  
+  def h
+    @template
+  end
+end
+```
+
+<p><code>UserPresenter</code> et les autres presenters que nous cr&eacute;ons peuvent maintenant h&eacute;riter de cette classe. Si nous appelons <code>presents :user</code> dans <code>UserPresenter</code>, cela va cr&eacute;er une m&eacute;thode <code>user</code> retournant l&#x27;utilisateur courant de fa&ccedil;on &agrave; remplacer tous les appels &agrave; <code>@user</code> par <code>user</code>.</p>
+
+``` /app/presenters/user_presenter.rb
+class UserPresenter < BasePresenter
+  presents :user
+
+  def avatar
+    h.link_to_if user.url.present?, h.image_tag("avatars/#{avatar_name}", class: "avatar"), user.url
+  end
+  
+  private
+  def avatar_name
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end
+```
+
+<h3>Nettoyer le reste de la vue</h3>
+
+<p>Notre template est un peu plus clair mais il reste encore beaucoup &agrave; faire pour le nettoyer vraiment. Les actions que nous allons effectuer sont similaires &agrave; celles de l&#x27;&eacute;pisode sur Draper, si vous voulez voir pr&eacute;cis&eacute;ment ce qu&#x27;il faut faire, vous pouvez <a href="http://railscasts.com/episodes/286-draper">regarder</a> ou <a href="http://asciicasts.com/episodes/286-draper">lire</a> cet &eacute;pisode. Nous allons effectuer ces modifications en arri&egrave;re-plan et montrer le r&eacute;sultat final. Une grosse part de la logique ayant &eacute;t&eacute; d&eacute;plac&eacute;e dans le presenter, notre template est beaucoup plus clair.</p>
+
+``` /app/views/users/show.html.erb
+<% present @user do |user_presenter| %>
+  <div id="profile">
+    <%= user_presenter.avatar %>
+    <h1><%= user_presenter.linked_name %></h1>
+    <dl>
+      <dt>Username:</dt>
+      <dd><%= user_presenter.username %></dd>
+      <dt>Member Since:</dt>
+      <dd><%= user_presenter.member_since %></dd>
+      <dt>Website:</dt>
+      <dd><%= user_presenter.website %></dd>
+      <dt>Twitter:</dt>
+      <dd><%= user_presenter.twitter %></dd>
+      <dt>Bio:</dt>
+      <dd><%= user_presenter.bio %></dd>
+    </dl>
+  </div>
+<% end %>
+```
+
+<p>Le code du presenter est visible ci-dessous. Il est maintenant compos&eacute; d&#x27;un certain nombre de m&eacute;thodes plut&ocirc;t courtes qui se chargent de toute la logique de la page.</p>
+
+``` /app/presenters/user_presenter.rb
+class UserPresenter < BasePresenter
+  presents :user
+  delegate :username, to: :user
+
+  def avatar
+    site_link image_tag("avatars/#{avatar_name}", class: "avatar")
+  end
+
+  def linked_name
+    site_link(user.full_name.present? ? user.full_name : user.username)
+  end
+
+  def member_since
+    user.created_at.strftime("%B %e, %Y")
+  end 
+
+ def website
+    handle_none user.url do
+      h.link_to(user.url, user.url)
+    end
+  end
+
+  def twitter
+    handle_none user.twitter_name do
+      h.link_to user.twitter_name, "http://twitter.com/#{user.twitter_name}"
+    end
+  end
+
+  def bio
+    handle_none user.bio do
+      markdown(user.bio)
+    end
+  end
+
+private
+  def handle_none(value)
+    if value.present?
+      yield
+    else
+      h.content_tag :span, "None given", class: "none"
+    end
+  end
+
+  def site_link(content)
+    h.link_to_if(user.url.present?, content, user.url)
+  end
+
+  def avatar_name
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end
+```
+
+<p>Il y a cependant deux choses &agrave; noter &agrave; propos des changements que nous avons effectu&eacute;s sur le presenter. Vers le haut du fichier, nous utilisons <code>delegate</code> pour d&eacute;l&eacute;guer la m&eacute;thode <code>username</code> &agrave; la classe <code>User</code>. Nous n&#x27;avons besoin d&#x27;effectuer aucun changement au champ <code>username</code> issu de <code>User</code>, nous le r&eacute;cup&eacute;rons donc directement &agrave; la source.</p>
+
+<p>Le template utilise <code>Redcloth</code> pour afficher la bio de l&#x27;utilisateur. Cela peut &ecirc;tre utile dans d&#x27;autres presenters. Nous allons donc cr&eacute;er une m&eacute;thode <code>markdown</code> dans <code>BasePresenter</code> permettant d&#x27;afficher facilement du code Markdown depuis n&#x27;importe quel presenter. Nous pouvons ensuite appeler cette m&eacute;thode depuis <code>UserPresenter</code>.</p>
+
+``` /app/presenters/base_presenter.rb
+def markdown(text)
+    Recarpet.new(text, :hard_wrap, :filter_html, :autolink).to_html.html_safe
+end
+```
+
+<p>La m&eacute;thode <code>handle_none</code> g&egrave;re les champs comme <code>twitter</code> pour lesquels nous voulons afficher &ldquo;None given&rdquo; si l&#x27;utilisateur n&#x27;a pas saisi d&#x27;information. Dans cette m&eacute;thode, nous utilisons <code>content_tag</code> pour afficher la valeur par d&eacute;faut dans une balise HTML span. Cette approche fonctionne bien pour de petits morceaux de code HTML mais pour un code plus complexe, la cr&eacute;ation d&#x27;un partial ou l&#x27;utilisation d&#x27;un langage comme <a href="http://markaby.github.com/">Markaby</a> est probablement plus adapt&eacute;.</p>
+
+<h3>Une alternative &agrave; la m&eacute;thode &lsquo;h&rsquo;</h3>
+
+<p>Pr&eacute;c&eacute;demment, nous avons cr&eacute;&eacute; une m&eacute;thode <code>h</code> pour donner acc&egrave;s aux helpers. Si vous ne voulez pas faire cela, une alternative est d&#x27;&eacute;crire une m&eacute;thode <code>method_missing</code> pour d&eacute;l&eacute;guer toutes les m&eacute;thodes inconnues au template. Cela est tr&egrave;s facile &agrave; mettre en place dans <code>BasePresenter</code> de fa&ccedil;on &agrave; ce que cela marche dans tous les presenters.</p>
+
+``` /app/presenters/base_presenter.rb
+def method_missing(*args, &block)
+  @template.send(*args, &block)
+end
+```
+
+<p>Maintenant, tout ce que notre presenter ne connait pas est envoy&eacute; au template et, lorsque nous appelons un helper comme <code>image_tag</code>, nous pouvons l&#x27;appeler directement plut&ocirc;t que de passer par la m&eacute;thode <code>h</code>.</p>
+
+<h3>Acc&eacute;der au presenters depuis les contr&ocirc;leurs</h3>
+
+<p>&Agrave; un certain point, il est possible que nous ayons besoin d&#x27;acc&eacute;der aux presenters depuis un contr&ocirc;leur. Par exemple, nous pourrions nous en servir depuis l&#x27;action <code>show</code> de <code>UserPresenter</code> pour nous aider &agrave; cr&eacute;er du code JSON en &eacute;crivant quelque chose comme ceci&nbsp;:</p>
+
+``` /app/controllers/user_controller.rb
+def show
+  @user = User.find(params[:id])
+  present(@user).to_json
+end
+```
+
+<p>Cela ne marchera pas puisque notre m&eacute;thode <code>present</code> est un helper. Cela dit, nous pouvons cr&eacute;er une m&eacute;thode <code>present</code> pour nos contr&ocirc;leurs dans <code>ApplicationController</code>. L&#x27;astuce de cette m&eacute;thode est de faire appel &agrave; <code>view_content</code> au lieu de <code>self</code> pour obtenir le template lorsque nous instancions le presenter.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  
+  private
+  def present(object, klass = nil)
+    klass ||= "#{object.class}Presenter".constantize
+    klass.new(view_content, object)
+  end
+end
+```
+
+<h3>Tester</h3>
+
+<p>Notre application fonctionne parfaitement avec ses nouvelles vues toutes propres mais qu&#x27;en est-il des tests&nbsp;? Nous devrions avoir des tests d&#x27;int&eacute;gration haut-niveau, utilisant Capybara (vu dans l&#x27;&eacute;pisode 275 [<a href="http://railscasts.com/episodes/275-how-i-test">regarder</a>, <a href="http://fr.asciicasts.com/episodes/275-comment-nous-testons">lire</a>]), mais l&#x27;un des avantages de l&#x27;utilisation des presenters est qu&#x27;il est beaucoup plus facile de tester la logique de la vue &agrave; un niveau plus bas. Nous verrons cela, avec Test::Unit puis RSpec.</p>
+
+<p>Pour &eacute;crire notre premier test de presenter avec Test::Unit, nous allons cr&eacute;er un nouveau dossier <code>presenters</code> dans <code>/test/unit</code> et y ajouter un fichier <code>user_presenter_test.rb</code>. La classe <code>UserPresenterTest</code> que nous allons cr&eacute;er dans ce fichier doit h&eacute;riter de <code>ActionView::TestCase</code> et non de <code>ActiveSupport::TestCase</code>, cela nous donne acc&egrave;s &agrave; la vue de fa&ccedil;on &agrave; pouvoir la passer au presenter.</p>
+
+<p>Nous allons d&eacute;montrer cela avec un test simple qui valide que le texte &ldquo;None given&rdquo; est retourn&eacute; par la m&eacute;thode <code>website</code> de <code>UserPresenter</code> lorsque l&#x27;utilisateur n&#x27;a pas saisi de valeur. Nous commen&ccedil;ons par cr&eacute;er un nouveau <code>UserPresenter</code> en lui passant un nouveau <code>User</code> ainsi que la vue. Comme notre test h&eacute;rite de <code>ActionView::TestCase</code>, nous avons acc&egrave;s &agrave; la variable <code>view</code> contenant le template. Nous appelons ensuite sa m&eacute;thode <code>website</code> et validons le fait qu&#x27;elle retourne la valeur &ldquo;None given&rdquo;.</p>
+
+``` /test/presenters/user_presenter_test.rb
+require 'test_helper'
+
+class UserPresenterTest < ActionView::TestCase
+  test "says when none given" do
+    presenter = UserPresenter.new(User.new, view)
+    assert_match "None given", presenter.website
+  end
+end
+```
+
+<p>Lorsque nous lan&ccedil;ons notre test avec <code>rake test</code>, il passe.</p>
+
+```
+$ rake test
+Loaded suite /Users/eifion/.rvm/gems/ruby-1.9.2-p180@global/gems/rake-0.9.2/lib/rake/rake_test_loader
+Started
+.
+Finished in 0.155069 seconds.
+
+1 tests, 1 assertions, 0 failures, 0 errors, 0 skips
+```
+
+<p>L&#x27;acc&egrave;s &agrave; notre presenter depuis les tests signifie que nous pouvons faire tu D&eacute;veloppement Dirig&eacute; par les Tests (TDD) pour &eacute;crire nos presenters, en commen&ccedil;ant avec un test qui &eacute;choue puis en modifiant le presenter pour passer le test.</p>
+
+<p>Pour tester un presenter avec RSpec, nous allons commencer par cr&eacute;er un dossier <code>presenters</code> dans <code>/spec</code> et ajouter un fichier <code>user_presenter_spec.rb</code> dedans. Nous allons &eacute;crire une spec testant la m&ecirc;me chose que notre dernier test. L&#x27;astuce pour &eacute;crire les specs d&#x27;un presenter est d&#x27;inclure <code>ActionView::TestCase::Behavior</code>. Cela nous done une variable <code>view</code> contenant le template, cela fonctionne de la m&ecirc;me mani&egrave;re que lorsque nous avons h&eacute;rit&eacute; de <code>ActionView::TestCase</code> pr&eacute;c&eacute;demment.</p>
+
+<p>La spec en elle-m&ecirc;me est tr&egrave;s similaire au test que nous avons &eacute;crit. Nous cr&eacute;ons &agrave; nouveau un presenter et v&eacute;rifions que sa m&eacute;thode <code>website</code> retourne bien le texte par d&eacute;faut.</p>
+
+``` /spec/presenters/user_presenter_spec.rb
+require 'spec_helper'
+
+describe UserPresenter do
+  include ActionView::TestCase::Behavior
+  
+  it "says when none given" do
+    presenter = UserPresenter.new(User.new, view)
+    presenter.website.should include("None given")
+  end
+end
+```
+
+<p>Lorsque nous lan&ccedil;ons <code>rake spec</code>, nous voyons notre spec passer.</p>
+
+```
+$ rake spec
+/Users/eifion/.rvm/rubies/ruby-1.9.2-p180/bin/ruby -S bundle exec rspec ./spec/presenters/user_presenter_spec.rb
+.
+
+Finished in 0.06957 seconds
+1 example, 0 failures
+```
+
+<p>Au lieu d&#x27;inclure le module <code>Behavior</code> dans chaque spec de presenter, nous pouvons modifier le bloc de configuration dans le fichier <code>spec_helper.rb</code> de fa&ccedil;on &agrave; ce qu&#x27;il soit automatiquement inclus dans chaque spec. Cela va inclure le module <code>Behavior</code> pour chaque fichier plac&eacute; dans le dossier <code>/spec/presenters</code>, nous n&#x27;avons donc pas besoin de l&#x27;inclure dans chacune de nos specs.</p>
+
+``` /spec/spec_helper.rb
+RSpec.configure do |config|
+  config.include ActionView::TestCase::Behavior, example_group: {file_path: %r{spec/presenters}}
+  # Rest of block omitted.
+end
+```
+
+<p>Il y a toutefois un petit pi&egrave;ge lorsque l&#x27;on teste les presenters. L&#x27;objet <code>view</code> que nous passons au presenter peut acc&eacute;der &agrave; tous les helpers <em>except&eacute; ceux d&eacute;finis dans les contr&ocirc;leurs</em>. Par exemple, si nous avons une m&eacute;thode <code>current_user</code> dans le contr&ocirc;leur et que nous en avons fait un helper gr&acirc;ce &agrave; <code>helper_method</code>, nous ne pourrons pas l&#x27;appeler sur l&#x27;objet <code>view</code> dans les tests. Nous allons donc devoir faire un &ldquo;stubbing&rdquo; de cette m&eacute;thode pour faire en sorte qu&#x27;elle retourne la valeur voulue. Une m&eacute;thode <code>current_user</code> va g&eacute;n&eacute;ralement d&eacute;pendre de la valeur d&#x27;une session ou d&#x27;un cookie, un stubbing est donc une bonne id&eacute;e de toute fa&ccedil;on.</p>
+
+<p>C&#x27;est tout pour cet &eacute;pisode sur les presenters from scratch. Maintenant que nous vous avons montr&eacute; ce que cela implique, vous devriez avoir assez d&#x27;informations pour d&eacute;cider d&#x27;&eacute;crire votre propre solution ou d&#x27;utiliser une gem comme Draper. Dans tous les cas, si vos applications ont des logiques de vues complexes, cela vaut la peine de consid&eacute;rer l&#x27;utilisation des presenters pour nettoyer vos vues et les garder claires.</p>
