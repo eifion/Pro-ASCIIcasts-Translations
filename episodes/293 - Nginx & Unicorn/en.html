@@ -1,0 +1,386 @@
+<p>In this episode we&rsquo;ll show you how to serve a Rails application using <a href="http://nginx.org/">nginx</a> and <a href="http://unicorn.bogomips.org/">Unicorn</a>. This hosting solution is used by many large companies such as Github and 37 Signals to host their Rails applications and here we&rsquo;ll go through the steps necessary to get it set up on a Linux server.</p>
+
+<p>Normally of course we&rsquo;d do this on a production server, but if it&rsquo;s the first time you&rsquo;ve done this it&rsquo;s a good idea to use a virtual machine so that you have a safe environment in which to test things. We&rsquo;ll be using Vagrant and the virtual machine we created in the last episode. This VM machine already has Ruby 1.9.2 installed via rbenv and has a shared directory at <code>/vagrant</code> that contains a very basic Rails application. We won&rsquo;t be focussing on Capistrano or deployment as our application is already on the server.</p>
+
+<p>We can already start up our Rails application on the VM. First we need to do is SSH into the VM from the application&rsquo;s directory with</p>
+
+``` terminal
+$ vagrant ssh
+```
+
+<p>Then on the VM we move to <code>/vagrant</code> and run the default Rails server.</p>
+
+``` terminal
+vagrant@lucid32:~$ cd /vagrant
+vagrant@lucid32:/vagrant$ bundle exec rails s
+```
+
+<p>This will boot our application up on port 3000 under WEBrick and as this port is shared with our host machine we can view the app in a browser. This is fine for development but it isn&rsquo;t how we want to run it in production so let&rsquo;s get it running under nginx and Unicorn.</p>
+
+<h3>Installing Nginx</h3>
+
+<p>We&rsquo;ll start by installing nginx. If we want to install the latest version it&rsquo;s best to install it from source but we&rsquo;ll install it using apt-get.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ sudo apt-get install nginx
+```
+
+At the time of writing this installs version 0.7.65, which is over a year old, but which is good enough for our needs. We could start the server with the <code>nginx</code> command but the installer also installs an <code>init.d</code> file that we can use to manage our nginx server as well.
+
+``` terminal
+vagrant@lucid32:/vagrant$ /etc/init.d/nginx -h
+Usage: nginx {start|stop|restart|reload|force-reload|status|configtest}
+```  
+<p>We can run this <code>init.d</code> command directly or we can interact with it through the <code>service</code> command and we&rsquo;ll use this to start it up.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ sudo service nginx start
+Starting nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+configuration file /etc/nginx/nginx.conf test is successful
+nginx.
+```
+
+<p>From the output we can see that nginx has booted up successfully and that the configuration file at <code>/etc/nginx/nginx.conf</code> has been successfully parsed.</p> 
+
+<p>While nginx has booted up on port 80 on our VM, we can&rsquo;t browse our website on our host machine as Vagrant isn&rsquo;t currently forwarding traffic on port 80. We&rsquo;ll modify the <code>Vagrantfile</code> so that this traffic is forwarded to port 8080 on the host.</p>
+
+```/Vagrantfile
+# Forward a port from the guest to the host, which allows for outside
+# computers to access the VM, whereas host only networking does not.
+config.vm.forward_port "http", 80, 8080
+config.vm.forward_port "rails", 3000, 3000
+```
+
+<p>Having made this change we need to reload Vagrant so we&rsquo;ll <code>exit</code> from our SSH session and reload the virtual machine so that it picks up the new config.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ exit
+logout
+Connection to 127.0.0.1 closed.
+$ vagrant reload
+```
+
+<p>Traffic on port 80 is will now be forwarded to port 8080 on our host machine. The <code>init.d</code> file means that nginx will will have been automatically restarted too. If we visit http://localhost:8080 now we&rsquo;ll see nginx&rsquo;s default page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/796/original/E293I01.png" width="800" height="280" alt="The default nginx page."/>
+</div>
+
+<h3>Configuring nginx</h3>
+
+<p>Now that we know that nginx is working let&rsquo;s take a look at how to configure it. Its main configuration file is at <code>/etc/nginx/nginx.conf</code> and by default it looks like this:</p>
+
+``` /etc/nginx/nginx.conf
+user www-data;
+worker_processes  1;
+
+error_log  /var/log/nginx/error.log;
+pid        /var/run/nginx.pid;
+
+events {
+    worker_connections  1024;
+    # multi_accept on;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+
+    access_log	/var/log/nginx/access.log;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    #keepalive_timeout  0;
+    keepalive_timeout  65;
+    tcp_nodelay        on;
+
+    gzip  on;
+    gzip_disable "MSIE [1-6]\.(?!.*SV1)";
+
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+```
+
+<p>We can pretty much leave these settings at their defaults but it&rsquo;s a good idea to have at least a passing familiarity with them. We can see from the config that we&rsquo;re running nginx as a user called <code>www-data</code> and that we have one worker process set up that can accept up to 1024 connections. The <a href="http://wiki.nginx.org/Main">nginx wiki</a> is a good resource for understanding these settings and the <a href="http://wiki.nginx.org/CoreModule">Core Module page</a> has documentation on the main configuration settings.</p>
+
+<p>The main configuration file contains includes for a number of other configuration files such as <code>mime.types</code> for configuring MIME types. At the bottom of the file are two lines that include any <code>.conf</code> files under the <code>/etc/nginx/conf.d/</code> directory and also any files under the <code>sites-enabled</code> directory. It&rsquo;s under the <code>sites-enabled</code> directory that we need to put any site-specific configuration.</p> 
+
+<p>If we look in <code>sites-enabled</code> we&rsquo;ll find a single file called <code>default</code> which is a symbolic link to a <code>default</code> file in the <code>sites-available</code> directory. This file contains the configuration information for the site that contains the &ldquo;Welcome to nginx!&rdquo; page we saw earlier. We could use this file as a template for our application&rsquo;s configuration but instead we&rsquo;ll create it from scratch.</p>
+
+<p>It&rsquo;s a good idea to keep all of the configuration information inside the Rails app itself and then symlink the file to the correct location on the server. Of course you may need to structure this differently depending on how your server is set up. We&rsquo;ll create a new file called <code>nginx.conf</code> in our application&rsquo;s config directory and put just enough configuration information in there to get us started.</p>
+
+``` /conf/nginx.conf
+server {
+ listen 80 default;
+ # server_name example.com;
+ root /vagrant/public; 
+}
+```
+
+<p>All we&rsquo;ve added to the config file is a <code>server</code> block which is similar to a VirtualHost in Apache. We tell the server to <code>listen</code> on port 80 and pass in default to tell nginx to use this server by default if it can&rsquo;t find a matching server name. If our application had a domain name we could use the <code>server_name</code> option and pass it in but as we&rsquo;re only viewing our site on localhost we won&rsquo;t use this. Finally we need to use the <code>root</code> option to tell nginx where the application&rsquo;s static files are.</p> 
+
+<p>Before we try to view our site in a browser we&rsquo;ll need to remove the default server from the <code>sites-enabled</code> directory and symlink up our configuration file. We&rsquo;ll symlink it as <code>todo</code>.</p>
+
+``` terminal
+vagrant@lucid32:/etc/nginx/sites-enabled$ sudo rm default 
+vagrant@lucid32:/etc/nginx/sites-enabled$ sudo ln -s /vagrant/config/nginx.conf todo 
+```
+
+<p>We&rsquo;ll need to restart nginx for these changes to be picked up.</p>
+
+``` terminal
+vagrant@lucid32:/etc/nginx/sites-enabled$ sudo service nginx restart
+```
+
+<p>If we visit <code>localhost:8080</code> on our host machine now we&rsquo;ll see the &ldquo;Welcome aboard&rdquo; page so it looks like our application&rsquo;s <code>index.html</code> page is being served correctly. Anything dynamically generated by Rails won&rsquo;t work, however, as the Rails server is currently offline. Note that the image is missing as the asset pipeline isn&rsquo;t  working and that we get a 404 error when we view the environment as this is what nginx returns when we try to view something that isn&rsquo;t a static file.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/797/original/E293I02.png" width="800" height="345" alt="The static page now works, but not any dynamic assets."/>
+</div>
+
+<h3>Sending Requests To The Rails Application</h3>
+
+<p>We need to adjust our configuration file so that it sends requests to our Rails application. We don&rsquo;t want it to send every request, just the ones where a static file doesn&rsquo;t exist. We can use <code>try_files</code> to do this.</p>
+
+```/conf/nginx.conf
+server {
+ listen 80 default;
+ # server_name example.com;
+ root /vagrant/public; 
+ try_files $uri/index.html $uri @unicorn;
+ location @unicorn {
+   proxy_pass http://localhost:3000;
+ }
+}
+```
+
+<p>We pass <code>try_files</code> a list of locations to try, using the <code>$uri</code> variable which contains the path that the user has passed in in the URL. We check first to see if an <code>index.html</code> file exists at that location and, if not, we then try the location itself. If neither of these exist we fall back to our Rails application. We handle this through what&rsquo;s known as a named location and we&rsquo;ve called ours <code>@unicorn</code>. We use the location command to create that named location and inside this command we tell nginx to pass the request off to the Unicorn server by calling <code>proxy_pass</code>. As we don&rsquo;t have Unicorn set up yet we&rsquo;ll pass the request off to WEBrick for now.</p> 
+
+<p>We&rsquo;ll need to restart nginx again and then move back to our <code>/vagrant</code> directory and start WEBrick.</p>
+
+``` terminal
+vagrant@lucid32:/etc/nginx/sites-enabled$ sudo service nginx restart
+vagrant@lucid32:/etc/nginx/sites-enabled$ cd /vagrant
+vagrant@lucid32:/vagrant$ bundle exec rails s
+```
+
+<p>When we try reloading the page now the dynamic content is served by WEBrick.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/798/original/E293I03.png" width="800" height="345" alt="Dynamic assets now work."/>
+</div>
+
+<p>If we kill the WEBrick server and reload the page again we&rsquo;ll see 502 errors for the dynamic content as nginx can no longer access our Rails application.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/799/original/E293I04.png" width="800" height="345" alt="nginx shown an error when the Rails server isn&rsquo;t running."/>
+</div>
+
+<p>When an error like this happens we should show Rails&rsquo; 500 error page rather than the nginx error. To do that we just add the following line to our nginx config file inside the server section. This tells nginx to show our Rails app&rsquo;s <code>500.html</code> page when  any of the various 500-related errors happen.</p>
+
+``` /conf/nginx.conf
+ error_page 500 502 503 504 /500.html;
+``` 
+
+<p>There are number of other settings we can change in the nginx config file but we&rsquo;ll leave it as it is for now and concentrate instead on getting Unicorn up and running.</p>
+
+<h3>Installing Unicorn</h3>
+
+<p>If you&rsquo;re unfamiliar with Unicorn then <a href="https://github.com/blog/517-unicorn">Github&rsquo;s blog post</a> about it is well worth reading. It contains a lot of useful information on the advantages it provides and also some details on how go get it set up.</p> 
+
+To install it we just need to add the <code>unicorn</code> gem to our application&rsquo;s <code>Gemfile</code>. 
+
+``` /Gemfile
+gem 'unicorn'
+```
+
+<p>We&rsquo;ll need to run <code>bundle</code> on our virtual machine to finish the installation. Once Unicorn has installed we&rsquo;ll need to add a configuration file to tell it how to run our application. Unicorn configuration files are written in Ruby so we&rsquo;ll create a new file at <code>/config/unicorn.rb</code> and add the following code to it.</p>
+
+``` /config/unicorn.rb
+working_directory "/vagrant"
+pid "/vagrant/tmp/pids/unicorn.pid"
+stderr_path "/vagrant/unicorn/unicorn.log"
+stdout_path "/vagrant/unicorn/unicorn.log"
+
+listen "/tmp/unicorn.todo.sock"
+worker_processes 2
+timeout 30
+```
+
+<p>In this configuration file we first tell Unicorn in which directory our Rails application lives and specify the path the the pid file and the log files. We then call <code>listen</code> and pass it the path to a socket. (We can alternatively pass in a port number instead.) Finally we call <code>worker_processes</code> to specify the number of Rails instances Unicorn will boot up and specify a timeout, which we&rsquo;ll set to 30 seconds. If the Rails application doesn&rsquo;t respond in this time Unicorn will quit it and boot it up again. There&rsquo;s more information on Unicorn&rsquo;s configuration options on the <a href="http://unicorn.bogomips.org/Unicorn/Configurator.html">Configurator page</a> on the Unicorn website.</p>
+
+<p>We given Unicorn enough configuration information now to try starting it up and we do this by running the <code>unicorn</code> command through <code>bundle</code>, passing it the path to our configuration file via a <code>-c</code> option and also <code>-D</code> to make it a daemonized process. (There&rsquo;s also a <code>unicorn_rails</code> command available but we don&rsquo;t need to use it as Rails 3 is fully Rack-compatible.)</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$  bundle exec unicorn -c config/unicorn.rb -D
+``` 
+ 
+<p>If we don&rsquo;t see any errors then Unicorn should have booted up correctly. Before we can view the page in a browser though we&rsquo;ll need to modify the nginx configuration file to pass dynamic pages to Unicorn rather than to WEBrick. We do this through an <code>upstream</code> block that we give a name. In this block we use <code>server</code> and point it to a Unix socket, which is the one we used in the Unicorn configuration file. We also set the <code>fail_timeout</code> to <code>0</code> here so that if our Rails application fails to respond and Unicorn times out this is handled correctly. Lower down in the file we now set <code>proxy_pass</code> to <code>http://unicorn</code> so that it points to the upstream block above.</p>
+
+``` /config/nginx.conf
+upstream unicorn {
+  server unix:/tmp/unicorn.todo.sock fail_timeout=0; 
+}
+
+server {
+ listen 80 default;
+ # server_name example.com;
+ root /vagrant/public; 
+ try_files $uri/index.html $uri @unicorn;
+ location @unicorn {
+   proxy_pass http://unicorn;
+ }
+ error_page 500 502 503 504 /500.html;
+}
+```
+
+<p>After we&rsquo;ve restarted nginx again we can view the page through Unicorn on port 8080.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/800/original/E293I05.png" width="800" height="314" alt="Our application running under Unicorn and nginx."/>
+</div>
+
+<h3>More nginx Configuration</h3>
+
+<p>The configuration options we&rsquo;ve passed to nginx are the bare minimum needed to get everything up and running but there will likely be other options that you&rsquo;ll want to use. The <a href="https://github.com/defunkt/unicorn">Unicorn project&rsquo;s Github pages</a> have a number of different example configurations <a href="https://github.com/defunkt/unicorn/blob/master/examples/nginx.conf">including one for nginx</a>. This example configuration is very well documented and it&rsquo;s well worth taking a look through it and picking out the sections you&rsquo;ll need for your own application&rsquo;s config files. For example there are several proxy options that we should pass in to the <code>location</code> block for setting various headers and turning off the redirect handling. Also we should set <code>client_max_body_size</code> so that users can upload large files and <code>keepalive_timeout</code>.</p>
+
+``` /config/nginx.conf
+location @unicorn {
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header Host $http_host;
+  proxy_redirect off;
+  proxy_pass http://unicorn;
+}
+
+client_max_body_size 4G;
+keepalive_timeout 5;
+error_page 500 502 503 504 /500.html;
+```
+
+<p>Finally, if we&rsquo;re on a Linux system we should add the <code>deferred</code> option to the <code>listen</code> command so that it uses the TCP Defer Accept option.</p>
+
+``` /config/nginx.conf
+server {
+ listen 80 default;
+ # Rest of block omitted.
+}
+```
+
+<p>All of these options are well documented in the nginx wiki so if you need any more information on there then check there.</p>
+
+<h3>Using an init.d script to start Unicorn Automatically</h3>
+
+<p>While we&rsquo;re looking through the Unicorn examples we&rsquo;ll take a look at the <a href="https://github.com/defunkt/unicorn/blob/master/examples/init.sh">init shell script</a>, an example <code>init.d</code> shell script that we can use to start up and manage the Unicorn process. We&rsquo;ll add this script to our server as <code>unicorn_init.sh</code> in the <code>/config</code> directory. Before we can use it there are some variables at the top of the file that we&rsquo;ll need to set and one of these is the path to the <code>unicorn</code> executable but as we installed Unicorn through Bundler how do we set this?</p>
+
+<p>Bundler has a solution for this. If we run <code>bundle install --binstubs</code>. This will generate a <code>/bin</code> directory in our application that will contain executables for all of the gems that Bundler manages.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ ls bin
+erubis	      rake	  ri		        scss	 tilt  unicorn       rackup	rake2thor  sass 
+therubyracer  tt      unicorn_rails rails	 rdoc	 sass-convert  thor	  turn
+```
+
+<p>We can now specify this <code>unicorn</code> executable in <code>CMD</code>. We&rsquo;ll also need to change the <code>APP_ROOT</code> variable so that it points at our Rails application.</p>
+
+``` /config/unicorn_init.sh
+#!/bin/sh
+set -e
+# Example init script, this can be used with nginx, too,
+# since nginx and unicorn accept the same signals
+
+# Feel free to change any of the following variables for your app:
+TIMEOUT=${TIMEOUT-60}
+APP_ROOT=/vagrant
+PID=$APP_ROOT/tmp/pids/unicorn.pid
+CMD="$APP_ROOT/bin/unicorn -D -c $APP_ROOT/config/unicorn.rb"
+#INIT_CONF=$APP_ROOT/config/init.conf
+action="$1"
+set -u
+
+#test -f "$INIT_CONF" && . $INIT_CONF
+```
+
+<p>There&rsquo;s also an <code>INIT_CONF</code> option in the example file that points to an application-specific config file. We don&rsquo;t need that here as this file will be our application config file so we can remove this and also the <code>test</code> command that calls this variable.</p>
+
+<p>This script runs as the root user and therefore Unicorn and our Rails application will also run as root. We want to run them as the vagrant user so we&rsquo;ll replace each call to <code>$CMD</code> in the file with this:</p>
+
+``` /config/unicorn_init.sh
+su -c "$CMD" - vagrant
+```
+
+<p>We&rsquo;ll need to make this file executable, which we can do by running</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ chmod +x config/unicorn_init.sh 
+```
+
+<p>Finally we&rsquo;ll need to create a link to this file in the <code>init.d</code> directory. We&rsquo;ll just call it <code>unicorn</code> but if you&rsquo;re running multiple applications you&rsquo;ll want to make this name more specific.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ sudo ln -s /vagrant/config/unicorn_init.sh /etc/init.d/unicorn
+``` 
+<p>We can now run the file with</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ sudo service unicorn restart
+reloaded OK
+```
+
+<p>With all of this set up we should be able to restart the server and have nginx and Unicorn boot up automatically for us. However, as we&rsquo;re running under Vagrant there&rsquo;s a catch and this won&rsquo;t work. Vagrant mounts the <code>/vagrant</code> shared folder that contains our Rails application after the virtual machine boots up and therefore after the <code>init.d</code> scripts are run. This means that when the init scripts run the <code>init.sh</code> file in our app&rsquo;s <code>config</code> directory won&rsquo;t be available and so we have to start up the services manually.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ sudo service nginx restart
+Restarting nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+configuration file /etc/nginx/nginx.conf test is successful
+nginx.
+vagrant@lucid32:/vagrant$ sudo service unicorn restart
+reloaded OK
+```
+
+<p>If we were setting up a physical server this way we wouldn&rsquo;t have to worry about this as the config scripts will be available as the machine boots up.</p>
+
+<p>If we visit our application at <code>localhost:8080</code> again it still works. We&rsquo;re still running it in development mode, however. To run it in production mode we pass the <code>-E</code> option to Unicorn and specify the environment.</p>
+
+``` terminal
+CMD="$APP_ROOT/bin/unicorn -D -c $APP_ROOT/config/unicorn.rb -E production"
+```
+
+<h3>Handling Local Versions of Ruby</h3>
+
+<p>There&rsquo;s one more thing to note about the binstubs we set up earlier. If we take a look at one of them we can see that it&rsquo;s a script that runs under <code>/usr/bin/env/ruby</code>.</p>
+
+```/bin/unicorn
+#!/usr/bin/env ruby
+#
+# This file was generated by Bundler.
+#
+# The application 'unicorn' is installed as part of a gem, and
+# this file is here to facilitate running it.
+#
+
+require 'pathname'
+ENV['BUNDLE_GEMFILE'] ||= File.expand_path("../../Gemfile",
+  Pathname.new(__FILE__).realpath)
+
+require 'rubygems'
+require 'bundler/setup'
+
+load Gem.bin_path('unicorn', 'unicorn')
+```
+
+<p>This is fine for us as we set up a global version of Ruby 1.9.2 when we setup rbenv. If we specify a local version of Ruby to use for this project like this (this is, of course, the same version we&rsquo;re using globally) this will add a <code>.rbenv-version</code> file to our project specifying the Ruby version we want to run the application under.</p>
+
+``` terminal
+vagrant@lucid32:/vagrant$ rbenv local 1.9.2-p290
+```
+
+<p>If the local version is different from the global version then we&rsquo;ll run into issues when we run the commands in the <code>bin</code> directory. To fix this we can do a find and replace across the bin files and replace any call to <code>ruby</code> with <a href="https://github.com/sstephenson/rbenv/blob/master/bin/ruby-local-exec"><code>ruby-global-exec</code></a>. This will ensure that the local version of Ruby is always run.</p>
+
+``` termianl
+vagrant@lucid32:/vagrant$ sed -i 's/env ruby/env ruby-local-exec/' bin/*
+```  
+
+<p>That&rsquo;s it for this episode on nginx and Unicorn. We haven&rsquo;t been able to cover everything here. One thing we haven&rsquo;t mentioned that&rsquo;s worth taking a look at is Unicorn&rsquo;s preload_app option. This loads a Rails app before its forked off to separate processes. This approach will load up large applications much more quickly.</p> 
+
+<p>There are a couple of other blog posts that are worth reading, too. One, by Tyler Bird, is called &ldquo;<a href="http://www.engineyard.com/blog/2010/everything-you-need-to-know-about-unicorn/">Everything You Need to Know About Unicorn</a>&rdquo; and contains a lot of interesting information to help you understand Unicorn. The other is by Ryan Tomayko and is called &ldquo;<a href="http://tomayko.com/writings/unicorn-is-unix">I Like Unicorn because it&rsquo;s Unix</a>&rdquo;. This post does a great job in explaining how Unicorn works underneath.</p>
