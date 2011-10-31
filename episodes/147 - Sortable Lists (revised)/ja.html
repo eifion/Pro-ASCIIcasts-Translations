@@ -1,0 +1,302 @@
+<p>下の画面はFAQ(よくある質問)のリストを表示しているサイトのページです。リストの項目をドラッグ&amp;ドロップで並べ替えて、ページをリロードせずに更新された並び順をデータベースに反映させる機能を付加しようと思います。以前のエピソードでは、この機能を<a href="http://www.prototypejs.org/">Prototype</a>と<a href="http://madrobby.github.com/scriptaculous/">Scriptaculous</a>の<a href="http://madrobby.github.com/scriptaculous/sortable/">Sortable</a>ヘルパーを用いて実現しました。しかし、これらは現在のRailsには含まれていません。Rails 3.1でこれを実現するにはどうすればいいでしょうか?</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/783/original/E147RI01.png" width="800" height="391" alt="FAQのリスト"/>
+</div>
+
+<h3>jQuery UIを導入する</h3>
+
+<p>Prototypeの代わりに今回は<a href="http://jqueryui.com/">jQuery UI</a>を使用します。この中に含まれる<a href="http://jqueryui.com/demos/sortable/">Sortable</a>プラグインを使うことによって、簡単にドラッグ&amp;ドロップで並べ替えができるリストを簡単に作ることができます。このプラグインは、たくさんのオプションで設定を変更することができ、アプリケーションに合うように振る舞いをカスタマイズできます。</p> 
+
+<p>RailsアプリケーションにjQuery UIを追加するのは簡単です。何もダウンロードする必要はありません。ただ<code>application.js</code>ファイルに1行追加するだけです。</p>
+
+
+
+``` /app/assets/javascripts/application.js
+// This is a manifest file that'll be compiled into including all the files listed below.
+// Add new JavaScript/Coffee code in separate files in this directory and they'll automatically
+// be included in the compiled file accessible from http://example.com/assets/application.js
+// It's not advisable to add code directly here, but if you do, it'll appear at the bottom of 
+// the compiled file.
+//
+//= require jquery
+//= require jquery-ui
+//= require jquery_ujs
+//= require_tree .
+```
+
+
+
+<h3>ビューを修正する</h3>
+
+<p>FAQリストのテンプレートは次のようになっています。</p>
+
+
+
+``` /app/views/faqs/index.html.erb
+
+<h1>FAQs</h1>
+
+<ul>
+<% @faqs.each do |faq| %>
+  <li>
+    <%= link_to h(faq.question), faq %>
+  </li>
+<% end %>
+</ul>
+
+<p><%= link_to "New FAQ", new_faq_path %></p>
+
+```
+
+
+
+<p>リストにidを付与し、JavaScriptから参照できるようにします。リスト中の項目ごとにもidを付け、項目を動かすことによって更新された並び順をサーバに送り返したときにそれがわかるようにします。個々の項目は&lt;model_name&gt;_&lt;model_id&gt;の形式でidを持つ必要があります。content_tag_forというヘルパーメソッドを使ってこれらを自動的に生成します。これらの修正を行ったテンプレートは以下のようになります。</p>
+
+
+
+``` /app/views/faqs/index.html.erb
+
+<h1>FAQs</h1>
+
+<ul id="faqs">
+<% @faqs.each do |faq| %>
+  <%= content_tag_for :li, faq do %>
+    <%= link_to h(faq.question), faq %>
+  <% end %>
+<% end %>
+</ul>
+
+<p><%= link_to "New FAQ", new_faq_path %></p>
+
+```
+
+
+
+<p>内容を出力するため、<code>content_tag_for</code>ブロックの始めのタグにイコール記号が入っていることに留意してください。</p>
+
+<h3>リストにソート機能を付加する</h3>
+
+<p>次にリストをソート可能にするのに必要なスクリプトを追加します。ただリストを取得して<code>sortable()</code>を呼び出すだけです。このコードを<code>jQuery</code>関数でラップ(wrap)して、ページのDOMがロードされたときだけ実行されるようにします。</p>
+
+
+
+``` /app/assets/javascripts/faq.js.coffee
+jQuery -&gt;;
+  $('#faqs').sortable();
+```  
+  
+  
+  
+<p>ここでページをリロードすると、リスト内の項目をドラッグできるようになります。</p>
+
+<p>sortableに対して<a href="http://jqueryui.com/demos/sortable/#options">多くのオプション</a>を渡すことができます。<code>axis</code>オプションを使うことでリストが縦方向にのみソートできるようにし、項目がドロップされた時に起動される<code>update</code>コールバックを付加します。</p>
+
+
+
+``` /app/assets/javascripts/faq.js.coffee
+jQuery -&gt;
+  $('#faqs').sortable(
+    axis: 'y'
+    update: -&gt;
+      alert('updated!')
+  );
+```  
+  
+  
+  
+<p>ここで項目をドラッグしてみると縦方向のみに動き、ドロップするとコールバックが起動してアラートが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/784/original/E147RI02.png" width="800" height="392" alt="項目をドロップするとアラートが表示される"/>
+</div>
+
+<h3>更新された並び順を保存する</h3>
+
+<p>項目がドロップされたらサーバに何らかの情報を送り、新しい並び順を保存できるようにしなければなりません。現在のアプリケーションのままでは、ページをリロードするとデフォルトの状態に戻ってしまいます。</p> 
+
+<p>各項目の位置を保存するために<code>Faq</code>モデルに<code>position</code>フィールドが必要です。この変更のためのマイグレーションを作成し、<code>rake db:migrate</code>を実行してデータベースに新しいフィールドを追加します。</p> 
+
+ 
+
+``` terminal
+$ rails g migration add_position_to_faqs position:integer
+```
+
+
+
+<p>次に<code>FaqsController</code>の<code>index</code>アクションを書き換えて、FAQをpositionフィールドの順番で取得するように修正します。</p>
+
+
+
+``` /app/controllers/faqs_controller.rb
+def index
+  @faqs = Faq.order("position")
+end
+```
+
+
+
+<p>FAQの並び順が変わったときにサーバに送り返されたデータを処理するためのアクションを新たに作成しなくてはいけません。<code>FaqsController</code>は標準の7つのRESTfulなアクションを持っていますが、いずれもここでは役に立ちません。あえて言うと<code>update</code>アクションが求めるものに近いですが、一度に複数の項目を更新する必要があります。コントローラに<code>sort</code>アクションを追加する予定ですが、今はただ<code>nothing</code>と表示するだけにします。</p>
+
+
+
+``` /app/controllers/faqs_controller.rb
+def sort
+  render nothing: true
+end
+```
+
+
+
+<p>このカスタムで作成したアクションを、routesファイルの<code>faqs</code>リソースの項に追加します。<code>sort</code>アクションは複数の<code>Faq</code>に対して作用するので、<code>sort</code>のために<code>collection</code>と<code>post</code>を使用します。ここでは本当なら<code>put</code>を使うべきなのですが、より扱いやすい<code>post</code>を使うことにします。</p>
+
+
+
+``` /config/routes.rb
+Faqapp::Application.routes.draw do
+  root to: 'faqs#index'
+  resources :faqs do
+    collection { post :sort }
+  end
+end
+```
+
+
+
+<p>CoffeeScriptファイルに戻って、コールバック関数のコードを修正して、<code>alert</code>を表示する代わりに新しい<code>sort</code>アクションに対してPOSTリクエストを行うようにします。CoffeeScriptの中に直接URLを入れない方がいいので、リストに新しい<code>data</code>属性としてコールバックURLを追加します。</p>
+
+
+
+``` /app/views/faqs/index.html.erb
+<ul id="faqs" data-update-url="<%= sort_faqs_url %>">
+```
+
+
+
+<p>CoffeeScriptコードでこのURLを取得し、これを使って更新された位置の情報を<code>sort</code>アクションに送り返します。<code>$(this).sortable('serialize')</code>を呼び出すことでこの情報を取得することができます。これですべての情報をサーバに送り返せる形式でまとめることができました。</p>
+
+
+
+``` /app/assets/javascripts/faq.js.coffee
+jQuery -&gt;
+  $('#faqs').sortable(
+    axis: 'y'
+    update: -&gt;
+      $.post($(this).data('update-url'), $(this).sortable('serialize'))
+  )
+```
+
+
+
+<p>ここでページをリロードして、項目の位置を変えると、<code>sort</code>アクションへのAJAX呼び出しが起動されます。開発(development)ログを見てみると、パラメータが<code>faq</code>のパラメータとして<code>faq</code>の<code>id</code>の配列とともに渡される様子がわかります。これらは更新されたリストの並び通りに送られます。</p>
+
+
+
+``` terminal
+Started POST "/faqs/sort" for 127.0.0.1 at 2011-10-17 22:05:47 +0100
+  Processing by FaqsController#sort as */*
+  Parameters: {"faq"=&gt;["1", "2", "5", "3", "4", "6"]}
+Rendered text template (0.0ms)
+Completed 200 OK in 21ms (Views: 20.2ms | ActiveRecord: 0.0ms)
+```
+
+
+
+<p><code>FaqsController</code>の<code>sort</code>アクションでこれらのパラメータを読んで、<code>index</code>で項目をループして各<code>Faq</code>の位置を更新します。</p>
+
+
+
+``` /app/controllers/faqs_controller.rb
+def sort
+  params[:faq].each_with_index do |id, index|
+    Faq.update_all({position: index+1}, {id: id})
+  end
+  render nothing: true
+end
+```
+
+
+
+<p><code>update_all</code>を用いてすべての更新を1回のクエリで実行し、各<code>Faq</code>の位置を<code>index + 1</code>に設定します(indexはゼロ始まりなので)。ここで<code>id</code>はパラメータのidです。リストでFAQの位置を変更してページをリロードすると項目はその位置にとどまります。</p>
+
+<h3>ハンドルを追加する</h3>
+
+<p>現状ではページ上の項目をドラッグできるということは見た目からはわかりません。これを改善するために、項目がドラッグ可能であることをユーザに伝えるために各項目にハンドルを追加します。テンプレートで各項目にハンドルを追加してそれに<code>class</code>を設定し、CoffeeScriptから参照できるようにします。</p>
+
+
+
+``` /app/views/faqs/index.html.erb
+
+<ul id="faqs" data-update-url="<%= sort_faqs_url %>">
+<% @faqs.each do |faq| %>
+  <%= content_tag_for :li, faq do %>
+    <span class="handle">[drag]</span>
+    <%= link_to h(faq.question), faq %>
+  <% end %>
+<% end %>
+</ul>
+```
+
+
+
+<p>あと必要なのは、<code>sortable</code>関数で<code>handle</code>オプションを指定することです。</p>
+
+
+
+``` /app/assets/javascripts/faqs.js.coffee jQuery -&gt; $('#faqs').sortable( axis: 'y' handle: '.handle' update: -&gt; $.post($(this).data('update-url'), $(this).sortable('serialize')) ) ```  
+
+<p>ハンドルにスタイルも追加し、<code>move</code>カーソルを設定してドラッグ可能であることを示します。</p>
+
+``` /app/assets/stylesheets/faqs.css.scss #faqs .handle { font-size: 12px; color: #777; cursor: move; }
+```
+
+
+<p>ページをリロードすると、各項目の横にハンドルが表示されそれを使って項目をドラッグすることができます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/785/original/E147RI03.png" width="800" height="391" alt="各項目にハンドルがついた"/>
+</div>
+
+<h3>新規項目を追加する</h3>
+
+<p>新しくFAQを追加すると<code>position</code>属性は<code>null</code>になります。新規項目の<code>position</code>に自動的にリストの最後に来るように値が与えられるのがいいでしょう。</p> 
+
+<p>これは<a href="https://github.com/swanandp/acts_as_list"><code>acts_at_list</code> gem</a>を利用することで可能になります。このgemが公開されてからかなり経ちますが今でもSwanand Pagnisによって活発にメンテナンスされているので、問題なく利用できます。このgemをアプリケーションに追加するには通常と同じように<code>Gemfile</code>にgemを追加して<code>bundle</code> を実行してインストールします。</p>
+
+
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not" required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~&gt; 3.1.4'
+  gem 'coffee-rails', '~&gt; 3.1.1'
+  gem 'uglifier', '&gt;= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'acts_as_list'
+```
+
+
+
+<p><code>acts_as_list</code>をインストールしたら、<code>Faq</code>モデルに追加します。</p>
+
+
+
+``` /app/models/faq.rb
+class Faq &lt; ActiveRecord::Base
+  acts_as_list
+end
+```
+
+
+
+<p>新規に作成する<code>Faq</code>の<code>position</code>属性が自動的に設定されるようになりました。</p></ul>
