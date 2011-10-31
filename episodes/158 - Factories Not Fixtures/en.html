@@ -1,0 +1,288 @@
+<p>As you write tests for your Rails applications it&rsquo;s good practice to keep each test isolated and minimize the number of external dependencies it has. <a href="http://ar.rubyonrails.org/classes/Fixtures.html">Fixtures</a> go against this idea as they add an external data dependency that each test relies on. In this episode we&rsquo;ll look at replacing fixtures with factories.</p>
+
+<h3>The Problem With Fixtures</h3>
+
+<p>Below are some specs that test an <code>authenticate</code> method in a <code>User</code> model. The first checks that when a valid username and password is passed to <code>authenticate</code> the matching user is returned while the second makes sure that <code>nil</code> is returned if invalid details are passed in.</p>
+
+``` /spec/models/user_spec.rb
+require 'spec_helper'
+
+describe User do
+  fixtures :all
+
+  it "authenticates with matching username and password" do
+    User.authenticate("batman", "secret").should eq(users(:batman))
+  end
+
+  it "does not authenticate with incorrect password" do
+    User.authenticate("batman", "incorrect").should be_nil
+  end
+end
+```
+
+<p>We don&rsquo;t create any users in the tests to authenticate against in these test so how where do they get this information from? The answer is that these users are defined in a fixtures file and the tests load them from there.</p>
+
+```/spec/fixtures/users.yml
+batman:
+  username: batman
+  email: batman@example.com
+  password_digest: "$2a$10$uh/MLjEjRXyKK9jZLFld7OMmaqP9o3uPC8jgr6iebMdD.hpcVfKwe"
+  admin: false
+
+admin:
+  username: admin
+  email: admin@example.com
+  password_digest: "$2a$10$uh/MLjEjRXyKK9jZLFld7OMmaqP9o3uPC8jgr6iebMdD.hpcVfKwe"
+  admin: true
+```  
+<p>There&rsquo;s a heavy dependency between the tests and the fixtures and we can cause the tests to fail just be changing the fixtures. External dependencies that are this strong aren&rsquo;t a good idea and make the tests brittle. Another problem here is that the passwords are hashed so it&rsquo;s not at all obvious that the first user above has the password &ldquo;secret&rdquo;.</p>
+
+<h3>Introducing Factories</h3>
+
+<p>How can we go about removing our dependency on fixtures? One solution is to remove them and to create the users we need for each test in the test itself, like this:</p>
+
+``` /spec/models/user_spec.rb
+it "authenticates with matching username and password" do
+  user = User.create(username: "batman", password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+
+it "does not authenticate with incorrect password" do
+  user = User.create(username: "batman", password: "secret")
+  User.authenticate("batman", "incorrect").should be_nil
+end
+```
+
+<p>If we run the test suite now, these tests will fail. This is because we have validations in the <code>User</code> model that we haven&rsquo;t satisfied in the users we&rsquo;ve created. There&rsquo;s a whole list of validations in the User model that we need to keep in mind every time we create a user in a spec and if we add any more validations later on we run the risk of breaking existing specs.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  attr_accessible :username, :email, :password, :password_confirmation
+
+  has_secure_password
+
+  validates_presence_of :username
+  validates_uniqueness_of :username, :email, allow_blank: true
+  validates_format_of :username, with: /^[-\w\._@]+$/i, allow_blank: true, message: "should only contain letters, numbers, or .-_@"
+  validates_format_of :email, with: /^[-a-z0-9_+\.]+\@([-a-z0-9]+\.)+[a-z0-9]{2,4}$/i
+  validates_presence_of :password, on: :create
+  validates_length_of :password, minimum: 4, allow_blank: true
+
+  def self.authenticate(username, password)
+    user = find_by_username(username)
+    return user if user && user.authenticate(password)
+  end
+
+  def can_manage_article?(article)
+    admin? || article.user == self
+  end
+end
+```
+
+<p>This is where factories come in useful. There are a number of factory frameworks available but here we&rsquo;re going to use <a href="https://github.com/thoughtbot/factory_girl">Factory Girl</a>. To install it we just need to add it to the <code>:test</code> group in our application&rsquo;s <code>Gemfile</code> and then run <code>bundle</code>. In a Rails application we should use the <a href="https://github.com/thoughtbot/factory_girl_rails"><code>factory_girl_rails</code></a> gem which will install <code>factory_girl</code> as a dependency.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'bcrypt-ruby'
+
+gem 'rspec-rails', :group => [:test, :development]
+group :test do
+  gem 'capybara'
+  gem 'factory_girl_rails'
+end
+```
+
+<p>There&rsquo;s some excellent documentation in Factory Girl&rsquo;s <a href="https://github.com/thoughtbot/factory_girl/blob/master/GETTING_STARTED.md">Getting Started file</a> and one of the things it shows us is where we can put our factories. These can go in a single <code>factories.rb</code> file under the <code>/test</code> or <code>/spec</code> directories or in any Ruby file under <code>/test/factories</code> or <code>/spec/factories</code>. We&rsquo;ll take the single file approach and, as we&rsquo;re using RSpec, our factories will go in <code>/spec/factories.rb</code>. Here&rsquo;s the factory for <code>User</code>.</p>
+
+``` /spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    username "foo"
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+end
+```
+
+<p>To create factories we need to call <code>FactoryGirl.define</code> and pass it a block. Inside this block we use the <code>factory</code> method to define a factory, passing it the name of the model and another block. In this inner block we define default values for each of the model&rsquo;s attributes and it&rsquo;s sensible to set the defaults so that the model&rsquo;s validations will pass. In the case of our <code>User</code> model we need a valid <code>username</code>, <code>password</code> and <code>email</code>. We can define attributes based on the value of another attribute if we want to and here we&rsquo;ve based the email address on the username.</p>
+
+<p>In our specs we can now create users from the factory we&rsquo;ve created by calling <code>FactoryGirl.create</code>, passing in the name of the factory we want to create and any parameters we want to override from their default values.</p>
+
+```/spec/models/user_spec.rb
+it "authenticates with matching username and password" do
+  user = FactoryGirl.create(:user, username: "batman", 
+    password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+
+it "does not authenticate with incorrect password" do
+  user = FactoryGirl.create(:user, username: "batman", 
+    password: "secret")
+  User.authenticate("batman", "incorrect").should be_nil
+end
+```
+
+<p>When we run our specs now they both pass again and they no longer have any dependencies on external fixtures. There&rsquo;s a potential problem with out factory, however. Each user we create from the factory will have the same <code>username</code> and <code>password</code> and these fields both have <code>validates_uniqueness_of</code> validators. Any test we write that creates more than one user will throw an error.</p>
+
+<p>We can solve this by using a numeric sequence when we create each new user so that the name is unique, like this:</p>
+
+```/spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    sequence(:username) { |n| "foo#{n}" }
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+end
+```
+<p>This means that every user that&rsquo;s created now will have a unique name and email address.</p>
+
+<h3>A Quick Tip</h3>
+
+<p>Calling <code>FactoryGirl</code> every time we want to create a factory can quickly become tedious. We can shorten this by adding the following line inside the <code>config</code> block of our <code>spec_helper</code> file. (This works in the <code>test_helper</code> file too if you&rsquo;re using Test::Unit.)</p>
+
+```/spec/spec_helper.rb
+config.include Factory::Syntax::Methods
+```
+
+<p>With this line in place we can remove <code>FactoryGirl</code> and call <code>create</code> directly.</p>
+
+``` /spec/factories.rb
+it "authenticates with matching username and password" do
+  user = create(:user, username: "batman", password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+```
+<p>Note that a <code>build</code> method also exists if we want to create a model without saving it.</p>
+
+<h3>Handling Associations</h3>
+
+<p>Factory Girl also works well across associations. In our app we have an <code>Article</code> model that has a <code>belongs_to</code> relationship with <code>User</code> and which validates the presence of the <code>user_id</code>. This ensures that every article that&rsquo;s created belongs to a user.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  belongs_to :user
+  validates_presence_of :name, :user_id
+end
+```
+<p>When we create a factory for articles we need to give each article an associated user and Factory Girl makes this simple. All we need to do is call <code>user</code> and it will automatically assign a new user based on the <code>User</code> factory.</p>
+
+``` /spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    sequence(:username) { |n| "foo#{n}" }
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+  
+  factory :article do
+    name "Foo"
+    user
+  end
+end
+```
+
+<p>If we need to customize this behaviour we can use the <code>association</code> method and pass in options such as which factory to use for the association. The Getting Started page we linked to earlier has more details about this. We can see this association in action by adding a new spec that uses it.</p>
+
+``` /spec/user_spec.rb
+it "can mangage articles he owns" do
+  article = create(:article)
+  user = article.user
+  user.can_manage_article?(article).should be_true
+  user.can_manage_article?(create(:article)).should be_false    
+end
+```
+<p>In this spec we create an article from a factory this automatically creates a user for that article. We can then use this to check that the user can manage his own article but not any others.</p> 
+
+<h3>Creating Factories Based on Other Factories</h3>
+
+<p>Our <code>User</code> model has an <code>admin</code> attribute that is <code>false</code> by default. When we&rsquo;re writing tests to test the admin parts of the site we want to create admin users and it would be good if we didn&rsquo;t need to override this default value each time. Factory Girl lets us create factories based on others and so we can create an <code>admin</code> factory, nested inside the user factory, and override the attributes that we want to change.</p>
+
+``` /spec/factories.rb
+factory :user do
+  sequence(:username) { |n| "foo#{n}" }
+  password "foobar"
+  email { "#{username}@example.com" }
+  admin false
+    
+  factory :admin do
+    admin true
+  end
+end
+```
+<p>Each time we create an <code>admin</code> factory now a new <code>User</code> will be created but with <code>admin</code> being true.</p>
+
+``` /spec/factories.rb
+it &quot;can manage any articles as admin&quot; do
+  create(:admin).can_manage_article?(create(:article)).should be_true
+  create(:user).can_manage_article?(create(:article)).should be_false
+end
+```
+
+<p>An admin user should be able to manage any article, and the spec above will test for this correctly.</p>
+
+<h3>Speeding Up Our Test Suite</h3>
+
+<p>It&rsquo;s a bad habit to use the <code>create</code> method every time we create a model object as this saves a record to the database. Often a test doesn&rsquo;t require this so we&rsquo;re making it run more slowly than it potentially could. It&rsquo;s always worth trying to use the <code>build</code> method first to see if that will work. In certain cases it won&rsquo;t, such as in our authentication tests which fetch a user from the database. In these cases we need to stick with <code>create</code>.</p>
+
+``` /spec/user_spec.rb
+require 'spec_helper'
+
+describe User do
+
+  it "authenticates with matching username and password" do
+    user = create(:user, username: "batman", password: "secret")
+    User.authenticate("batman", "secret").should eq(user)
+  end
+
+  it "does not authenticate with incorrect password" do
+    user = create(:user, username: "batman", password: "secret")
+    User.authenticate("batman", "incorrect").should be_nil
+  end
+  
+  it "can mangage articles he owns" do
+    article = build(:article)
+    user = article.user
+    user.can_manage_article?(article).should be_true
+    user.can_manage_article?(create(:article)).should be_false    
+  end
+  
+  it "can manage any articles as admin" do
+    build(:admin).can_manage_article?(create(:article)).should be_true
+    build(:user).can_manage_article?(create(:article)).should be_false
+  end
+  
+end
+```
+
+<p>We should also be on the lookout for times when we can skip using a factory entirely. For example in the spec where we check that a user can&rsquo;t manage an article he didn&rsquo;t create we don&rsquo;t care what attributes the article has and we can just create a new <code>Article</code>.</p>
+
+``` /spec/factories.rb
+it "can mangage articles he owns" do
+  article = build(:article)
+  user = article.user
+  user.can_manage_article?(article).should be_true
+  user.can_manage_article?(Article.new).should be_false    
+end
+```
+
+<p>For the cases when we need anything other than a brand new model object we should stick with the factories, however.</p>
+
+<p>That&rsquo;s it for our look at Factory Girl. We haven&rsquo;t covered everything that it does but the documentation covers everything well.</p>
+
+<h3>Alternatives</h3>
+
+<p>If you&rsquo;re looking for an alternative to Factory Girl then you should take a look at <a href="http://fabricationgem.org/">Fabrication</a>. This has a very similar syntax and feature set to Factory Girl but has a few key differences. For example it does some lazy generation for associations. If you find yourself working with associations a lot and have a complex association tree where Factory Girl seems to load too much at once then Fabrication may be the better solution.</p>
