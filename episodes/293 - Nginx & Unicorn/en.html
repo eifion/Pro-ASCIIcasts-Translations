@@ -1,6 +1,6 @@
 <p>In this episode we&rsquo;ll show you how to serve a Rails application using <a href="http://nginx.org/">nginx</a> and <a href="http://unicorn.bogomips.org/">Unicorn</a>. This hosting solution is used by many large companies such as Github and 37 Signals to host their Rails applications and here we&rsquo;ll go through the steps necessary to get it set up on a Linux server.</p>
 
-<p>Normally of course we&rsquo;d do this on a production server, but if it&rsquo;s the first time you&rsquo;ve done this it&rsquo;s a good idea to use a virtual machine so that you have a safe environment in which to test things. We&rsquo;ll be using Vagrant and the virtual machine we created in the last episode. This VM machine already has Ruby 1.9.2 installed via rbenv and has a shared directory at <code>/vagrant</code> that contains a very basic Rails application. We won&rsquo;t be focussing on Capistrano or deployment as our application is already on the server.</p>
+<p>Normally of course we&rsquo;d do this on a production server, but if it&rsquo;s the first time you&rsquo;ve done this it&rsquo;s a good idea to use a virtual machine so that you have a safe environment in which to test things. We&rsquo;ll be using Vagrant and the virtual machine we created in the last episode. This VM machine already has Ruby 1.9.2 installed via rbenv and has a shared directory at <code>/vagrant</code> that contains a very basic Rails application. We won&rsquo;t be focusing on Capistrano or deployment as our application is already on the server.</p>
 
 <p>We can already start up our Rails application on the VM. First we need to do is SSH into the VM from the application&rsquo;s directory with</p>
 
@@ -60,7 +60,7 @@ Connection to 127.0.0.1 closed.
 $ vagrant reload
 ```
 
-<p>Traffic on port 80 is will now be forwarded to port 8080 on our host machine. The <code>init.d</code> file means that nginx will will have been automatically restarted too. If we visit http://localhost:8080 now we&rsquo;ll see nginx&rsquo;s default page.</p>
+<p>Traffic on port 80 will now be forwarded to port 8080 on our host machine. The <code>init.d</code> file means that nginx will will have been automatically restarted too. If we visit http://localhost:8080 now we&rsquo;ll see nginx&rsquo;s default page.</p>
 
 <div class="imageWrapper">
   <img src="http://asciicasts.com/system/photos/796/original/E293I01.png" width="800" height="280" alt="The default nginx page."/>
@@ -187,7 +187,7 @@ vagrant@lucid32:/vagrant$ bundle exec rails s
 
 <h3>Installing Unicorn</h3>
 
-<p>If you&rsquo;re unfamiliar with Unicorn then <a href="https://github.com/blog/517-unicorn">Github&rsquo;s blog post</a> about it is well worth reading. It contains a lot of useful information on the advantages it provides and also some details on how go get it set up.</p> 
+<p>If you&rsquo;re unfamiliar with Unicorn then <a href="https://github.com/blog/517-unicorn">Github&rsquo;s blog post</a> about it is well worth reading. It contains a lot of useful information on the advantages it provides and also some details on how to get it set up.</p> 
 
 To install it we just need to add the <code>unicorn</code> gem to our application&rsquo;s <code>Gemfile</code>. 
 
@@ -208,7 +208,7 @@ worker_processes 2
 timeout 30
 ```
 
-<p>In this configuration file we first tell Unicorn in which directory our Rails application lives and specify the path the the pid file and the log files. We then call <code>listen</code> and pass it the path to a socket. (We can alternatively pass in a port number instead.) Finally we call <code>worker_processes</code> to specify the number of Rails instances Unicorn will boot up and specify a timeout, which we&rsquo;ll set to 30 seconds. If the Rails application doesn&rsquo;t respond in this time Unicorn will quit it and boot it up again. There&rsquo;s more information on Unicorn&rsquo;s configuration options on the <a href="http://unicorn.bogomips.org/Unicorn/Configurator.html">Configurator page</a> on the Unicorn website.</p>
+<p>In this configuration file we first tell Unicorn in which directory our Rails application lives and specify the path to the pid file and the log files. We then call <code>listen</code> and pass it the path to a socket. (We can alternatively pass in a port number instead.) Finally we call <code>worker_processes</code> to specify the number of Rails instances Unicorn will boot up and specify a timeout, which we&rsquo;ll set to 30 seconds. If the Rails application doesn&rsquo;t respond in this time Unicorn will quit it and boot it up again. There&rsquo;s more information on Unicorn&rsquo;s configuration options on the <a href="http://unicorn.bogomips.org/Unicorn/Configurator.html">Configurator page</a> on the Unicorn website.</p>
 
 <p>We given Unicorn enough configuration information now to try starting it up and we do this by running the <code>unicorn</code> command through <code>bundle</code>, passing it the path to our configuration file via a <code>-c</code> option and also <code>-D</code> to make it a daemonized process. (There&rsquo;s also a <code>unicorn_rails</code> command available but we don&rsquo;t need to use it as Rails 3 is fully Rack-compatible.)</p>
 
