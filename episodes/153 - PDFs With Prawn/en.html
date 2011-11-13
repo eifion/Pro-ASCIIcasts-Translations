@@ -1,0 +1,298 @@
+<p>If you ever need to generate PDFs in a Rails application <a href="http://prawn.majesticseacreature.com/">Prawn</a> is a great solution. A plugin called PrawnTo makes integrating Prawn with Rails applications easier but it doesn&rsquo;t work with the latest version of Rails and isn&rsquo;t well maintained. Thankfully adding Prawn directly isn&rsquo;t that difficult and we&rsquo;ll show you how in this episode.</p>
+
+<h3>Creating a PDF Order Form</h3>
+
+<p>Below is a page from a Rails application that shows the details of an order that has been placed. We&rsquo;d like to offer a PDF version of this order information so that users can download or print out their orders and we&rsquo;ll use Prawn to do this.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/814/original/E153I01.png" width="803" height="474" alt="The HTML order summary."/>
+</div>
+
+<p>Prawn comes as a gem so to install it we just need to add it to the <code>Gemfile</code> and run <code>bundle</code>.</p>
+
+```/Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'prawn'
+```
+
+<p>Before we can generate any PDFs we need to tell Rails about the PDF MIME type. We do this by adding the type in the <code>mime_types</code> initializer file. (This file should already exist in your application, but if it doesn&rsquo;t then you can just add it.) This ensures that Rails knows how to respond to a PDF request.</p>
+
+```/config/initializers/mime_types.rb
+# Be sure to restart your server when you modify this file.
+
+# Add new mime types for use in respond_to blocks:
+Mime::Type.register "application/pdf", :pdf
+```
+
+<p>Next we need to go into the controller action that we want a PDF version of and add a <code>respond_to</code> block that returns the PDF data. For now we&rsquo;ll use Prawn to generate a simple PDF document that contains the phrase &ldquo;Hello World&rdquo;.</p>
+
+```/app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = Prawn::Document.new
+      pdf.text "Hello World"
+      send_data pdf.render
+    end
+  end
+end
+```
+<p>After we restart our Rails server we should be able to access our PDF document by appending <code>.pdf</code> to the order&rsquo;s URL and if we visit <code>http://localhost:3000/orders/1.pdf</code> our browser will either show or download a PDF document.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/815/original/E153I02.png" width="803" height="356" alt="A first, simple PDF document."/>
+</div>
+
+<p>It would be useful if the filename for this document was a little more descriptive. The <code>send_data</code> method we use above takes a number of options one of which, <code>filename</code>, allows us to do just that. We&rsquo;ll also set the <code>type</code> option as this defaults to <code>application/octet-stream</code> and also set the <code>disposition</code> to <code>inline</code> so that the PDF is displayed in the browser by default rather than being downloaded.</p>
+
+``` /app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = Prawn::Document.new
+      pdf.text "Hello World"
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                              type: "application/pdf",
+                              disposition: "inline"
+
+    end
+  end
+end
+```
+
+<p>When we visit the PDF&rsquo;s URL in the browser now the file is shown in the browser. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/816/original/E153I03.png" width="803" height="474" alt="The PDF is now shown in the browser."/>
+</div>
+
+<p>We need to get our PDF to display information about the order but before we do we&rsquo;ll add a link to the HTML order page so that we don&rsquo;t have to keep entering the URL directly into the browser. We&rsquo;ll add this at the bottom of the show template.</p>
+
+```/app/views/orders/show.html.erb
+<p><%= link_to "Printable Receipt (PDF)", order_path(@order, format: "pdf") %></p>
+```
+
+<p>The link points to the same action that the link is on so we can use <code>order_path</code> and pass it the current order. To make the link point to the PDF version we use the <code>format</code> option.</p>
+
+<h3>Adding Order Information to The PDF</h3>
+
+<p>We can focus now on changing the content of the PDF file so that it contains the order information. We could do all this in the <code>OrdersController</code> but our code will be cleaner if we generate the PDF in a separate class. We&rsquo;ll put our PDF generating code in an <code>order_pdf.rb</code> file in a new <code>/app/pdfs</code> directory.</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize
+    super
+    text "Order goes here"
+  end
+end
+```
+<p>Note that the class name is <code>OrderPdf</code> rather than <code>OrderPDF</code> as this makes it easier for Rails to find it. If this bothers you you can choose an alternative name, say <code>OrderDocument</code>. Our class inherits from <code>Prawn::Document</code> but if don&rsquo;t like using inheritance you can delegate off to a separate Prawn document that you instantiate here instead. Using inheritance makes it easier to use <code>Prawn::Document</code>&rsquo;s methods, however.</p> 
+
+<p>In the <code>initialize</code> method we need to call <cdoe>super</cdoe> and after that we can render out anything we want, though we just have some placeholder text. In the <code>OrdersController</code> we&rsquo;ll can now create a new <code>OrderPdf</code> instead of a plain <code>Prawn::Document</code>.</p>
+
+```/app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = OrderPdf.new
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                            type: "application/pdf",
+                            disposition: "inline"
+    end
+  end
+end
+```
+
+<p>We&rsquo;ll need to restart our server for the OrderPdf class to be picked up but once we do and we reload the page we&rsquo;ll see &ldquo;Order goes here&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/817/original/E153I04.png" width="803" height="280" alt="The PDF is now generated from our new class."/>
+</div>
+
+<p>We need to replace this text with the order information but how do we know what commands Prawn supports? Prawn has two good sources of documentation: the <a href="http://prawn.majesticseacreature.com/docs/0.11.1/Prawn.html">API documentation</a> is a reference for the methods and classes that are available while the <a href="http://prawn.majesticseacreature.com/manual.pdf">self-documenting manual</a> is a PDF containing examples and detailed information about what we can do with Prawn. The manual is well-worth downloading and reading. With these sources of information it&rsquo;ll be easy for us to generate whatever we want in our PDF document. </p>
+
+<p>Now we can start to replace the placeholder text with actual information about the order. We&rsquo;ll add the order number first. Our <code>OrderPdf</code> class doesn&rsquo;t have access to the current order in the controller so we&rsquo;ll need to pass it in through the initializer. We don&rsquo;t want to pass this up to the base class, though, so we&rsquo;ll change the call to <code>super</code> and use it to pass in some other document options instead.</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    text "Order \##{@order.order_number}"
+  end
+end
+```
+<p>In the <code>OrdersController</code> we&rsquo;ll pass in the current order to the <code>OrderPdf</code> object.</p>
+
+``` /app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = OrderPdf.new(@order)
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                            type: "application/pdf",
+                            disposition: "inline"
+    end
+  end
+end
+```
+<p>When we reload the page now we&rsquo;ll see the order number displayed.</p>
+
+<p>To keep the <code>OrderPdf</code> class organized we&rsquo;ll split each part&rsquo;s generation out into a separate method and to start we&rsquo;ll move the code that generates the order number. We want the order number to appear larger than it currently does and we&rsquo;ll use the <code>size</code> and <code>bold</code> options to do that.</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    order_number
+  end
+  
+  def order_number
+    text "Order \##{@order.order_number}", size: 30, style: :bold
+  end
+end
+```
+
+<p>When we reload our PDF now the order number is much larger.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/818/original/E153I05.png" width="803" height="280" alt="The order number is now shown."/>
+</div>
+
+<p>Next we&rsquo;ll render out each line item. The code to do that looks like this:</p>
+
+```/app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    order_number
+    line_items
+  end
+  
+  def order_number
+    text "Order \##{@order.order_number}", size: 30, style: :bold
+  end
+  
+  def line_items
+    move_down 20
+    table line_item_rows
+  end
+  
+  def line_item_rows
+    [["Product", "Qty", "Unit Price", "Full Price"]] +
+    @order.line_items.map do |item|
+      [item.name, item.quantity, item.unit_price, item.full_price]
+    end
+  end
+end
+```
+
+<p>To make some space between the order number and the items we&rsquo;ve used <code>move_down</code> to move 20 points down the document. We want the items to appear in a table and we&rsquo;ve used Prawn&rsquo;s <code>table</code> method for this. This takes a two-dimensional array of items so if we were to call <code>table [[1,2],[3,4]]</code> we&rsquo;d see a two-row, two-column table containing those values. Note that we&rsquo;ve put the code to generate this array in a <code>line_item_rows</code> method and that the first row contains the header information.</p>
+
+<p>Reloading the PDF file now gives us this:</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/819/original/E153I06.png" width="813" height="374" alt="Each item is now rendered."/>
+</div>
+
+<p>We can customize the way the table looks by passing a block to the <code>table</code> method. The block can take a <code>table</code> object but if we don&rsquo;t pass one in it will use <code>instance_eval</code> and <code>instance_eval</code> all method calls to that table object. In the block we use the <code>row</code> and <code>column</code> methods to scope the cells whose appearance we want to change. We&rsquo;ll make the first row bold and all columns except the first right-aligned. To set the background colour of each row we use <code>row_colors</code>. We pass this an array of colours and it will loop through this to set the colour of each row. Finally, as the first row of our table contains header information it&rsquo;s a good idea to set <code>header</code> to <code>true</code>. This means that the row will be repeated if the table overflows onto another page.</p>
+
+``` /app/pdfs/order_pdf.rb
+def line_items
+  move_down 20
+  table line_item_rows do
+    row(0).font_style = :bold
+    columns(1..3).align = :right
+    self.row_colors ["DDDDDD", "FFFFFF"]
+    self.header = true
+  end
+end
+```
+
+<p>Reloading the page again will show us these changes.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/820/original/E153I07.png" width="813" height="374" alt="Rows are now coloured."/>
+</div>
+
+<p>Our order form looks better now but the prices don&rsquo;t show the currency symbol and aren&rsquo;t always formatted to two decimal places. If we had access to our view helper we could call <code>number_to_currency</code> to format the prices correctly. Our class doesn&rsquo;t have access to these but we can pass in the view context from the controller. </p>
+
+``` /app/controllers/orders_controller.rb
+pdf = OrderPdf.new(@order, view_context)
+```
+
+<p>We can now use this in the <code>OrderPdf</code> class and set a <code>@view</code> instance variable in the constructor so that we can access it throughout the class. With it in place we can define a new <code>price</code> method to return a correctly-formatted price and use that wherever we display a price.</p>
+
+```/app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order, view)
+    super(top_margin: 70)
+    @order = order
+    @view = view 
+    order_number
+    line_items
+  end
+  
+  # Other methods omitted.
+  
+  def line_item_rows
+    [["Product", "Qty", "Unit Price", "Full Price"]] +
+    @order.line_items.map do |item|
+      [item.name, item.quantity, price(item.unit_price), price(item.full_price)]
+    end
+  end
+  
+  def price(num)
+    @view.number_to_currency(num)
+  end
+end
+```
+
+<p>The prices are now formatted just how we want them.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/821/original/E153I08.png" width="813" height="374" alt="The prices are now fomatted correctly."/>
+</div>
+
+<p>There&rsquo;s one more thing we&rsquo;ll add to our PDF to make it complete and that is a the total price. We&rsquo;ll create a simple <code>total_price</code> method to generate this and call it in the initializer.</p>
+
+``` /app/pdfs/order_pdf.rb
+def total_price
+  move_down 15
+  text "Total Price: #{price(@order.total_price)}", size: 16, style: :bold
+end
+```
+
+<p>We now have a completed order form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/822/original/E153I09.png" width="813" height="442" alt="The total is now shown."/>
+</div>
+
+<h3>Alternatives to Prawn</h3>
+
+<p>That&rsquo;s it for our episode on Prawn. There are several other ways of generating PDFs in Rails applications. You could, for example, use PDFKit to create a PDF document from HTML and this was covered in <a href="http://railscasts.com/episodes/220-pdfkit">episode 220</a>.</p>
