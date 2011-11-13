@@ -239,7 +239,7 @@ end
 attr_accessor :stripe_card_token, :paypal_payment_token
 ```
 
-<code>The other parameter, the payment_customer_token, is more permanent so we&rsquo;ll store it in the subscriptions table. We&rsquo;ll create a migration to add the new field and then run rake db:migrate to add it to the database. While we&rsquo;re doing this there&rsquo;s another token that PayPal will give us as part of this process that we&rsquo;ll need to store later. We&rsquo;ll add this now too as the paypal_recurring_profile_token.</code>
+<p>The other parameter, the <code>payment_customer_token</code>, is more permanent so we&rsquo;ll store it in the subscriptions table. We&rsquo;ll create a migration to add the new field and then run <code>rake db:migrate</code> to add it to the database. While we&rsquo;re doing this there&rsquo;s another token that PayPal will give us as part of this process that we&rsquo;ll need to store later. We&rsquo;ll add this now too as the <code>paypal_recurring_profile_token</code>.</p>
 
 ``` terminal
 $ rails g migration add_paypal_to_subscriptions paypal_customer_token:string paypal_recurring_profile_token:string
@@ -424,7 +424,7 @@ end
 
 <p>Note that instead of getting the token from the <code>params</code> we now get it from the <code>subscription</code> object. We&rsquo;ll need to write the <code>checkout_details</code> method now.</p>
 
-`` /app/models/paypal_payment.rb
+``` /app/models/paypal_payment.rb
 def checkout_details
   PayPal::Recurring.new(token: @subscription.paypal_payment_token).checkout_details
 end

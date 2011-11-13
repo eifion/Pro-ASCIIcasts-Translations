@@ -94,7 +94,7 @@ end</pre>
 <p class="codeFilePath">/app/views/users/show.html.erb</p>
 <pre class="ruby">&lt;%= link_to_if @user.url.present?, image_tag(&quot;avatars/#{avatar_name(@user)}&quot;, class: &quot;avatar&quot;), @user.url %&gt;</pre>
 
-<p>We&rsquo;ll replace this in the with a call to a new <code>avatar</code> method in our <code>UserPresenter</code>.</p>
+<p>We&rsquo;ll replace this with a call to a new <code>avatar</code> method in our <code>UserPresenter</code>.</p>
 
 <p class="codeFilePath">/app/views/users/show.html.erb</p>
 <pre class="ruby">&lt;%= user_presenter.avatar %&gt;</pre>
@@ -277,7 +277,7 @@ private
   end
 end</pre>
 
-<p>There are a couple things to note about the changes we&rsquo;ve made to the presenter. Near the top of the file we use <code>delegate</code> to delegate the <code>username</code> method to the <code>User</code> class. We don&rsquo;t need to make any changes to the <code>username</code> that comes from the <code>User</code> model so we can fetch it directly from there.</p>
+<p>There are a couple of things to note about the changes we&rsquo;ve made to the presenter. Near the top of the file we use <code>delegate</code> to delegate the <code>username</code> method to the <code>User</code> class. We don&rsquo;t need to make any changes to the <code>username</code> that comes from the <code>User</code> model so we can fetch it directly from there.</p>
 
 <p>The template uses <code>Redcloth</code> to render the user&rsquo;s bio. This will be useful to have in other presenters so we&rsquo;ve created a <code>markdown</code> method in the <code>BasePresenter</code> that allows us to easily render Markdown code from any presenter. We can then call this method in the <code>UserPresenter</code>.</p>
 

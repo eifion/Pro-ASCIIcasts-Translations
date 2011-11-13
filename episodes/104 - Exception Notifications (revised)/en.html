@@ -61,7 +61,7 @@ config.action_mailer.delivery_method = :letter_opener
 <p>If we press the big button in our application now the exception is shown again but this time another window opens showing the email that would be sent.</p> 
 
 ￼
-<p>This email contains full information about the exception that was raised. Note that the title will contains the word <code>[ERROR]</code> so that we can easily filter them out into a separate folder.</p>
+<p>This email contains full information about the exception that was raised. Note that the title will contain the word <code>[ERROR]</code> so that we can easily filter them out into a separate folder.</p>
 
 <h3>Customizing Exception Notifier</h3>
 
@@ -88,10 +88,10 @@ config.middleware.use ExceptionNotifier,
   
 <p>We&rsquo;ll need to restart the server for this change to take effect. After we do the exception will still be thrown when we click the big red button but we won&rsquo;t receive an email. In a production application we wouldn&rsquo;t want to ignore RuntimeErrors as they&rsquo;re important but there are other exceptions that we could ignore, such as those raised when bots visit our application.</p>
 
-<p>Now that we have Exception Notifier configured how we want it we need to move the code we&rsquo;ve written in <code>development.rb</code> over to <code>production.rb</code>. We&rsquo;ll also need to set up the delivery method in production mode so that sends real email rather than using Letter Opener.</p>
+<p>Now that we have Exception Notifier configured how we want it we need to move the code we&rsquo;ve written in <code>development.rb</code> over to <code>production.rb</code>. We&rsquo;ll also need to set up the delivery method in production mode so that it sends real email rather than using Letter Opener.</p>
 
 <h3>Alternatives</h3>
 
 <p>That&rsquo;s how we set up the Exception Notification gem. It&rsquo;s easy to use and it works well. If you want a solution that doesn&rsquo;t send email notifications there are a number of alternatives available. One of these is <a href="http://www.whoopsapp.com/">Whoops</a>. This stores exception notifications in a Mongo database and presents them through a user interface. Another is <a href="http://airbrakeapp.com/pages/home">Airbrake</a>, previously known as Hoptoad. This is a paid solution but it offers more features such as Github integration.</p>
 
-<p>If none of these solutions suit then you could always create your own by using a mountable engine. We showed you exactly how do to do this in <a href="http://railscasts.com/episodes/277-mountable-engines">episode 277</a> and it&rsquo;s really not hard to do.</p>
+<p>If none of these solutions suit then you could always create your own by using a mountable engine. We showed you exactly how to do this in <a href="http://railscasts.com/episodes/277-mountable-engines">episode 277</a> and it&rsquo;s really not hard to do.</p>

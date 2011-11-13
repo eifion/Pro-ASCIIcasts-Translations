@@ -1,0 +1,201 @@
+<p>下の図は、商品の長いリストを表示するアプリケーションのスクリーンショットです。ページのサイズを小さくするため、このページを分割処理(pagination)しようと思います。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/753/original/E051I01.png" width="804" height="523" alt="商品のリストを表示するページ"/>
+</div>
+
+<p>Railsアプリケーションでpaginationを使用する場合、検討対象となるgemは<a href="https://github.com/mislav/will_paginate">will_paginate</a>と<a href="https://github.com/amatsuda/kaminari">Kaminari</a>の2つです。今回のエピソードの最後でこの2つのgemの違いについて説明し、どちらを選ぶか判断するときのチップを紹介します。なお今回はwill_paginateを取り上げます。</p>
+
+<h3>アプリケーションにwill_paginateを追加する</h3>
+
+<p>will_paginate gemが公開されて数年になりますが、ここしばらくはRails 3との互換性で問題がありました。新しくリリースされたwill_paginateの3.0はRails 3.0と3.1に対応しているので、今回のアプリケーションで利用できます。インストールするために<code>Gemfile</code>に参照情報を追記しますが、その時に少なくとも3.0を使用するよう指定し、<code>bundle</code>コマンドを実行します。</p>
+
+<p class="codeFilePath">/Gemfile</p>
+<pre class="ruby">source 'http://rubygems.org'
+
+gem 'rails', '3.1.0'
+gem 'rack', '1.3.3' # temporarily to hide warning
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails', "  ~&gt; 3.1.0"
+  gem 'coffee-rails', "~&gt; 3.1.0"
+  gem 'uglifier'
+end
+
+gem 'jquery-rails'
+gem 'will_paginate', '&gt; 3.0'</pre>
+
+<p>will_paginateをインストールできたので、アプリケーションから利用できるようになりました。<code>ProductsController</code>の<code>index</code>アクションにpaginationを追加します。will_paginateの以前のバージョンでは、これを以下のようにページ分割したいコレクションの<code>paginate</code>メソッド を呼び出す方法でおこないました。</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">class ProductsController &lt; ApplicationController
+  def index
+    @products = Product.order("name").paginate
+  end
+  # Other actions omitted.
+end</pre>
+
+<p>このメソッドはRails 3.0でもまだ利用可能ですが、今回はその代わりに新しい<code>page</code>メソッドを使います。それに対して表示したいページ番号を渡します。今回の場合はクエリ文字列の<code>page</code>パラメータになります。</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">def index
+  @products = Product.order("name").page(params[:page])
+end</pre>
+
+<p>ビューにpaginationを追加するには<code>will_paginate</code>を呼び出し、paginateされた商品のコレクションを渡します。</p>
+
+<p class="codeFilePath">/app/views/users/index.html.erb</p>
+<pre class="ruby">&lt;h1&gt;Products&lt;/h1&gt;
+
+&lt;%= will_paginate @products %&gt;
+
+&lt;% for product in @products %&gt;
+  &lt;div class="product"&gt;
+    &lt;h2&gt;&lt;%= link_to product.name, product %&gt;&lt;/h2&gt;
+    &lt;div class="details"&gt;
+      &lt;%= number_to_currency(product.price) %&gt; |
+      Released &lt;%= product.released_at.strftime("%B %e, %Y") %&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+&lt;% end %&gt;
+
+&lt;p&gt;&lt;%= link_to "New Product", new_product_path %&gt;&lt;/p&gt;</pre>
+
+<p>ページをリロードすると、簡単にpaginationができました。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/754/original/E051I02.png" width="804" height="497" alt="ページにpaginationが追加された"/>
+</div>
+
+
+<h3>リストの表示項目数を変える</h3>
+
+<p>1ページに表示する項目数のデフォルト値が30なので、各ページの項目のリストはまだかなり長いです。<code>per_page</code>メソッドを使ってこれを変更できます。効果を簡単に確認できるように1ページの項目数を5にします。</p>
+
+<p class="codeFilePath">/app/controllers/products_controller.rb</p>
+<pre class="ruby">def index
+  @products = Product.order("name").page(params[:page]).per_page(5)
+end</pre>
+
+<p>ページをリロードすると5つの項目のみが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/755/original/E051I03.png" width="804" height="529" alt="5つの項目のみが表示される"/>
+</div>
+
+<h3>paginationのカスタマイズ</h3>
+
+<p>次にpaginationの見た目をカスタマイズする方法を見ていきます。デフォルトの状態ではあまりきれいではありませんが、CSSを使って大きく改善することができます。<a href="http://mislav.uniqpath.com/will_paginate/">ドキュメント</a>にはpaginationスタイルの優れたサンプルがいくつかあるので、そこからdigg.comで用いられているpaginationに似たものを選択します。そのCSSをアプリケーションのスタイルシートに追加します。</p>
+
+<p class="codeFilePath">/app/assets/stylesheets/application.scss.css</p>
+<pre class="css">.pagination {
+  background: white;
+  cursor: default;
+  height: 22px;
+  a, span, em {
+    padding: 0.2em 0.5em;
+    display: block;
+    float: left;
+    margin-right: 1px;
+  }
+  .disabled {
+    color: #999999;
+    border: 1px solid #dddddd;
+  }
+  .current {
+    font-style: normal;
+    font-weight: bold;
+    background: #2e6ab1;
+    color: white;
+    border: 1px solid #2e6ab1;
+  }
+  a {
+    text-decoration: none;
+    color: #105cb6;
+    border: 1px solid #9aafe5;
+    &amp;:hover, &amp;:focus {
+      color: #000033;
+      border-color: #000033;
+    }
+  }
+  .page_info {
+    background: #2e6ab1;
+    color: white;
+    padding: 0.4em 0.6em;
+    width: 22em;
+    margin-bottom: 0.3em;
+    text-align: center;
+    b {
+      color: #000033;
+      background: #2e6ab1 + 60;
+      padding: 0.1em 0.25em;
+    }
+  }
+}</pre>
+
+<p>will_paginateが、paginationのHTMLをラップしている<code>div</code>で<code>pagination</code>クラスを使っているので、スタイルはすべてそのクラスの下にネストされています。商品ページをリロードするとpaginationの見た目が改良されています。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/756/original/E051I04.png" width="804" height="529" alt="paginationにCSSが適用された"/>
+</div>
+
+<p>CSSでできることで思いつくものは他にもあります。例えば、最初や最後のページを表示しているときに「Previous」や「Next」を隠します。これは、無効化された項目が非表示になるようにスタイルシートの<code>disabled</code>クラスを修正することで可能です。</p>
+
+<p class="codeFilePath">/app/assets/stylesheets/application.scss.css</p>
+<pre class="css">.pagination {
+  .disabled {
+    display: none;
+  }
+  /* Rest of stylesheet omitted. */
+}</pre>
+
+<p>ページをリロードすると、商品の最初のページでは「Previous」リンクが非表示になります。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/757/original/E051I05.png" width="804" height="529" alt="最初のページでは「Previous」が非表示になる"/>
+</div>
+
+<h3>カスタムpaginationを表示する</h3>
+
+<p>さらにpaginationをカスタマイズしたい場合には<code>will_paginate</code>メソッドに渡すことができる多くのオプションがあります。例えば「Previous」ラベルを「&lt;」に、「Next」を「&gt;」に変更したければ以下のようにします。</p>
+
+<p class="codeFilePath">/app/views/products/index.html.erb</p>
+<pre class="ruby">&lt;%= will_paginate @products, previous_label: h("&lt;"), next_label: h("&gt;") %&gt;</pre>
+
+<p>ラベルに与える値はデフォルトではHTMLエスケープされていないので、ここでは安全に処理するために<code>h</code>メソッドを使用します。ページをリロードすると表示が変更されています。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/758/original/E051I06.png" width="804" height="299" alt="「Previous」と「Next」のラベルがカスタマイズされた"/>
+</div>
+
+<p><a href="http://rdoc.info/github/mislav/will_paginate/master/WillPaginate/ViewHelpers:will_paginate">RDocのドキュメント</a>には、渡すことができるオプションについてさらに情報があり、ほとんどどのような形にもpaginationをカスタマイズできるだけの柔軟性を備えています。表示ロジックをすべて処理できるクラスを設定するための<code>:renderer</code>オプションまであります。 </p> 
+
+<p>ですが、<code>will_paginate</code>メソッドを使う代わりに直接ビューにpaginationのコードを書く方が簡単だという場合もあるでしょう。例えば、ただ単に「Previous」と「Next」のリンクと、その間になんらか情報を表示したいとします。ページにリンクを作るのは簡単ですが、前と次のページ用の正しいページパラメータを取得するのはどうすればいいでしょうか? これをおこなう一つの方法として<code>params.merge</code>を使います。will_paginateがコレクションに対して、前や次のページの値かそれがなければ<code>nil</code>を返すprevious_pageとnext_pageというメソッドを提供するので、これらを使ってリンクのための<code>page</code>パラメータを設定できます。</p>
+
+<p>2つのリンクの間に「page x of y」というメッセージを表示させたいのですが、それには<code>current_page</code>と<code>total_page</code>の各メソッドを利用します。すべてをまとめるとpaginationのコードは次のようになります。</p>
+
+<p class="codeFilePath">/app/views/products/index.html.erb</p>
+<pre class="ruby">&lt;% if @products.previous_page %&gt;
+  &lt;%= link_to "&lt; Previous", params.merge(:page =&gt; @products.previous_page ) %&gt;
+&lt;% end %&gt;
+Page &lt;%= @products.current_page %&gt; of &lt;%= @products.total_pages %&gt;
+&lt;% if @products.next_page %&gt;
+  &lt;%= link_to "Next &gt;", params.merge(:page =&gt; @products.next_page ) %&gt;
+&lt;% end %&gt;</pre>
+
+<p>ページをリロードするとカスタムのpaginationが表示されます。見た目をきれいにするためにCSSを適用することもできますが、大事なことはそれが<code>will_paginate</code>メソッドを使わずにすべてカスタムメイドで作られるということで、どのような形ででも動作させることができるということです。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/759/original/E051I07.png" width="803" height="528" alt="カスタムのpagination"/>
+</div>
+
+<h3>will_paginateをKaminariと比較する</h3>
+
+<p>ご覧のとおり<code>will_paginate</code>はpaginationを処理するためのすばらしいgemです。ここではすべての機能を紹介できませんでしたので、<a href="https://github.com/mislav/will_paginate">will_paginateのホームページ</a>のREADMEとwikiで追加の情報をチェックすることをおすすめします。</p>
+
+<p>will_paginateは<a href="https://github.com/amatsuda/kaminari">Kaminari</a>と比較してどのような違いがあるのでしょうか?Kaminariについてはエピソード254 [<a href="http://railscasts.com/episodes/254-pagination-with-kaminari">動画を見る</a>, <a href="http://asciicasts.com/episodes/254-pagination-with-kaminari">読む</a>]で紹介しましたが、機能的には2つのgemはとても似ています。違いは、paginationをカスタマイズしようとしたときに現れます。Kaminariはpaginationを表示するのにいくつかのpartial(部分テンプレート)を使用し、これをオーバーライドする形で見た目や動作をカスタマイズしていきます。これに対しwill_paginateはRubyクラスのオプションを設定することでカスタマイズをおこなうので、どちらのgemを選ぶかはどちらの手法を好むかに依存します。ひとつ言えることは、多数のpartialの表示処理はパフォーマンスに影響するので、Kaminariはwill_paginate よりも少し遅くなる可能性がありますが、ほとんどのアプリケーションでは気がつかない程度でしょう。</p>
+
+<p>どちらを使うかを決める上でより大事な要因は、Ruby gemの中にはwill_paginateかKaminariに依存するものがあるという点です。例えば<a href="http://activeadmin.info/">ActiveAdmin</a>はKaminariに依存します。この2つのpagination用のgemは同時に使うとうまく動作しないため、アプリケーションのgemのひとつがwill_paginateかKaminariに依存する場合、アプリケーションのすべてのpagination処理にそのgemを使わなくてはいけなくなるでしょう。このような場合を除いては、どちらのpagination用gemを選んでも間違いはないでしょう。</p>
