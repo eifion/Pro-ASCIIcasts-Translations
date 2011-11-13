@@ -1,0 +1,429 @@
+<p><a href="http://mustache.github.com/">Mustache</a> is a wonderfully simple templating language that is supported by a number of programming languages, including Ruby and JavaScript. If you need to share a template across multiple languages then Mustache is a great solution. The <a href="http://mustache.github.com/#demo">demo site</a> has an example template that we can play around with. Here&rsquo;s what it looks like:
+</p>
+``` html
+<h1>{{header}}</h1>
+{{#bug}}
+{{/bug}}
+
+{{#items}}
+  {{#first}}
+    <li><strong>{{name}}</strong></li>
+  {{/first}}
+  {{#link}}
+    <li><a href="{{url}}">{{name}}</a></li>
+  {{/link}}
+{{/items}}
+
+{{#empty}}
+  <p>The list is empty.</p>
+{{/empty}}
+```
+
+<p>Mustache templates use double curly braces to define attributes. We can use curly braces and a hash symbol to define blocks which we can use to iterate through multiple items or use as if conditions. If we pass the template above this JSON data</p>
+
+``` javascript
+{
+  "header": "Colors",
+  "items": [
+      {"name": "red", "first": true, "url": "#Red"},
+      {"name": "green", "link": true, "url": "#Green"},
+      {"name": "blue", "link": true, "url": "#Blue"}
+  ],
+  "empty": false
+}
+```
+<p>it will generate the following output.</p>
+
+``` html
+<h1>Colors</h1>
+<li><strong>red</strong></li>
+<li><a href="#Green">green</a></li>
+<li><a href="#Blue">blue</a></li>
+```
+
+<p>Let&rsquo;s see what&rsquo;s involved in adding Mustache to a Rails application.</p>
+
+<h3>Using Mustache to Add Items to a list With JavaScript</h3>
+
+<p>The Rails application we&rsquo;ll use has a page that shows a list of products but as it stands it only displays the first ten products even though there are more in the database. We&rsquo;ll it so that as a user scrolls down towards the bottom of the page more products are loaded giving us an endless scrolling effect.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/807/original/E295I01.png" width="800" height="475" alt="The products page"/>
+</div>
+
+<p>The template for this page is simple. It has a <code>div</code> with a <code>id</code> of products and inside this we loop through the products and render each one.</p>
+
+```/app/views/index.html.erb
+<h1>Products</h1>
+
+<div id="products">
+<% @products.each do |product| %>
+  <div class="product">
+    <h2><%= link_to product.name, product %></h2>
+    <div class="details">
+      <%= number_to_currency(product.price) %>
+      <% if product.released_at %>
+        | Released <%= product.released_at.strftime("%B %e, %Y") %>
+      <% end %>
+    </div>
+  </div>
+<% end %>
+</div>
+```
+<p>We need to detect when a user has scrolled down near to the bottom of the page and then add more products inside the <code>div</code>. We&rsquo;ll write the code to do this inside the <code>products</code> CoffeeScript file. Here&rsquo;s our first attempt at this code.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      alert 'near bottom'
+      
+  nearBottom: =>
+    $(window).scrollTop() > $(document).height() - $(window).height() - 50
+```    
+<p>In this code we first check that the DOM has loaded and that the <code>products</code> div exists on the page. The logic to handle scrolling and loading the products will get fairly complex by the time we&rsquo;ve finished it so we define it in a separate <code>ProductsPager</code> class. In this class&rsquo;s constructor we add an event handler that fires a <code>check</code> function each time the page is scrolled.</p> 
+
+<p>When we define check we use the &lsquo;fat&rsquo; arrow (<code>=&gt;</code>) instead of the skinny arrow (<code>-&gt;</code>). This ensures that the context always remains the same, i.e. that this always refers to the <code>ProductsPager</code> instance and not whatever the <code>scroll</code> event has bound it to. </p>
+
+<p>Inside the <code>check</code> function we check to see if the user has scrolled near the bottom of the page. If they have then we unbind the function from the <code>scroll</code> event to stop it firing repeatedly. It&rsquo;s here that we need to get the next page of products and add them to the page but for now we&rsquo;ll just show an <code>alert</code>. We check that the user has scrolled near the bottom of the page in a <code>nearBottom</code> function that checks to see if the window&rsquo;s scrollbar is within 50 pixels of the bottom of the page.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      alert 'near bottom'
+      
+  nearBottom: =>
+    $(window).scrollTop() > $(document).height() - $(window).height() - 50
+```    
+
+<p>When we reload the page now and scroll down towards the bottom we get the alert, but after we dismiss it we won&rsquo;t see it again as the event has been unbound.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/808/original/E295I02.png" width="801" height="477" alt="An alert now shows when we scroll to the bottom of the page."/>
+</div>
+
+<h3>Fetching More Products From The Server</h3>
+
+<p>Now that we know that our code works we can replace the <code>alert</code> with some code that will fetch more products from our Rails application and display them on the page. Normally we&rsquo;d use jQuery&rsquo;s <code>getScript</code> function, make a JavaScript template in the Rails app and handle everything there. Sometimes, though, we want to work with JSON data from the server and handle everything on the client. JSON works well with Mustache templates so that&rsquo;s what we&rsquo;ll be using here.</p>
+
+<p>We&rsquo;ll need a URL to fetch the JSON data from and rather than hard-code this in the CoffeeScript file we&rsquo;ll add it to a data attribute in the products <code>div</code>.</p>
+
+``` /app/views/products/index.html.erb
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+```
+
+<p>Now in our CoffeeScript code we&rsquo;ll replace the alert with a call to <code>getJSON</code> to get the products JSON from that URL. The <code>getJSON</code> function takes a callback function that fires when the data is returned and we&rsquo;ll pass in a new function called <code>render</code>. For now this function will just alert the data that&rsquo;s returned.</p>
+ 
+``` /app/assets/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      $.getJSON($('#products').data('json-url'), @render)
+      
+  nearBottom: =>
+    $(window).scrollTop() > $(document).height() - $(window).height() - 50
+    
+  render: (products) =>
+    alert products
+```    
+
+<p>This JSON request will trigger the <code>ProductController</code>&rsquo;s <code>index</code> action. We&rsquo;ll have to modify this action&rsquo;s code so that it handles JSON requests and returns the array of products as JSON.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  respond_to do |format|
+    format.html
+    format.json { render json: @products }
+  end
+end
+```
+<p>When we reload the page now and scroll down to the bottom we&rsquo;ll see an <code>alert</code> showing the list of products.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/809/original/E295I03.png" width="801" height="477" alt="A list of products is now returned from the server."/>
+</div>
+
+<h3>Rendering The Products With Mustache.js</h3>
+
+<p>We&rsquo;re getting a list of products back from the server now but we still need to render them on the page and this where Mustache comes in. We&rsquo;ll need a template and we&rsquo;ll create one in the <code>index</code> view based on the code that&rsquo;s already in there to render each product.</p>
+
+<p>Mustache is a simple language and doesn&rsquo;t give us helper methods like <code>link_to</code> so we&rsquo;ll have to replace these with standard links. We don&rsquo;t want the template to be shown on the page so we&rsquo;ll wrap it in a <code>script</code> tag and give that an <code>id</code> so that we can reference it from JavaScript.</p>
+
+```/app/views/products.html.erb
+<script type="text/html" id="product_template">
+  <div class="product">
+    <h2><a href="/products/{{id}}">{{name}}</a></h2>
+    <div class="details">
+      {{price}}
+      {{#released_at}}
+        | Released {{released_at}}
+      {{/released_at}}
+    </div>
+  </div>
+</script>
+```
+
+<p>We can use the <a href="https://github.com/janl/mustache.js">mustache.js</a> project to render a Mustache template in JavaScript. This project contains a JavaScript file that we can download and use in our Rails app. As this is an external JavaScript file we&rsquo;ll download it with <code>curl</code> and place it in a new <code>vendor/assets/javascripts</code> directory.</p>
+
+``` terminal
+$ mkdir -p vendor/assets/javascripts
+noonoo:store eifion$ curl https://raw.github.com/janl/mustache.js/master/mustache.js > vendor/assets/javascripts/mustache.js
+```
+<p>Finally we&rsquo;ll need to modify the <code>application.js</code> file to include this file.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require mustache
+//= require_tree .
+```
+
+<p>We now have almost everything in place to render out the products. We just need to replace the <code>alert</code> in the render function with the code to do this which will loop through the products, render each one and append it to the <code>products</code> div. To render a product we call <code>Mustache.to_html</code>, passing it the our template and the product. Once we&rsquo;ve rendered each product we&rsquo;ll re-enable the scroll event so that the next time we scroll down to the bottom more products are added to the list.</p>
+
+``` /app/assets/products.js.coffee
+  render: (products) =>
+    for product in products
+      $('#products').append Mustache.to_html($('#product_template').html(), product)
+    $(window).scroll(@check)
+```    
+
+<p>When we reload the page now and scroll down new products are added each time we scroll to the bottom of the page. There is a problem, though. The same products are loaded each time we scroll down. We&rsquo;ll fix this next.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/810/original/E295I04.png" width="800" height="381" alt="The same products are returned again and again."/>
+</div>
+
+<h3>Fetching The Next Page of Products</h3>
+
+<p>So that we know which page of products to fetch next we&rsquo;ll keep track of the current page in our products CoffeeScript file and send it in the Rails request that fetches the products JSON. We&rsquo;ll create a <code>page</code> instance variable in the <code>ProductsPager</code>&rsquo;s constructor, increment it each time we get near to the bottom of the page and send its current value in the JSON request.</p>
+
+```/app/assets/javascripts/products.js.coffee
+class ProductsPager
+  constructor: (@page = 1) ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      @page++
+      $(window).unbind('scroll', @check)
+      $.getJSON($('#products').data('json-url'), page: @page, @render)
+```      
+<p>Once we&rsquo;ve rendered the last page of products we should stop checking for the <code>scroll</code> event so we&rsquo;ll add a check to see if any products have been returned in the callback function and only re-enable the event if so.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+  render: (products) =>
+    for product in products
+      $('#products').append Mustache.to_html($('#product_template').html(), product)
+    $(window).scroll(@check) if products.length > 0
+```    
+
+<p>We can now use this page parameter in the <code>index</code> action to change to define an offset so that the correct page of products is returned.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  @products = @products.offset((params[:page].to_i - 1) * 10) if params[:page].present?
+  respond_to do |format|
+    format.html
+    format.json { render json: @products }
+  end
+end
+```
+<p>Now when we reload the page and keep scrolling to the bottom we see each product just once.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/811/original/E295I05.png" width="800" height="379" alt="Each product is now added to the list only once."/>
+</div>
+
+<h3>Removing Duplication</h3>
+
+<p>The code that&rsquo;s rendered through the Mustache template needs some work on the formatting, but before we do that we&rsquo;ll remove some of the duplication between the  way the products are rendered in Rails and in JavaScript. The <code>index</code> action currently has two very similar templates in it: the Mustache template and the Erb one. We can make our code cleaner by just using one so we&rsquo;ll use the Mustache template for both. To do this we&rsquo;ll need a way to render a Mustache template in Ruby and we can use the <a href="https://github.com/defunkt/mustache">mustache</a> gem for this. There are other gems available that build on this one to help integrate Mustache into Rails but here we&rsquo;ll do it all manually to get a better idea as to how a template handler works.</p>
+
+<p>The mustache gem is installed in the usual way by adding it to the <code>Gemfile</code> and running <code>bundle</code>.</p>
+
+```/Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'mustache'
+```
+
+<p>Next we&rsquo;ll move the mustache template out from our <code>index</code> view into a partial. As our partial is a Mustache template it will need to have a <code>.mustache</code> extension rather than the usual <code>.erb</code>.</p>
+
+``` /app/views/products/_product.html.mustache
+<div class="product">
+  <h2><a href="/products/{{id}}">{{name}}</a></h2>
+  <div class="details">
+    {{price}}
+    {{#released_at}}
+      | Released {{released_at}}
+    {{/released_at}}
+  </div>
+</div>
+```
+<p>We can call this partial in <code>index</code>.</p>
+
+``` /app/views/products/index.html.erb
+<script type="text/html" id="product_template">
+  <%= render 'product' %>
+</script>
+```
+
+<p>If we reload our page now we&rsquo;ll get a <code>MissingTemplate</code> error as our application doesn&rsquo;t have a handler for mustache templates. We&rsquo;ll create one now in the <code>/config/initializers directory</code> (although you could put it in the <code>/lib</code> directory if you prefer). Template handlers have changed quite a bit in Rails 3.1. Previously we&rsquo;d have to override a <code>render</code> method and a <code>compile</code> method, but in Rails 3.1 we only have to define <code>call</code>.</p>
+
+``` /config/initalizers/mustache_template_handler.rb
+module MustacheTemplateHandler
+  def self.call(template)
+    "#{template.source.inspect}.html_safe"
+  end
+end
+
+ActionView::Template.register_template_handler(:mustache, MustacheTemplateHandler)
+```
+
+<p>We used a module here, but we could have used a class, a proc or even a lambda as any of them respond to <code>call</code>. The <code>call</code> method is a little odd as it needs to return a string containing some Ruby code so if it returned <code>&quot;1 + 1&quot;</code> then the template would render <code>&ldquo;2&rdquo;</code>. Instead of that we call <code>template.source</code> which is the content of the template that&rsquo;s being rendered, in this case the Mustache template partial we created earlier. We call <code>inspect</code> on this to return an object which will be the string-escaped version of it&rsquo;s Ruby representation and then call <code>html_safe</code> on the output from this to make sure that it&rsquo;s escaped properly. Finally we register the new handler by calling <code>register_template_handler</code>, passing in the name of the handler and our module.</p>
+
+<p>Whenever we create or alter an initializer we need to restart the server, but once we do the page will load and work as it did before.</p>
+
+<p>We can use our Mustache template now to render out the initial list of products in the <code>index</code> view. We need to pass in each <code>product</code> to the template so that it knows to render it out using the <code>mustache</code> template. We&rsquo;ll pass the product in as a local variable called <code>mustache</code> and convert it to JSON to make sure that the data that&rsquo;s passed in is consistent with the data that&rsquo;s passed to the template from the JavaScript.</p>
+
+``` /app/views/products/index.html.erb
+<h1>Products</h1>
+
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+<% @products.each do |product| %>
+  <%= render 'product', :mustache => product.as_json %>
+<% end %>
+</div>
+
+<script type="text/html" id="product_template">
+  <%= render 'product' %>
+</script>
+```
+
+<p>In our Mustache template handler we&rsquo;ll check for that <code>mustache</code> option so that we know that the request has come from the <code>index</code> action directly rather than through the AJAX request. We do this by checking <code>template.locals</code> which contains a list of the keys that we&rsquo;re passed in. If it does then we need to render the template out using the Ruby <code>Mustache</code> passing in the <code>mustache</code> variable that contains the current product.  Otherwise we render out the raw template for JavaScript to deal with on the client.</p>
+
+```/config/initalizers/mustache_template_handler.rb
+module MustacheTemplateHandler
+  def self.call(template)
+    if template.locals.include? :mustache
+      "Mustache.render(#{template.source.inspect}, mustache).html_safe"
+    else
+      "#{template.source.inspect}.html_safe"      
+    end
+  end
+end
+
+ActionView::Template.register_template_handler(:mustache, MustacheTemplateHandler)
+```
+
+<p>When we restart the server and reload the page now all of the products are rendered using the Mustache template, not just those that are rendered by JavaScript.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/812/original/E295I06.png" width="800" height="379" alt="All of the products are now rendered through the Mustache template."/>
+</div>
+
+<h3>Formatting The Output</h3>
+
+<p>Now that we&rsquo;ve removed the duplication we can concentrate on getting the formatting right as the prices and release dates of the items don&rsquo;t look the way we want them to. We&rsquo;ll create a helper method called <code>product_for_mustache</code> that will return a correctly formatted product that we can pass to the template.</p>
+
+``` /app/helpers/products_helper.rb
+module ProductsHelper
+  def products_for_mustache(product)
+    {
+      url: product_url(product),
+      name: product.name,
+      price: number_to_currency(product.price),
+      released_at: product.released_at.try(:strftime, "%B %e, %Y")
+    }
+  end
+end
+```
+
+<p>This method is pretty straightforward but if you need to put some complex logic here then it might be worth moving this in to a presenter class, like we showed in <a href="http://railscasts.com/episodes/287-presenters-from-scratch">episode 287</a>. A simple helper method will work fine for us here, though.</p>
+
+<p>In our index view we can now call this method so that the template is passed a correctly-formatted product.</p>
+
+``` /app/views/products/index.html.erb
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+<% @products.each do |product| %>
+  <%= render 'product', :mustache => products_for_mustache(product) %>
+<% end %>
+</div>
+```
+
+<p>We&rsquo;ll need to make a small change to the Mustache template. As our helper method returns the URL for each product we can replace the hard-coded URL in the template with that value.</p>
+
+```/app/products/views/_product.html.mustache
+<div class="product">
+  <h2><a href="{{url}}">{{name}}</a></h2>
+  <div class="details">
+    {{price}}
+    {{#released_at}}
+      | Released {{released_at}}
+    {{/released_at}}
+  </div>
+</div>
+```
+
+<p>There&rsquo;s one final change we need to make. When we make a JSON request to the <code>ProductsController</code>&rsquo;s <code>index</code> action it returns a list of products as JSON. We need to pass each one through our helper method so that it&rsquo;s formatted correctly and we can do that by using <code>map</code> to iterate through each product and pass it through our helper method. Note that as we&rsquo;re calling a helper method from a controller we need to call it through <code>view_context</code>.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  @products = @products.offset((params[:page].to_i - 1) * 10) if params[:page].present?
+  respond_to do |format|
+    format.html
+    format.json do
+       render json: @products.map { |p| view_context.products_for_mustache(p) }
+    end
+  end
+end
+```  
+<p>When we reload our products page now the products are formatted as we want them to be.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/813/original/E295I07.png" width="800" height="345" alt="The products are now formatted correctly."/>
+</div>
+
+<p>That&rsquo;s it for this episode on sharing a Mustache template between Rails and JavaScript. We now have a page that renders items with same way whether they&rsquo;re rendered through Rails for the initial ten products or through JavaScript when we scroll down to the bottom.</p>
+
+<p>If you like Mustache it&rsquo;s worth taking a look at <a href="http://www.handlebarsjs.com/">Handlebars</a> too. This extends Mustache and adds some more features to it so that you can do more complex things in its templates. It also adds a separate compile step for better performance.</p>

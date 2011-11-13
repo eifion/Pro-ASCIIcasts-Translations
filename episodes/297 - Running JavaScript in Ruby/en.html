@@ -1,0 +1,317 @@
+<p>As web applications become complex you can find yourself duplicating logic on in the Ruby code on the server and JavaScript code on the client. A common situation for this is validations and we have an example of this in the application below.</p>
+
+<p>This page has a form with a field that accepts a membership number. If we enter a random number in this field we&rsquo;ll see an error message but when we enter a valid membership number the error disappears.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/828/original/E297I01.png" width="800" height="370" alt="The membership form."/>
+</div>
+
+<p>The validation only takes place on the client which presents a problem. If a user who has disabled JavaScript in their browser submits the form the validation will be skipped and for this reason it&rsquo;s important to validate form input on the server too. The validation logic for the membership number is based on the mod 10 algorithm and is fairly complex.</p>
+
+```/app/assets/javascripts/membership_number.js
+// Validates using the mod 10 algorithm
+// Example valid number: 49927398716
+function isValidMembershipNumber(number) {
+  var total = 0;
+  for (var i=number.length-1; i >= 0; i--) {
+    var n = +number[i];
+    if ((i+number.length) % 2 == 0) {
+      n = n*2 > 9 ? n*2 - 9 : n*2;
+    }
+    total += n;
+  };
+  return total % 10 == 0;
+}
+```
+
+<p>So, we have a choice: we can either replicate this logic on the server in Ruby or we could execute the JavaScript in our Ruby code on the server. If you have a Rails 3.1 application you may have already been doing this without realising it. The Gemfile of a Rails 3.1 application includes the <a href="https://github.com/rails/coffee-rails"><code>coffee-rails</code> gem</a> and this gem executes JavaScript in order to compile the application&rsquo;s CoffeeScript code using a gem called <a href="https://github.com/sstephenson/execjs">ExecJS</a>.</p>
+
+<p>ExecJS supports a number of JavaScript runtimes and will choose the best one that&rsquo;s available on the system it&rsquo;s running on. It provides a common interface for interacting with and compiling JavaScript code and can be used to execute JavaScript, where it will return a Ruby object, or to compile a JavaScript source file. We&rsquo;ll use it to read the membership number validation JavaScript file and execute the <code>isValidMembershipNumber</code> function so that we can validate membership numbers on the server.</p> 
+
+<h3>Validating Membership Numbers on The Server</h3>
+
+<p>We can add validation to the Member model through a custom validation method.</p>
+
+``` /app/models/member.rb
+class Member < ActiveRecord::Base
+  validate :check_membership_number
+  
+  def check_membership_number
+    source = File.read(Rails.root.join("app/assets/javascripts/membership_number.js"))
+    context = ExecJS.compile(source)
+    unless context.call("isValidMembershipNumber", membership_number)
+      errors.add :membership_number, "is an invalid number"
+    end
+  end
+end
+```
+
+<p>This method reads the <code>membership_number.js</code> file then uses ExecJS to compile it. This returns a <code>Context</code> that we can call various methods against, one of which is <code>call</code> which lets us execute JavaScript functions. The first argument we pass to <code>call</code> is the name of the function we want to execute; any other arguments are passed to this function. We pass in the <code>Member</code>&rsquo;s <code>membership_number</code>. If this function returns false we add an error to the list of the model&rsquo;s errors.</p>
+
+<p>If we fill in the form with an invalid membership number now and submit the form without JavaScript enabled the form is posted back to the server and the app falls back to the old validation behaviour in Rails and tells us that the number is invalid. If we enter a valid number and name the new member is successfully added.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/829/original/E297I02.png" width="800" height="455" alt="Membership numbers are now validated on the server too."/>
+</div>
+
+<p>This works and it means that we&rsquo;re now able to share logic by writing it in JavaScript for the client then compiling and running the same code on the server. That said, we&rsquo;re reading and compiling the JavaScript file every time the form is validated and this isn&rsquo;t particularly efficient. We should be caching the context and we&rsquo;ll show how that&rsquo;s done near the end of the episode.</p>
+
+<h3>Executing JavaScript Code in Ruby</h3>
+
+<p>Next we&rsquo;ll take this a step further and interact with JavaScript as if it were Ruby. One of the JavaScript runtimes that ExecJS supports is The Ruby Racer and there a many great things we can do with it. We&rsquo;ll add it to our application now and then use the console to demonstrate what it can do.</p>
+
+<p>To install The Ruby Racer we add it&rsquo;s gem to the <code>Gemfile</code> and tell it to require V8. We then run <code>bundle</code> to install it.</p>
+
+```/Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+
+gem 'mustache'
+
+gem 'therubyracer', require: 'v8'
+```
+
+<p>We can now evaluate JavaScript code in the console. First we&rsquo;ll need to create a V8 context.</p>
+
+``` console
+ruby-1.9.2-p290 :002 > c = V8::Context.new
+```
+
+<p>If we call eval on this context and pass in some arbitrary JavaScript we&rsquo;ll get a response in Ruby.</p>
+
+``` console
+ruby-1.9.2-p290 :003 > c.eval('1 + 2')
+ => 3 
+``` 
+<p>We can also define variables for the context in Ruby then use them in JavaScript.</p>
+
+``` console
+ruby-1.9.2-p290 :004 > c[:num] = 3
+ => 3 
+ruby-1.9.2-p290 :005 > c.eval('num * num')
+ => 9 
+``` 
+<p>We can even create JavaScript objects and then use them in Ruby code.</p>
+
+``` console
+ruby-1.9.2-p290 :007 > c.eval('math = {square: function (n) { return n*n; }}')
+ => [object Object] 
+ruby-1.9.2-p290 :008 > c[:math].square 5
+ => 25 
+``` 
+<p>Alternatively we can go the other way and pass in a Ruby lambda and call in in JavaScript code where it will be evaluated.</p>
+
+``` console
+ruby-1.9.2-p290 :014 > c[:square] = lambda { |n| n*n }
+ => #<Proc:0x00000128f467e8@(irb):14 (lambda)> 
+ruby-1.9.2-p290 :015 > c.eval('square(4)')
+ => 16 
+``` 
+ 
+<h3>A Practical Example</h3>
+
+<p>There a number of things we can do with The Ruby Racer to bridge the gap between Ruby and JavaScript. Next we&rsquo;ll show a practical example of how we can use it to reduce duplication in an application. Shown below is a page from the app we wrote in <a href="http://railscasts.com/episodes/295-sharing-mustache-templates">episode 295</a>. This page shows a list of products and adds more products to the page each time we scroll down towards the bottom.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/830/original/E297I03.png" width="816" height="512" alt="The products pag from episode 295."/>
+</div>
+
+<p>The application uses a Mustache template to render out the products. The template is used by Ruby to render out the first page of products then by JavaScript to render out the rest along with some JSON data from the Rails application. When we share templates like this we often have shared logic, too, and in this case the logic determines how the price and release date of each item are formatted. We solved this problem in episode 295 by formatting the data on the server before sending it out to the client and while this approach worked for this situation it&rsquo;s better to work with the raw JSON data in JavaScript and format the data on the client.</p>
+
+<p>If we look at the <code>ProductsController</code>&rsquo;s <code>index</code> action we&rsquo;ll see that when we return a list of products as JSON we call a <code>product_for_mustache</code> method on each product to format it for display in the browser.</p>
+
+```/app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  @products = @products.offset((params[:page].to_i-1)*10) if params[:page].present?
+  respond_to do |format|
+    format.html
+    format.json do
+      render json: @products.map { |p| view_context.product_for_mustache(p) }
+    end
+  end
+end
+```
+
+<p>We&rsquo;ll change this so that we return a raw list of products for formatting on the client.</p>
+
+``` /app/controllers/products_controller.rb
+format.json do
+  render json: @products
+end
+```
+
+<p>The formatted JSON response we&rsquo;ve just removed contains a <code>url</code> attribute that isn&rsquo;t available in the raw response. We&rsquo;ll need to change our Mustache template to use the <code>id</code> instead and hard-code the rest of the path in.</p>
+
+``` /app/views/products/_product.html.mustache
+<div class="product">
+  <h2><a href="/products/{{id}}">{{name}}</a></h2>
+  <div class="details">
+    {{price}}
+    {{#released_at}}
+      | Released {{released_at}}
+    {{/released_at}}
+  </div>
+</div>
+```
+
+<p>We could customize the JSON output so that it returns the URL for each product, but we won&rsquo;t do that here.</p> 
+
+<p>In the <code>index</code> view we use the <code>product_for_mustache</code> method again to render the first page of products. We&rsquo;ll remove this and pass in each product&rsquo;s JSON representation instead.</p>
+
+``` /app/views/products/index.html.erb
+<div class="new_member_link"><%= link_to "New Member", new_member_path %></div>
+
+<h1>Products</h1>
+
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+<% @products.each do |product| %>
+  <%= render "product", :mustache => product.as_json %>
+<% end %>
+</div>
+<script type="text/html" id="product_template">
+  <%= render "product" %>
+</script>
+```
+
+<p>When we reload the page now the price and release date are no longer formatted. Instead we see the raw strings from the JSON representation of each product both for the initial list of products that are rendered by the server and for ones rendered by JavaScript.</p> 
+
+<p>We&rsquo;ll fix the ones that are rendered on the client first. If we look at the JavaScript that renders these products we&rsquo;ll see that it loops through each product and passes it to the Mustache template to render it out.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+render: (products) =>
+  for product in products
+    $('#products').append Mustache.to_html($('#product_template').html(), product)
+  $(window).scroll(@check) if products.length > 0
+```  
+
+<p>We&rsquo;ll change this and make an intermediate object that we pass the JSON attributes to. This object will handle the formatting of each product and we&rsquo;ll pass this object to the Mustache template instead of the JSON data. To do this we&rsquo;ll rename the product variable to <code>product_attributes</code> and create a new <code>Product</code> object from these attributes. We&rsquo;ll then pass this new object to the template.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+render: (products) =>
+  for product_attributes in products
+    product = new Product(product_attributes)
+    $('#products').append Mustache.to_html($('#product_template').html(), product)
+  $(window).scroll(@check) if products.length > 0
+```  
+  
+<p>We&rsquo;ll need a <code>Product</code> class and we&rsquo;ll do that in a new <code>product.js.coffee</code> file.</p>
+
+``` /app/assets/javascripts/product.js.coffee
+class Product
+  constructor: (@attributes) ->
+    id: -> @attributes.id
+    name: -> @attributes.name
+    price: -> "price"
+    released_at: -> "date"
+    
+@Product = Product
+```
+
+<p>Our new class&rsquo;s constructor takes the <code>product_attributes</code> we pass in. This constructor syntax automatically assigns the value passed to an <code>attributes</code> variable in the class. We then set four properties on the class to match each property. For now we&rsquo;ve just hard-coded a value for the <code>name</code> and <code>price</code>. We&rsquo;ll add the correct values and formatting later.</p>
+
+<p>The last line in the code above makes the class available outside the file by setting <code>this.Product</code> to the <code>Product</code> class. In this context this refers to the browser&rsquo;s current window.</p>
+
+<p>When we reload the page now the first ten products, the ones rendered on the server, stay the same but any ones added by JavaScript show the placeholder data from our new <code>Product</code> class. We need to replace this placeholder text with the correctly formatted price and date but before we do that we&rsquo;ll focus on adding this behaviour to the Ruby code so that all the products look the same and are all formatted by executing that JavaScript.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/831/original/E297I04.png" width="817" height="489" alt="Products added by JavaScript now use our new Product class."/>
+</div>
+
+<p>We need to change the object that we pass to the Mustache template in the index view. We&rsquo;re currently passing in a JSON representation of a product but instead we want to pass in a product based on our new <code>Product</code> JavaScript class. We&rsquo;ll do this in the <code>Product</code> model in a new <code>for_mustache</code> method.</p>
+
+``` /app/model/product.rb
+class Product < ActiveRecord::Base
+  def for_mustache
+    context = V8::Context.new
+    coffee = File.read(Rails.root.join("app/assets/javascripts/product.js.coffee"))
+    javascript = CoffeeScript.compile(coffee)
+    context.eval(javascript)
+    context.eval("new Product(#{to_json})")
+  end
+end
+```
+
+<p>Our <code>Product</code> class is written in CoffeeScript so we need to compile it before we can load it into the <code>context</code>. We do this by calling <code>CoffeeScript.compile</code> (this is provided by the CoffeeScript gem which is already loaded in Rails 3.1). We load the <code>Product</code> class by calling <code>eval</code> on the resulting JavaScript then return the new product by creating a new instance of this class and passing in a JSON representation of the product, mimicking what we do on the client.</p> 
+
+<p>The <code>for_mustache</code> method returns a Ruby object, but as this just wraps a JavaScript object it will behave the same way when we pass it to the Mustache template on the server. We&rsquo;ll modify the view now to use our new method.</p>
+
+``` /app/views/products/index.html.erb
+<%= render "product", :mustache => product.for_mustache %>
+```
+
+<p>Now when we reload the page we see the placeholder data for all of the products as the <code>Product</code> JavaScript class is used on both the server and client to render the products.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/832/original/E297I05.png" width="817" height="489" alt="All the products are now rendered using our new class&rsquo;s data."/>
+</div>
+
+<p>Next we&rsquo;ll need to modify the placeholder data in the <code>Product</code> class with the code to format the price and release date.</p> 
+
+```/app/assets/javascripts/product.js.coffee
+class Product
+  constructor: (@attributes) ->
+  id: -> @attributes.id
+  name: -> @attributes.name
+
+  price: ->
+    digits = String(Math.round(@attributes.price * 100)).split("").reverse()
+    formatted = [digits.shift(), digits.shift(), "."]
+    for digit, index in digits
+      formatted.push(digit)
+      if (index+1) % 3 == 0 && index+1 < digits.length
+        formatted.push(",")
+    "$" + formatted.reverse().join("")
+
+  released_at: ->
+    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    date = new Date(@attributes.released_at)
+    day = date.getDate()
+    month = months[date.getMonth()]
+    year = date.getFullYear()
+    "#{month} #{day}, #{year}"
+
+@Product = Product
+```
+
+<p>When we reload the page now the price and date are formatted correctly.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/833/original/E297I06.png" width="817" height="489" alt="All the products are now formatted correctly."/>
+</div>
+
+<h3>Caching For Better Performance</h3>
+
+<p>Our new functionality is pretty much complete, but what about performance? Our <code>for_mustache</code> method isn&rsquo;t currently very efficient as for every product it renders it has to read the CoffeeScript file, compile it to JavaScript and then parse it.  It would be much better if we could cache the <code>context</code> so that the method doesn&rsquo;t have to go through all this every time.</p>
+
+<p>A quick way to do this is to store the context in a thread variable.</p> 
+
+```/app/models/product.rb
+class Product < ActiveRecord::Base
+  def for_mustache
+    Thread.current[:product_v8] ||= V8::Context.new.tap do |context|
+      coffee = File.read(Rails.root.join("app/assets/javascripts/product.js.coffee"))
+      javascript = CoffeeScript.compile(coffee)
+      context.eval(javascript)
+    end
+    Thread.current[:product_v8].eval("new Product(#{to_json})")
+  end
+end
+```
+
+<p>We only set this variable if it&rsquo;s not set already. We can then <code>tap</code> the context and put the code that fetches and parses the CoffeeScript code in a block so that it&rsquo;s only parsed once.</p> 
+
+<p>One thing we need to watch for when we&rsquo;re caching an entire context is memory leaks. The thread variable will never be garbage collected and if we do something complex in the JavaScript that it runs then it will use more and more memory that will never be released. The code we&rsquo;ve written doesn&rsquo;t seem to leak so it seems that instantiating a class this way seems to work fine, but it&rsquo;s something to be aware of. If you&rsquo;d rather play it safe then you could just catch the JavaScript string using something like Memcached and evaluate that in a new context each time.</p>
