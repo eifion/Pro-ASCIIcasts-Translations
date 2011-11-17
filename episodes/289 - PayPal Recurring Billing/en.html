@@ -211,7 +211,7 @@ def paypal_checkout
 end
 ```
 
-<p>In this action we find the plan with the <code>plan_id</code> parameter than was passed in then create a new <code>PayPal::Recurring</code> object to create a new payment. The parameters that this object takes are all fairly self-explanatory. We then call <code>checkout</code> on that object to trigger the PayPal API and return a response. If the response is valid we&rsquo;ll redirect to the response&rsquo;s <code>checkout_url</code> which is the PayPal URL where the user can sign in. If not we&rsquo;ll <code>raise</code> the errors so that we can see what&rsquo;s gone wrong.</p>
+<p>In this action we find the plan with the <code>plan_id</code> parameter that was passed in then create a new <code>PayPal::Recurring</code> object to create a new payment. The parameters that this object takes are all fairly self-explanatory. We then call <code>checkout</code> on that object to trigger the PayPal API and return a response. If the response is valid we&rsquo;ll redirect to the response&rsquo;s <code>checkout_url</code> which is the PayPal URL where the user can sign in. If not we&rsquo;ll <code>raise</code> the errors so that we can see what&rsquo;s gone wrong.</p>
 
 <p>When we click the PayPal button on the new subscription form we&rsquo;re now taken to the login page on the PayPal Sandbox site. We can see the name of the plan we&rsquo;ve selected in the order summary section so it looks like our code is working.</p>
 
@@ -328,7 +328,7 @@ end
   <img src="http://asciicasts.com/system/photos/779/original/E289I09.png" width="800" height="374" alt="The email address is now filled with the address supplied to PayPal.	"/>
 </div>
 
-<p>The final step is to handle the payment processing when the user clicks &ldquo;subscribe&rdquo;.  So far no actual payment has been made: the user has authorized a payment but we haven&rsquo;t yet taken the money. We already have a <code>save_with_payment</code> method inside the Subscription model which handles credit card payments through Stripe. We&rsquo;ll modify this method so that it also handles PayPal payments. The code in <code>save_with_payment</code> Stripe-specfic so we&rsquo;ll rename it to <code>save_with_stripe_payment</code>. We can then create a new, more generic, <code>save_with_payment</code> method that will call either <code>save_with_stripe_payment</code> or a new <code>save_with_paypal_payment</code> method.</p>
+<p>The final step is to handle the payment processing when the user clicks &ldquo;subscribe&rdquo;.  So far no actual payment has been made: the user has authorized a payment but we haven&rsquo;t yet taken the money. We already have a <code>save_with_payment</code> method inside the Subscription model which handles credit card payments through Stripe. We&rsquo;ll modify this method so that it also handles PayPal payments. The code in <code>save_with_payment</code> is Stripe-specfic so we&rsquo;ll rename it to <code>save_with_stripe_payment</code>. We can then create a new, more generic, <code>save_with_payment</code> method that will call either <code>save_with_stripe_payment</code> or a new <code>save_with_paypal_payment</code> method.</p>
 
 ``` /app/models/subscription.rb
 def save_with_payment
