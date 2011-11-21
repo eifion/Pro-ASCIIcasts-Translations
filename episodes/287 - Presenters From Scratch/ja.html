@@ -1,0 +1,390 @@
+<p>今回のエピソードでは、presenterをゼロから作ります。そのために使用するサンプルのアプリケーションは、Draperに関する前回のエピソード[<a href="http://railscasts.com/episodes/286-draper">動画を見る</a>, <a href="http://asciicasts.com/episodes/286-draper"> 読む</a>]で扱ったものです。このアプリケーションにはユーザプロファイルのページがあり、アバター画像と一緒にユーザが入力した情報が表示されています。</p>
+ 
+<div class="imageWrapper">
+  <img src="/system/photos/751/original/E287I01.png" width="800" height="595" alt="詳細情報を入力したユーザのプロファイルページ"/>
+</div>
+
+<p>ユーザはすべてのフィールドに情報を入力しなくてもいいので、このページには代わりにデフォルト値を表示する機能が必要です。MrMysteryさんという、ユーザ名しか入力してないユーザの例を見ることができます。</p>
+
+<div class="imageWrapper">
+  <img src="/system/photos/752/original/E287I02.png" width="800" height="470" alt="ほとんど情報を入力していないユーザのプロファイルページ"/>
+</div>
+
+<p>デフォルト値を扱わなくてはいけないということは、ページのビューコードにたくさんの複雑なロジックが含まれるという意味です。</p>
+
+<p class="codeFilePath">/app/views/users/show.html.erb</p>
+<pre class="ruby">&lt;div id="profile"&gt;
+  &lt;%= link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url %&gt;
+  &lt;h1&gt;&lt;%= link_to_if @user.url.present?, (@user.full_name.present? ? @user.full_name : @user.username), @user.url %&gt;&lt;/h1&gt;
+  &lt;dl&gt;
+    &lt;dt&gt;Username:&lt;/dt&gt;
+    &lt;dd&gt;&lt;%= @user.username %&gt;&lt;/dd&gt;
+    &lt;dt&gt;Member Since:&lt;/dt&gt;
+    &lt;dd&gt;&lt;%= @user.member_since %&gt;&lt;/dd&gt;
+    &lt;dt&gt;Website:&lt;/dt&gt;
+    &lt;dd&gt;
+    &lt;% if @user.url.present? %&gt;
+      &lt;%= link_to @user.url, @user.url %&gt;
+    &lt;% else %&gt;
+      &lt;span class="none"&gt;None given&lt;/span&gt;
+    &lt;% end %&gt;
+    &lt;/dd&gt;
+    &lt;dt&gt;Twitter:&lt;/dt&gt;
+    &lt;dd&gt;
+    &lt;% if @user.twitter_name.present? %&gt;
+      &lt;%= link_to @user.twitter_name, "http://twitter.com/#{@user.twitter_name}" %&gt;
+    &lt;% else %&gt;
+      &lt;span class="none"&gt;None given&lt;/span&gt;
+    &lt;% end %&gt;
+    &lt;/dd&gt;
+    &lt;dt&gt;Bio:&lt;/dt&gt;
+    &lt;dd&gt;
+    &lt;% if @user.bio.present? %&gt;
+      &lt;%=raw Redcarpet.new(@user.bio, :hard_wrap, :filter_html, :autolink).to_html %&gt;
+    &lt;% else %&gt;
+      &lt;span class="none"&gt;None given&lt;/span&gt;
+    &lt;% end %&gt;
+    &lt;/dd&gt;
+  &lt;/dl&gt;
+&lt;/div&gt;</pre>
+
+<p>このページはいくつかのif文が含まれています。それぞれがあるフィールドに対して入力された値かデフォルト値のいずれを表示させるかのロジックを処理しています。このロジックはすべてビュー関係なので、presenterクラスを利用するのがいいでしょう。それによってビューのコードを見違えるほどきれいに整理することができます。presenterはビューとモデルの両方を理解しているクラスで、複雑なビューロジックを処理する優れたオブジェクト指向的な方法です。今回のアプリケーションでこれを使用して、ユーザプロファイルのページをきれいに整理します。</p>
+
+<h3>最初のpresenterを書く</h3>
+
+<p>presenterはシンプルなRubyクラスです。アプリケーション内のpresenterを一緒にまとめておくために、アプリケーションの<code>app</code>ディレクトリの下に新たに<code>presenters</code>ディレクトリを作成し、そこに<code>user_presenter.rb</code>ファイルを置きます。古いバージョンのRailsでは<code>/config/application.rb</code>ファイルの中でアプリケーションの<code>config.autoload_paths</code>に新しいディレクトリを追加する必要がありました。Rails 3.1ではサーバを再起動しさえすれば、この作業は必要なくなりました。新しいディレクトリはサーバ起動時に自動的に認識されます。</p>
+
+<p>presenterは処理対象のモデルとビューを知っている必要があるので、それらを<code>initialize</code>メソッドに渡してインスタンス変数に割り当てます。</p>
+
+<p class="codeFilePath">/app/presenters/user_presenter.rb</p>
+<pre class="ruby">class UserPresenter
+  def initialize(user, template)
+    @user = user
+    @template = template
+  end
+end</pre>
+
+<p>これでビューロジックをこのクラスに抽出する準備ができましたが、一体どのようにすればいいのでしょうか? 最初にどこかで新しい<code>UserPresenter</code>クラスをインスタンス化する必要があります。Draperやその他のpresenterライブラリでは、これをコントローラアクションでおこなうのが一般的です。しかし、コントローラはpresenterを意識するべきではないという議論もあり、ここではそのアプローチはとりません。</p>
+
+<p>コントローラを修正するのではなく、presenterインスタンスを生成するヘルパーメソッドを新規に作成します。このメソッドは<code>present</code>という名前で、presenterを作成したい対象のモデルと、presenterオブジェクトを返すブロックをとります。ビューテンプレートのコードをすべてブロックの中に置いて、presenterがビューからアクセス可能になるようにします。 </p>
+
+<p class="codeFilePath">/app/views/users/show.html.erb</p>
+<pre class="ruby">&lt;% present @user do |user_presenter| %&gt;
+&lt;div id="profile"&gt;
+	&lt;!-- Rest of view code omitted --&gt;
+&lt;/div&gt;
+&lt;% end %&gt;</pre>
+
+<p>presentメソッドを<code>ApplicationHelper</code>内に書きます。モデルオブジェクトに加えて、オプションでクラス変数を指定して、使われるpresenterクラスをカスタマイズします。クラスが指定されない場合、オブジェクトのクラス名の後ろに<code>Presenter</code>をつけたものをベースにクラスを見つけます。今回の場合、名前は<code>UserPresenter</code>になります。その文字列に対して<code>constantize</code>を呼び出して、クラス定数を取得します。</p>
+
+<p>presenterクラスができたので、<code>klass.new</code>を呼び出してそれをインスタンス化し、モデル<code>object</code>と<code>self</code>を渡します。<code>self</code>は我々がアクセスしたいヘルパーメソッドを持つテンプレートメソッドです。もしブロックがメソッドに渡されたらpresenterを<code>yield</code>して、最後にそれを返します。</p>
+
+<p class="codeFilePath">/app/helpers/application_helper.rb</p>
+<pre class="ruby">module ApplicationHelper
+  def present(object, klass = nil)
+    klass ||= "{object.class}Presenter".constantize
+    presenter = klass.new(object, self)
+    yield presenter if block_given?
+    presenter
+  end
+end</pre>
+
+<p><code>present</code>メソッドによって、いずれのテンプレートからでもすべてのオブジェクトのpresenterに簡単にアクセスできるようになります。これで、テンプレートからpresenterにコードを移動し始めることができます。まずアバターを表示するコードから始めます。</p>
+
+<p class="codeFilePath">/app/views/users/show.html.erb</p>
+<pre class="ruby">&lt;%= link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url %&gt;</pre>
+
+<p>これを<code>UserPresenter</code>に新たに作る<code>avatar</code>の呼び出しと置き換えます。</p>
+
+<p class="codeFilePath">/app/views/users/show.html.erb</p>
+<pre class="ruby">&lt;%= user_presenter.avatar %&gt;</pre>
+
+<p>ビューから取ったロジックをこの新しいメソッドに貼り付けます。</p>
+
+<p class="codeFilePath">/app/presenters/user_presenter.rb</p>
+<pre class="ruby">def avatar
+  link_to_if @user.url.present?, image_tag("avatars/#{avatar_name(@user)}", class: "avatar"), @user.url
+end</pre>
+
+<p>presenterから呼び出すヘルパーメソッドはすべてテンプレートを介して呼び出される必要があります。しかしどこでも<code>@template</code>を使うのではなく、Draperの手法にならって<code>h</code>メソッドを用いて、テンプレートを返すhメソッドをpresenterに追加します。その上でそれを<code>link_to_if</code>と<code>image_tag</code>の各メソッドと合わせて使用して、テンプレートを介して呼ばれるようにします。</p>
+
+<p>コピーしたコードはまた、新規に作成したヘルパーメソッドの<code>avatar_name</code>を呼び出します。これは<code>UsersHelper</code>で定義されています。</p>
+
+<p class="codeFilePath">/app/helpers/users_helper.rb</p>
+<pre class="ruby">module UsersHelper
+  def avatar_name(user)
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end</pre>
+
+<p>presenterにある同じモデルオブジェクトを引数にとるヘルパーメソッドがある場合は、それをpresenterに移動するのが理にかなっているので、<code>avatar_name</code>を<code>UsersHelper</code>から<code>UsersPresenter</code>に移動してプライベートに変更します。presenterにはすでに現在のユーザがあるので、<code>user</code>引数は削除してその代わりに<code>@user</code>インスタンス変数を呼び出します。</p>
+
+<p class="codeFilePath">/app/presenters/user_presenter.rb</p>
+<pre class="ruby">class UserPresenter
+  def initialize(user, template)
+    @user = user
+    @template = template
+  end
+  
+  def avatar
+    h.link_to_if @user.url.present?, h.image_tag("avatars/#{avatar_name}", class: "avatar"), @user.url
+  end
+  
+  private
+  def h
+    @template    
+  end
+
+  def avatar_name
+    if @user.avatar_image_name.present?
+      @user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end</pre>
+
+<p>ユーザプロファイルのページをリロードすると前とまったく同じように表示されるので、presenterは正しく動作しているようです。</p>
+
+<h3>基本のpresenterを作成する</h3>
+
+<p>presenterを使用するアプリケーションはおそらくそれを複数持つので、それらの振る舞いを一般化するのがいいでしょう。作成するpresenterはすべて同じ<code>initalize</code>と<code>h</code>の各メソッドを持つので、これらを基本クラスに移してpresenterから継承させることにします。</p> 
+
+<p>新たに作成する基本クラスで<code>initialize</code>に渡されるモデル名をより汎用的な名称、たとえば<code>object</code>、に変更します。これによって<code>UserPresenter</code>で直接userオブジェクトを参照することができなくなります。<code>@object</code>を呼び出すこともできるのですが、その代わりに<code>BasePresenter</code>内にnameを引数にとる<code>presents</code>という名前のクラスメソッドを作成します。このメソッドは、<code>@object</code>に保持されたモデルを返す、そのモデルと同じ名前のメソッドを定義します。</p>
+
+<p class="codeFilePath">/app/presenters/base_presenter.rb</p>
+<pre class="ruby">class BasePresenter
+  def initialize(object, template)
+    @object = object
+    @template = template
+  end
+  
+  def self.presents(name)
+    define_method(name) do
+      @object
+    end
+  end
+  
+  def h
+    @template
+  end
+end</pre>
+
+<p><code>UserPresenter</code>とその他の作成するpresenterはすべてこの新しいクラスから継承できるようになりました。<code>UserPresenter</code>の<code>presents :user</code>を呼び出すと、current userを返す<code>user</code>メソッドを利用できるようになるので、<code>@user</code>の呼び出しをすべて<code>user</code>に置き換えます。</p>
+
+<p class="codeFilePath">/app/presenters/user_presenter.rb</p>
+<pre class="ruby">class UserPresenter &lt; BasePresenter
+  presents :user
+
+  def avatar
+    h.link_to_if user.url.present?, h.image_tag("avatars/#{avatar_name}", class: "avatar"), user.url
+  end
+  
+  private
+  def avatar_name
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end</pre>
+
+<h3>ビューの残りの部分を整理する</h3>
+
+<p>テンプレートは多少きれいになりましたが、まだ整理できる部分はたくさんあります。これをおこなうためにとるステップは、Draperのエピソードで採用した方法にとても似ています。具体的な方法を見たい場合は、<a href="http://railscasts.com/episodes/286-draper">動画を見る</a>か<a href="http://asciicasts.com/episodes/286-draper">記事を読む</a>ことができます。これらの変更の実際の作業は省略して、結果のみを示します。重いロジック部分をpresenterに移動して、テンプレートはずっときれいに整理されました。</p> 
+
+<p class="codeFilePath">/app/views/users/show.html.erb</p>
+<pre class="ruby">&lt;% present @user do |user_presenter| %&gt;
+  &lt;div id="profile"&gt;
+    &lt;%= user_presenter.avatar %&gt;
+    &lt;h1&gt;&lt;%= user_presenter.linked_name %&gt;&lt;/h1&gt;
+    &lt;dl&gt;
+      &lt;dt&gt;Username:&lt;/dt&gt;
+      &lt;dd&gt;&lt;%= user_presenter.username %&gt;&lt;/dd&gt;
+      &lt;dt&gt;Member Since:&lt;/dt&gt;
+      &lt;dd&gt;&lt;%= user_presenter.member_since %&gt;&lt;/dd&gt;
+      &lt;dt&gt;Website:&lt;/dt&gt;
+      &lt;dd&gt;&lt;%= user_presenter.website %&gt;&lt;/dd&gt;
+      &lt;dt&gt;Twitter:&lt;/dt&gt;
+      &lt;dd&gt;&lt;%= user_presenter.twitter %&gt;&lt;/dd&gt;
+      &lt;dt&gt;Bio:&lt;/dt&gt;
+      &lt;dd&gt;&lt;%= user_presenter.bio %&gt;&lt;/dd&gt;
+    &lt;/dl&gt;
+  &lt;/div&gt;
+&lt;% end %&gt;</pre>
+
+<p>presenterのコードを下に示します。ページのロジックをすべて処理してくれるいくつかの短いメソッドだけになりました。</p>
+
+<p class="codeFilePath">/app/presenters/user_presenter.rb</p>
+<pre class="ruby">class UserPresenter &lt; BasePresenter
+  presents :user
+  delegate :username, to: :user
+
+  def avatar
+    site_link image_tag("avatars/#{avatar_name}", class: "avatar")
+  end
+
+  def linked_name
+    site_link(user.full_name.present? ? user.full_name : user.username)
+  end
+
+  def member_since
+    user.created_at.strftime("%B %e, %Y")
+  end 
+
+ def website
+    handle_none user.url do
+      h.link_to(user.url, user.url)
+    end
+  end
+
+  def twitter
+    handle_none user.twitter_name do
+      h.link_to user.twitter_name, "http://twitter.com/#{user.twitter_name}"
+    end
+  end
+
+  def bio
+    handle_none user.bio do
+      markdown(user.bio)
+    end
+  end
+
+private
+  def handle_none(value)
+    if value.present?
+      yield
+    else
+      h.content_tag :span, "None given", class: "none"
+    end
+  end
+
+  def site_link(content)
+    h.link_to_if(user.url.present?, content, user.url)
+  end
+
+  def avatar_name
+    if user.avatar_image_name.present?
+      user.avatar_image_name
+    else
+      "default.png"
+    end
+  end
+end</pre>
+
+<p>presenterに対しておこなった修正について、何点か補足します。ファイルの最初あたりで<code>delegate</code>で<code>username</code>メソッドを<code>User</code>クラスに委譲しています。<code>User</code>モデルの<code>username</code>は変更する必要がないので、そこから直接取得できます。</p>
+
+<p>テンプレートは<code>Redcloth</code>を用いてユーザの履歴を返します。これは他のpresenterで使うと便利なので、<code>BasePresenter</code>に<code>markdown</code>メソッドを作成し、どのpresenterのMarkdownコードも簡単に返せるようにしました。そこで<code>UserPresenter</code>のこのメソッドを呼び出すことができます。</p>
+
+<p class="codeFilePath">/app/presenters/base_presenter.rb</p>
+<pre class="ruby">def markdown(text)
+    Recarpet.new(text, :hard_wrap, :filter_html, :autolink).to_html.html_safe
+end</pre>
+
+<p><code>handle_none</code>メソッドが<code>twitter</code>などのフィールドを処理し、ユーザが何も情報を入力してくれなかった場合に「None given(情報なし)」を表示させます。このメソッドでは<code>content_tag</code>を使ってHTML spanにデフォルトの値を返します。このアプローチは、このように単純なHTMLではうまくいきますが、より複雑なマークアップを表示したい場合は、部分テンプレート(partial)を作成してそれを表示させるか、<a href="http://markaby.github.com/">Markaby</a>のようなマークアップ言語を利用するなどの方法がいいでしょう。</p>
+
+<h3>hメソッドの代替</h3>
+
+<p>先に<code>h</code>メソッドを定義して、ヘルパーメソッドにアクセスできるようにしました。これを望まない場合、代替案として<code>method_missing</code>を設定してすべての不明なメソッドをテンプレートに委譲するという方法があります。これは<code>BasePresenter</code>内に簡単に設定して、すべてのpresenterで機能させることができます。</p>
+
+<p class="codeFilePath">/app/presenters/base_presenter.rb</p>
+<pre class="ruby">def method_missing(*args, &amp;block)
+  @template.send(*args, &amp;block)
+end</pre>
+
+<p>これによって、presenterが理解できないものはすべてテンプレートに送られ、<code>image_tag</code>などのヘルパーメソッドを呼び出すときは<code>h</code>メソッドを介するのではなく直接呼び出します。</p>
+
+<h3>コントローラからpresenterにアクセスする</h3>
+
+<p>ある時点では、コントローラ層からpresenterにアクセスしなくてはいけないという状況が発生すると思います。例えば<code>UserController</code>の<code>show</code>アクションで使用して、次のようなコードでJSONを返したいという場合があるかもしれません。</p>
+
+<p class="codeFilePath">/app/controllers/user_controller.rb</p>
+<pre class="ruby">def show
+  @user = User.find(params[:id])
+  present(@user).to_json
+end</pre>
+
+<p><code>present</code>メソッドはヘルパーメソッドではないのでこれはうまくいきません。しかし、アプリケーションの<code>ApplicationController</code>にコントローラ用の<code>present</code>メソッドを作成することができます。このメソッドのトリックは、presenterをインスタンス化するときに<code>self</code>の代わりに<code>view_content</code>を呼び出すという点で、これはそれがビューを返すテンプレートオブジェクトだからです。</p>
+
+<p class="codeFilePath">/app/controllers/application_controller.rb</p>
+<pre class="ruby">class ApplicationController &lt; ActionController::Base
+  protect_from_forgery
+  
+  private
+  def present(object, klass = nil)
+    klass ||= "#{object.class}Presenter".constantize
+    klass.new(view_content, object)
+  end
+end</pre>
+
+<h3>テスト</h3>
+
+<p>これでアプリケーションが新たなきれいなビューで一新されましたが、テストはどうなるでしょうか? presenterはどうテストすればいいでしょう? Capybara (エピソード275 [<a href="http://railscasts.com/episodes/275-how-i-test">動画を見る</a>, <a href="http://asciicasts.com/episodes/275-how-i-test">読む</a>]で取り上げました)を使用してハイレベルな統合テストを行うべきですが、presenterを利用することの利点のひとつは、より低いレベルでビューロジックをテストできるという点です。これをこのあと実際にデモしていきますが、最初はTest::Unitで、次にRSpecでおこないます。</p>
+
+<p>Test::Unitによるpresenterのテストを書くために、<code>/test/unit</code>ディレクトリの下に新規に<code>presenters</code>ディレクトリを作成し、そこに<code>user_presenter_test.rb</code>ファイルを追加します。このファイル内に作成する<code>UserPresenterTest</code>クラスは、通常の<code>ActiveSupport::TestCase</code>を継承するのではなく、<code>ActionView::TestCase</code>を継承します。これによって、ビューにアクセスできるようになりそれをpresenterに渡すことができます。</p>
+
+<p>これを簡単なテストでデモします。ユーザが詳細情報を入力しなかった場合に<code>UserPresenter</code>の<code>website</code>メソッドから「None given」というテキストが返されると仮定(assert)します。まず新規に<code>UserPresenter</code>を作成し、新しい<code>User</code>とビューテンプレートを渡します。テストは<code>ActionView::TestCase</code>を継承するので、現在のビューテンプレートを保持する<code>view</code>変数にアクセスできます。次にpresenterの<code>website</code>メソッドを呼び出し、そこに「None Given」というテキストが含まれていると仮定します。</p>
+
+<p class="codeFilePath">/test/presenters/user_presenter_test.rb</p>
+<pre class="ruby">require 'test_helper'
+
+class UserPresenterTest &lt; ActionView::TestCase
+  test "says when none given" do
+    presenter = UserPresenter.new(User.new, view)
+    assert_match "None given", presenter.website
+  end
+end</pre>
+
+<p>rake testでテストを実行すると成功します。</p>
+
+<pre class="terminal">$ rake test
+Loaded suite /Users/eifion/.rvm/gems/ruby-1.9.2-p180@global/gems/rake-0.9.2/lib/rake/rake_test_loader
+Started
+.
+Finished in 0.155069 seconds.
+
+1 tests, 1 assertions, 0 failures, 0 errors, 0 skips</pre>
+
+<p>テストからpresenterにアクセスできるということは、テスト駆動開発の手法を用いてpresenterを書けることを意味します。まず失敗するpresenterのテストから始めて、テストが成功するようにpresenterを修正していきます。</p>
+
+<p>presenterをRSpecを用いてテストするには、まず<code>/spec</code>の下に<code>presenters</code>ディレクトリを作成し、そこに<code>user_presenter_spec.rb</code>ファイルを追加します。先ほどのテストと同じことをテストするspecを書きます。presenterのspecを書くときの鍵は、<code>ActionView::TestCase::Behavior</code>をインクルードするという点です。これによって、テンプレートを含むview変数を使用できます。これはTest::Unitを利用しているときに<code>ActionView::TestCase</code>を継承する場合と同じです。</p>
+
+<p>spec自体は、先ほどのテストととても似ています。再度新しいpresenterを作成し、<code>website</code>メソッドが正しいテキストを返すかどうかチェックします。</p>
+
+<pre class="codeFilePath">/spec/presenters/user_presenter_spec.rb</pre>
+<pre class="ruby">require 'spec_helper'
+
+describe UserPresenter do
+  include ActionView::TestCase::Behavior
+  
+  it "says when none given" do
+    presenter = UserPresenter.new(User.new, view)
+    presenter.website.should include("None given")
+  end
+end</pre>
+
+<p><code>rake spec</code>を実行すると1つのspecが成功するはずで、実際その通りの結果が表示されます。</p>
+
+<pre class="terminal">$ rake spec
+/Users/eifion/.rvm/rubies/ruby-1.9.2-p180/bin/ruby -S bundle exec rspec ./spec/presenters/user_presenter_spec.rb
+.
+
+Finished in 0.06957 seconds
+1 example, 0 failures</pre>
+
+<p>すべてのpresenter specに<code>Behavior</code>モジュールをインクルードする代わりに、自動的にすべてのspecにインクルードされるように、SpecHelperファイルのconfig ブロックを修正します。これによってspec/helpersディレクトリ以下のすべてのファイルにBehaviorモジュールがインクルードされるので、presenter specにそれを追加する必要がなくなります。</p>
+
+<p class="codeFilePath">/spec/spec_helper.rb</p>
+<pre class="ruby">RSpec.configure do |config|
+  config.include ActionView::TestCase::Behavior, example_group: {file_path: %r{spec/presenters}}
+  # Rest of block omitted.
+end</pre>
+
+<p>presenterをテストするときに気をつけなくてはいけないことがひとつあります。presenterに渡す<code>view</code>オブジェクトはすべてのヘルパーメソッドにアクセスできますが、<em>例外としてコントローラで定義されたものにはアクセスできません</em>。例えばコントローラ内に<code>helper_method</code>を用いてヘルパーメソッドとして指定した<code>current_user</code>メソッドを持っていても、テストでそれを<code>view</code>オブジェクトから呼び出すことはできません。代わりにこのメソッドをスタブ化して、求める値を返すようにする必要があります。通常<code>current_user</code>メソッドはセッションやクッキーの値に依存するため、いずれにしろここはスタブ化するのがいいアイデアでしょう。</p>
+
+<p>presenterをゼロから作る今回のエピソードは以上で終わりです。必要な作業の内容を見ることで十分な知識を得られたと思いますので、自分でカスタムのソリューションを書くべきか、Draperのようなgemを利用するべきか、判断することができるでしょう。どちらを選ぶにしても、アプリケーションのビューが複雑なロジックを持っている場合は、presenterを利用してロジックをリファクタリングしてビューをきれいに保つことをぜひ検討してください。</p>
