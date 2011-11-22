@@ -1,0 +1,229 @@
+<p>Say that we have a simple application that manages a number of products, each of which belongs to a category. To add a product to this app we have a form, which is shown below, that has a dropdown list for selecting the new product&rsquo;s category.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/834/original/E102RI01.png" width="801" height="401" alt="The New Product page."/>
+</div>
+
+<p>This approach works well for a limited number of categories, but dropdown lists can quickly become cumbersome when there is a large number of options to choose from. In this episode we&rsquo;re going to replace this dropdown with a text field that will autocomplete when a user starts to enter the name of a category.</p>
+
+<p>The template that renders the form is shown below. It uses <code>collection_select</code> to  create the dropdown for the category association.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= form_for(@product) do |f| %>
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :price %><br />
+    <%= f.text_field :price %>
+  </div>
+  <div class="field">
+    <%= f.label :category_id %><br />
+    <%= f.collection_select :category_id, Category.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+<p>We&rsquo;ll replace the <code>collection_select</code> with a text field and call it <code>category_name</code>, as that&rsquo;s what the user will be typing in here.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :category_name %><br />
+  <%= f.text_field :category_name %>
+</div>
+```
+
+<p>If we try reloading the form now we&rsquo;ll see an error message as the <code>Product</code> model doesn&rsquo;t have a <code>category_name</code> attribute. To fix this we&rsquo;ll create a virtual attribute.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  
+  def category_name
+    category.try(:name)
+  end
+  
+  def category_name=(name)
+    self.category = Category.find_by_name(name) if name.present?
+  end
+end
+```
+
+<p>We&rsquo;ve created getter and setter methods for <code>category_name</code>. The getter returns the associated <code>Category</code>&rsquo;s name (but note that we use <code>try</code> so that the it returns <code>nil</code> if there is no associated category). The setter sets the product&rsquo;s <code>category</code> to the <code>Category</code> with a matching name if the <code>name</code> is present.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/835/original/E102RI02.png" width="801" height="401" alt="Adding a new product."/>
+</div>
+
+<p>When we reload the form now we have a category name field and if we add a product with an existing category name the product is added to the database with its category association set.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/836/original/E102RI03.png" width="801" height="536" alt="The product is successfully added."/>
+</div>
+
+<p>What should happen, though, if someone creates a product with a new category? It would be good if the new category was created along with the product in these cases and Rails makes this easy to do. All we need to do is replace <code>find_by_name</code> in the setter with <code>find_or_create_by_name</code>.</p>
+
+``` /app/models/product.rb
+def category_name=(name)
+  self.category = Category.find_or_create_by_name(name) if name.present?
+end
+```
+<p>Now when we add a product with a new category the category is created too.</p>
+
+<h3>Adding Auto-completion</h3>
+
+<p>What we really want to do is add auto-completion so that as the user types in the category field the categories that match what has been typed are shown. One of the easiest ways to do this in a Rails 3.1 application is to use jQuery UI which comes with an <a href="http://jqueryui.com/demos/autocomplete/">Autocomplete widget</a> so we&rsquo;ll take this approach.</p>
+
+<p>JQuery UI is already available in a Rails 3.1 application. To use it we just need to require it in the <code>application.js</code> manifest file.</p>
+
+``` /app/assets/javascripts/application.js
+// This is a manifest file that'll be compiled into including all the files listed below.
+// Add new JavaScript/Coffee code in separate files in this directory and they'll automatically
+// be included in the compiled file accessible from http://example.com/assets/application.js
+// It's not advisable to add code directly here, but if you do, it'll appear at the bottom of the
+// the compiled file.
+//
+//= require jquery
+//= require jquery-ui
+//= require jquery_ujs
+//= require_tree .
+```
+
+<p>We&rsquo;ll add the autocomplete functionality in the products CoffeeScript file.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $('#product_category_name').autocomplete
+    source: ['foo', 'food', 'four']
+```    
+
+<p>In this code we first check that the DOM has loaded and when it has we find our category name field by its <code>id</code> and call <code>autocomplete</code> on it. This function takes a <code>source</code> option  that determines where the autocomplete options come from. We can pass it either a URL, which will make an AJAX request and use what&rsquo;s returned, or an array of options. To get things working quickly we&rsquo;ve used an array for now.</p>
+
+<p>When we go to the new product page now and start typing something that matches one or more of the items in the array we&rsquo;ll see the autocomplete list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/837/original/E102RI04.png" width="801" height="410" alt="The autocomplete list now appears."/>
+</div>
+
+<p>The autocomplete list works but it looks terrible. We&rsquo;ll improve this by adding the following code to the products SCSS file.</p>
+
+``` /app/assets/stylesheets/products.css.scss
+ul.ui-autocomplete {
+  position: absolute;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: solid 1px #999;
+  cursor: default;
+  li {
+    background-color: #FFF;
+    border-top: solid 1px #DDD;
+    margin: 0;
+    padding: 0;
+    a {
+      color: #000;
+      display: block;
+      padding: 3px;
+    }
+    a.ui-state-hover, a.ui-state-active {
+      background-color: #FFFCB2;
+    }
+  }
+} 
+```
+<p>When we reload the page now the list looks much better.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/838/original/E102RI05.png" width="801" height="410" alt="The list is now much prettier."/>
+</div>
+
+<h3>Getting Autocomplete Values From The Database</h3>
+
+<p>Now that our list looks good we can concentrate on populating it with the matching categories from the database instead of the values from the array. There are two ways we can do this and we&rsquo;ll show you both approaches here.</p>
+
+<p>The first option keeps everything on the client. This works well if there aren&rsquo;t a large number of options to choose from as is the case here. What we do is embed all of the options in a data attribute on the category name text field. </p>
+
+``` /app/views/products/_form.html.erb
+ <div class="field">
+  <%= f.label :category_name %><br />
+  <%= f.text_field :category_name, data: {autocomplete_source: Category.order(:name).map(&:name)} %>
+</div>
+```
+
+<p>To do this we set a <code>data</code> option on the text field (this <code>data</code> hash is new in Rails 3.1 and is a convenient way to set data attributes) and pass it an array of category names. If we reload the page and view the source we&rsquo;ll see what this has done.</p>
+
+```
+<div class="field">
+  <label for="product_category_name">Category name</label><br />
+  <input data-autocomplete-source="[&quot;Beverages&quot;,&quot;Board Games&quot;,&quot;Books&quot;,&quot;Breads&quot;,&quot;Canned Foods&quot;,&quot;Clothes&quot;,&quot;Computers&quot;,&quot;Dry Foods&quot;,&quot;Frozen Foods&quot;,&quot;Furniture&quot;,&quot;Headphones&quot;,&quot;Magazines&quot;,&quot;Music&quot;,&quot;Other Electronics&quot;,&quot;Pastas&quot;,&quot;Portable Devices&quot;,&quot;Produce&quot;,&quot;Snacks&quot;,&quot;Software&quot;,&quot;Televisions&quot;,&quot;Toys&quot;,&quot;Video Games&quot;,&quot;Video Players&quot;,&quot;Videos&quot;]" id="product_category_name" name="product[category_name]" size="30" type="text" />
+</div>
+```  
+
+<p>The text field now has a <code>data-autocomplete-source</code> attribute which contains the categories. These have been converted to a JSON string and HTML escaped. We can now replace the dummy data in <code>autocomplete</code> with the data from this attribute.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $('#product_category_name').autocomplete
+    source: $('#product_category_name').data('autocomplete-source')
+```    
+
+<p>When we reload the page now and enter text in the category name field the matching categories appear in the autocomplete list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/839/original/E102RI06.png" width="801" height="410" alt="The matching categories now appear."/>
+</div>
+
+<p>This is all we have to do to get autocompletion working on the client and this approach works perfectly for us as we only have a limited number of categories. There are other situations, however, where we could have hundreds or even thousands of potential options to choose from and having every option on the client would be impractical. In these cases its better to use an AJAX request to fetch the autocomplete options from the server instead of embedding them in the HTML document.</p>
+
+<p>To do this we pass a URL to the <code>autocomplete</code> function instead of an array. We&rsquo;ll replace the data in the <code>data-autocomplete-source</code> attribute with a URL. As the AJAX request should return a list of categories we&rsquo;ll use the <code>categories_path</code> URL.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :category_name %><br />
+  <%= f.text_field :category_name, data: {autocomplete_source: categories_path} %>
+</div>
+```
+
+<p>We don&rsquo;t have a CategoriesController yet so we&rsquo;ll create one now.</p>
+
+``` terminal
+$ rails g controller categories
+```
+
+<p>In order for the <code>categories_path</code> method to be defined we&rsquo;ll modify the routes file and add a <code>categories</code> resource.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  root to: 'products#index'
+  resources :products
+  resources :categories
+end
+```
+
+<p>Now in our new <code>CategoriesController</code> we&rsquo;ll write the <code>index</code> action. This will fetch the categories that match what&rsquo;s been typed into the text field and return them as JSON data.</p>
+
+``` /app/controllers/categories_controller.rb
+class CategoriesController < ApplicationController
+  def index
+    @categories = Category.order(:name).where("name like ?", "#{params[:term]}")
+    render json: @categories.map(&:name)
+  end
+end
+```
+
+<p>The autocomplete widget passes in the text from the <code>text</code> field as a term parameter so we use that parameter to filter the categories. We then return this filtered list as an array of names.</p>
+
+<p>When we reload the page and start typing into the category name field now the matching categories are fetched from the server.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/840/original/E102RI07.png" width="801" height="405" alt="Matching categories are now fetched from the server."/>
+</div>
+
+<p>The autocomplete list is a little slower as an AJAX request is made each time the text in the text field changes, but we&rsquo;re no longer having to send the complete list of categories to the client each time the page loads.</p>
+
+<p>That&rsquo;s it for this episode on using autocompletion with an association. For more details about how it works and the options that can be used it&rsquo;s well worth reading the <a href="http://jqueryui.com/demos/autocomplete/">documentation</a>. For example we can pass in a minLength option that determines the minimum number of characters that we need to enter before the AJAX request is made and so on.</p> 
+
+<p>If you need autocompletion for a many-to-many relationship then take a look at <a href="http://railscasts.com/episodes/258-token-fields">episode 258</a> which does just this.</p>
