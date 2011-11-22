@@ -1,0 +1,382 @@
+<p>In this episode we&rsquo;ll walk through the Rails initialization process and determine what happens behind the scenes when you start up a Rails server. Doing this should give us a better understanding of how engines and railties work so let&rsquo;s get started.</p> 
+
+<p>We&rsquo;ll be looking at Rails&rsquo; source code so first we&rsquo;ll need to get a copy of it. We can do this by running</p>
+
+``` terminal
+$ git clone https://github.com/rails/rails.git
+```
+
+<p>When it&rsquo;s downloaded we&rsquo;ll checkout the version we want to look at: 3.1.1.</p>
+
+``` terminal
+$ cd rails
+$ git checkout v3.1.1
+```
+
+<p>The code we&rsquo;ll be looking at is under the <code>railties/lib</code> directory as that&rsquo;s where the initialization code lives. Even though we&rsquo;re under the <code>railties</code> directory the <code>lib</code> directory has a <code>rails</code> subdirectory so if you see something prefixed with the Rails path or inside a <code>Rails</code> module the source code for it is probably in <code>railties</code>.</p>
+
+<h3>The rails Command</h3>
+
+<p>Now that we have a copy of the source code we&rsquo;ll start by looking at the <code>rails</code> command. This command is interesting as it behaves very differently depending on whether it is called from inside a Rails application&rsquo;s directory. Outside a Rails app it can&rsquo;t do much other than create a new application or engine. We&rsquo;ll use this functionality now to create a new Rails application.</p>
+
+``` terminal
+$ rails new blog
+```
+
+<p>When we move into our new application&rsquo;s directory and run the <code>rails</code> command again it behaves quite differently.</p>
+
+```
+$ cd blog/
+$ rails
+Usage: rails COMMAND [ARGS]
+
+The most common rails commands are:
+ generate    Generate new code (short-cut alias: "g")
+ console     Start the Rails console (short-cut alias: "c")
+ server      Start the Rails server (short-cut alias: "s")
+ dbconsole   Start a console for the database specified in config/database.yml
+             (short-cut alias: "db")
+ new         Create a new Rails application. "rails new my_app" creates a
+             new application called MyApp in "./my_app"
+
+In addition to those, there are:
+ application  Generate the Rails application code
+ destroy      Undo code generated with "generate"
+ benchmarker  See how fast a piece of code runs
+ profiler     Get profile information from a piece of code
+ plugin       Install a plugin
+ runner       Run a piece of code in the application environment (short-cut alias: "r")
+
+All commands can be run with -h for more information.
+```
+
+<p>The <code>rails</code> command now has a completely different set of subcommands that perform actions on our application. This command loads and runs the <code>cli.rb</code> file so lets take a look at it.</p>
+
+``` [rails] /railties/lib/rails/cli.rb
+require 'rbconfig'
+require 'rails/script_rails_loader'
+
+# If we are inside a Rails application this method performs an exec and thus
+# the rest of this script is not run.
+Rails::ScriptRailsLoader.exec_script_rails!
+
+require 'rails/ruby_version_check'
+Signal.trap("INT") { puts; exit(1) }
+
+if ARGV.first == 'plugin'
+  ARGV.shift
+  require 'rails/commands/plugin_new'
+else
+  require 'rails/commands/application'
+end
+```
+
+<p>The first thing the code in the file does is look for a file called <p>rails</p> in a <code>script</code> directory under immediately under the directory in which the command is run. If <code>cli.rb</code> finds this file it will load and run it and not run the rest of the script. If it doesn&rsquo;t the rest of the script will run and create a new Rails application or plugin depending on the option passed to it. It does this by running either <code>plugin_new.rb</code> or <code>application.rb</code> in the <code>commands</code> subdirectory. If we&rsquo;re creating an application this will load up the generators and run the <code>AppGenerator</code> class.</p>
+
+<p>So, running rails in a Rails application is the same as running the <code>script/rails</code> command. Let&rsquo;s take a look at what this command does.</p>
+
+``` [app] /script/rails
+#!/usr/bin/env ruby
+# This command will automatically be run when you run "rails" with Rails 3 gems installed from the root of your application.
+
+APP_PATH = File.expand_path('../../config/application',  __FILE__)
+require File.expand_path('../../config/boot',  __FILE__)
+require 'rails/commands'
+```
+
+<p>This code only does a few things. It records the path to the application&rsquo;s configuration file then it loads the <code>/config/boot.rb</code> file and <code>rails/commands</code>. We&rsquo;ll take a look at the boot file first.</p>
+
+``` [app] /config/boot.rb
+require 'rubygems'
+
+# Set up gems listed in the Gemfile.
+ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../../Gemfile', __FILE__)
+
+require 'bundler/setup' if File.exists?(ENV['BUNDLE_GEMFILE'])
+```
+
+<p>All this file does is load <code>rubygems</code> and run Bundler. The application&rsquo;s gems aren&rsquo;t run here, but the load paths are set up so they can be required later.</p> 
+
+<p>We&rsquo;ll find the <code>rails/commands</code> file under Rails&rsquo; <code>railties/lib</code> directory. Near the top of the file we&rsquo;ll find aliases for some of the commands that we can pass to <code>rails</code>.</p>
+
+``` [rails] /railties/lib/rails/commands.rb
+aliases = {
+  "g"  => "generate",
+  "c"  => "console",
+  "s"  => "server",
+  "db" => "dbconsole",
+  "r"  => "runner"
+}
+
+command = ARGV.shift
+command = aliases[command] || command
+```
+
+<p>This code then shifts the command that was passed in to a variable and expands any alias that was used. The rest of the file is made up of a <code>case</code> statement which defines the behaviour for each command. We&rsquo;ll focus on the <code>server</code> command.</p>
+
+<h3>Starting up a Rails Server</h3>
+
+<p>When we run <code>rails server</code> (or <code>rails s</code>) the following code runs.</p>
+
+``` [rails] /railties/lib/rails/commands.rb
+when 'server'
+  # Change to the application's path if there is no config.ru file in current dir.
+  # This allows us to run script/rails server from other directories, but still get
+  # the main config.ru and properly set the tmp directory.
+  Dir.chdir(File.expand_path('../../', APP_PATH)) unless File.exists?(File.expand_path("config.ru"))
+
+  require 'rails/commands/server'
+  Rails::Server.new.tap { |server|
+    # We need to require application after the server sets environment,
+    # otherwise the --environment option given to the server won't propagate.
+    require APP_PATH
+    Dir.chdir(Rails.application.root)
+    server.start
+  }
+```  
+
+<p>This code requires the <code>/commands/server.rb</code> file, creates a new server instance, loads the application&rsquo;s config file then moves to the application&rsquo;s root directory and starts the server up.</p> 
+
+<p>The <code>server.rb</code> file is where <code>Rails::Server</code> is defined and this class inherits from <code>Rack::Server</code>. The <code>Rails::Server</code> class has a <code>start</code> method which outputs some familiar looking text and then calls <code>super</code> to start up the Rack server.</p>
+
+``` [rails] /railties/lib/rails/commands/server.rb
+def start
+  url = "#{options[:SSLEnable] ? 'https' : 'http'}://#{options[:Host]}:#{options[:Port]}"
+  puts "=> Booting #{ActiveSupport::Inflector.demodulize(server)}"
+  puts "=> Rails #{Rails.version} application starting in #{Rails.env} on #{url}"
+  puts "=> Call with -d to detach" unless options[:daemonize]
+  trap(:INT) { exit }
+  puts "=> Ctrl-C to shutdown server" unless options[:daemonize]
+
+  #Create required tmp directories if not found
+  %w(cache pids sessions sockets).each do |dir_to_make|
+    FileUtils.mkdir_p(Rails.root.join('tmp', dir_to_make))
+  end
+
+  super
+ensure
+  # The '-h' option calls exit before @options is set.
+  # If we call 'options' with it unset, we get double help banners.
+  puts 'Exiting' unless @options && options[:daemonize]
+end
+```
+
+<p>The Rack server expects a <code>rackup</code> file and by default it will look for a file called <code>config.ru</code> in the Rails application&rsquo;s root directory. This is nice as it means that our Rails 3 app is just a simple Rack application. You&rsquo;ll find a <code>config.ru</code> file in any Rails 3 application&rsquo;s root directory. All this file does is load the <code>/config/environment.rb</code> file and then tell Rack to run the application.</p>
+
+``` [app] /config.ru
+# This file is used by Rack-based servers to start the application.
+
+require ::File.expand_path('../config/environment',  __FILE__)
+run Blog::Application
+```
+
+<p>Whenever Rack receives a web request it will call <code>call</code> on the object it was passed and pass in any request arguments. This means that our blog application is a full Rack-compatible application and this is how it serves requests.</p>
+
+<h3>How The Rails Application Loads Up</h3>
+
+<p>So we know how the server starts up and serves requests, but we&rsquo;ve skipped the loading of the application itself. We&rsquo;ll dive into <code>environment.rb</code> next and step through the loading process.</p>
+
+``` [app] /config/environment.rb
+# Load the rails application
+require File.expand_path('../application', __FILE__)
+
+# Initialize the rails application
+Blog::Application.initialize!
+```
+
+<p>This file is fairly simple. It loads the app&rsquo;s <code>/config/application.rb</code> file then calls <code>initialize!</code> on our application. Let&rsquo;s open that file and see what it does.</p>
+
+``` [app] /config/application.rb
+require File.expand_path('../boot', __FILE__)
+
+require 'rails/all'
+
+if defined?(Bundler)
+  # If you precompile assets before deploying to production, use this line
+  Bundler.require(*Rails.groups(:assets => %w(development test)))
+  # If you want your assets lazily compiled in production, use this line
+  # Bundler.require(:default, :assets, Rails.env)
+end
+```
+
+<p>This file first loads the <code>boot.rb</code> file if it hasn&rsquo;t already been loaded. In our case it already has (we looked at it earlier and it sets up Bundler). Next it requires <code>rails/all</code> which loads the entire Rails framework. Let&rsquo;s see how that works.</p>
+
+``` [app] /railties/lib/rails/all.rb
+require "rails"
+
+%w(
+  active_record
+  action_controller
+  action_mailer
+  active_resource
+  rails/test_unit
+  sprockets
+).each do |framework|
+  begin
+    require "#{framework}/railtie"
+  rescue LoadError
+  end
+end
+```
+
+<p>This file loads up each part of the Rails framework by requiring the <code>railtie</code> file for that part of the framework. We won&rsquo;t go into each framework here but you can checkout each <code>railtie</code> to see what it does.</p>
+
+<p>Once <code>application.rb</code> has loaded the Rails framework it includes all of the gems in the application&rsquo;s <code>Gemfile</code> using Bundler by calling <code>Bundler.require</code>. This code has changed in Rails 3.1 and now it only loads the <code>assets</code> group of gems if the current environment is <code>development</code> or <code>test</code>. This means that if we&rsquo;re using precompiled assets the <code>assets</code> gems won&rsquo;t have to be loaded inside the production environment. The file includes some comments that tell you how to change this behaviour if you want to. Next we&rsquo;ll move on to the interesting part of the file, the part that creates the <code>Blog::Application</code> class.</p>
+
+``` [app] /config/application.rb
+module Blog
+  class Application < Rails::Application
+    config.encoding = "utf-8"
+    config.filter_parameters += [:password]
+    config.assets.enabled = true
+    config.assets.version = '1.0'
+  end
+end
+```
+
+<p>This class is passed to the Rack server in the Rackup file and is in itself a Rack application. The class inherits from <code>Rails::Application</code> so let&rsquo;s take a look at that. <code>Rails::Application</code> inherits from <code>Engine</code> which means that every Rails application is also a Rails engine. Applications have some additional functionality defined, though, and one such thing is you cannot have more that one <code>Rails::Application</code> subclass.</p> 
+
+<p>The code below is executed when a class inherits from <code>Rails::Application</code>. When this happens the <code>Rails.application</code> variable is set to <code>base.instance</code> which creates a new instance of our Rails application. This means that we can gain access to our Rails application from anywhere in it by calling <code>Rails.application</code>.</p> 
+
+
+``` [rails] /railties/lib/rails/application.rb
+class << self
+  def inherited(base)
+    raise "You cannot have more than one Rails::Application" if Rails.application
+    super
+    Rails.application = base.instance
+    Rails.application.add_lib_to_load_path!
+    ActiveSupport.run_load_hooks(:before_configuration, base.instance)
+  end
+end
+```
+
+<p>The way that this instance behaviour works is interesting. It makes the <code>Application</code> class a singleton. We can trace that functionality back through the call to <code>super</code> in the code above. This takes us into the <code>Engine</code> class and the first thing to note about <code>Engine</code> is that it inherits from <code>Railtie</code>. <code>Railtie</code> is used all over in Ruby gems. Anything that wants to integrate into a Rails application creates its own railtie. <code>Engine</code> also defines the <code>inherited</code> method but it doesn&rsquo;t do much of interest in there, just cleans up some of the backtrace.</p>
+
+``` [rails] /railties/lib/rails/application.rb
+def inherited(base)
+  unless base.abstract_railtie?
+    base.called_from = begin
+    # Remove the line number from backtraces making sure we don't leave anything behind
+      call_stack = caller.map { |p| p.sub(/:\d+.*/, '') }
+      File.dirname(call_stack.detect { |p| p !~ %r[railties[\w.-]*/lib/rails|rack[\w.-]*/lib/rack] 
+    end
+  end
+
+  super
+end
+```
+
+<p>The Railtie class doesn&rsquo;t inherit from another class, but it does include a module. Whenever this class is inherited the <code>Railtie::Configurable</code> module is included.</p>
+
+``` [rails] /railties/lib/rails/railtie.rb
+def inherited(base)
+  unless base.abstract_railtie?
+    base.send(:include, Railtie::Configurable)
+    subclasses << base
+  end
+end
+```
+
+<p>Note that this class keeps track of the classes that subclass it so that it can use them later on.</p>
+
+<p>The <code>Configurable</code> module is where our rabbit trail ends. It&rsquo;s here where the <code>instance</code> method that we call back in our <code>Application</code> class is defined. This method creates a new instance of the class and caches it so that the same instance is returned every time the method is called.</p> 
+
+``` [rails] /railties/lib/rails/railtie/configurable.rb
+require 'active_support/concern'
+
+module Rails
+  class Railtie
+    module Configurable
+      extend ActiveSupport::Concern
+
+      module ClassMethods
+        delegate :config, :to => :instance
+
+        def inherited(base)
+          raise "You cannot inherit from a #{self.superclass.name} child"
+        end
+
+        def instance
+          @instance ||= new
+        end
+
+        def respond_to?(*args)
+          super || instance.respond_to?(*args)
+        end
+
+        def configure(&block)
+          class_eval(&block)
+        end
+
+        protected
+
+        def method_missing(*args, &block)
+          instance.send(*args, &block)
+        end
+      end
+    end
+  end
+end
+```
+
+<p>This module also does something very interesting. It overrides <code>method_missing</code> so that every class method that is called on this class that isn&rsquo;t explicitly defined is passed to the instance. This works just like a singleton does, any method called on the class will act as an instance method.</p> 
+
+<p>Back in our <code>Application</code> class there are a number of instance methods defined and these can all act as class methods by being called directly on the class. We will often see these methods called on the <code>Blog</code> class itself and these will be delegated to the instance. We can see an example of this by going back to our application and looking at the <code>application.rb</code> file. In this file we see <code>config</code> called as a class method in our application to access the configuration.</p>
+
+``` [app] /config/application.rb
+module Blog
+  class Application < Rails::Application
+    config.encoding = "utf-8"
+
+    # Configure sensitive parameters which will be filtered from the log file.
+    config.filter_parameters += [:password]
+
+    # Enable the asset pipeline
+    config.assets.enabled = true
+
+    # Version of your assets, change this if you want to expire all your assets
+    config.assets.version = '1.0'
+  end
+end
+```
+
+<p>If we look at the internals of the <code>Application</code> class, however, we&rsquo;ll see the <code>config</code> method defined there, but as an instance method. The class call will delegate to this instance call.</p>
+
+``` [rails] /railties/lib/rails/application.rb
+def config
+  @config ||= Application::Configuration.new(find_root_with_flag("config.ru", Dir.pwd))
+end
+```
+
+<p>Notice that this method returns a new <code>Application::Configuration</code> object. We won&rsquo;t get into the configuration in this episode but it&rsquo;s worth taking a look at this class to see how it works.</p>
+
+<h3>Initializers</h3>
+
+<p>One thing we will take a look at are initializers. Initializers are small pieces of code that are run in a sequence and this is where most of the initialization process for the application takes place, Rails&rsquo; <code>Application</code> class has an <code>initialize!</code> method that runs all of the initializers.</p>
+
+``` [rails] /railties/lib/rails/application.rb
+def initialize!(group=:default)
+  raise "Application has been already initialized." if @initialized
+  run_initializers(group, self)
+  @initialized = true
+  self
+end
+```
+
+<p>This method is called from inside our application&rsquo;s <code>/config/environment.rb</code> file.</p>
+
+<p>So we know when our initializers are executed, but where are they defined? Most are defined in the <code>Engine</code> class and this class makes several calls to an <code>initializer</code> method. If you ever set up a Rails plugin or engine through a gem you&rsquo;ll be familiar with this as this is how you get a piece of code to run at the beginning of a Rails initialization process. There are various initializers in this class and some interesting things that happen in them such as the loading of the config files for the current environment and the loading of the initializers in the application&rsquo;s <code>config/initializers</code> directory. This is where the loading of a Rails application happens.</p> 
+
+<p>What about initializers defined outside of our application such as those in gems? If we look in the <code>Engine</code> class we&rsquo;ll find a method called <code>initializers</code>. This takes all the railties, including any gems railties, and fetches their initializers. It then returns them along with the application&rsquo;s railties so that they are all run.</p>
+
+``` [rails ] /railties/lib/rails/engine.rb
+def initializers
+  initializers = []
+  railties.all { |r| initializers += r.initializers }
+  initializers += super
+  initializers
+end
+```
+
+<p>That&rsquo;s it for our whirlwind tour of what happens as a Rails application starts up. If you want some related information on this topic  there are a couple of Rails Guides that are worth reading. &ldquo;<a href="http://guides.rubyonrails.org/initialization.html">The Rails Initialization Process</a>&rdquo; walks through some of what we&rsquo;ve covered here while another, &ldquo;<a href="http://guides.rubyonrails.org/configuring.html">Configuring Rails Applications</a>&rdquo; is worth reading as configuration is ties in closely with initialization.</p>
