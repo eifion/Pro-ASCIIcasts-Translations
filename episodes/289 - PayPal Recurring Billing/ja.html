@@ -23,8 +23,6 @@
 
 <p>PayPal-Recurringは他のgemと同じようにインストールします。アプリケーションの<code>Gemfile</code>に参照情報を追加して<code>bundle</code>コマンドを実行します。</p>
 
-
-
 ``` /Gemfile
 source "http://rubygems.org"
 
@@ -43,8 +41,6 @@ gem "jquery-rails"
 gem "stripe"
 gem "paypal-recurring"
 ```
-
-
 
 <h3>テスト用アカウントを設定する</h3>
 
@@ -68,8 +64,6 @@ gem "paypal-recurring"
 
 <p>初期化ファイルでは、この情報を使ってPayPal-Recurringを設定します。</p>
 
-
-
 ``` /app/config/initializers/paypal.rb
 PayPal::Recurring.configure do |config|
   config.sandbox = true
@@ -79,18 +73,13 @@ PayPal::Recurring.configure do |config|
 end
 ```
 
-
-
 <p>このファイルには秘密情報が含まれていて、本番稼働サーバでは同じ設定を使わないため、このファイルを<code>.gitignore</code>ファイルに追加しておきます。</p> 
 
 <h3>アプリケーションにExpress Checkoutを追加する</h3>
 
 <p>アプリケーションでExpress Checkoutを利用できるようにする方法はいくつかあります。チェックアウトボタンを使うか、ラジオボタンを2つ使って支払いをPayPalとクレジットカードのどちらでおこなうか選択させることもできます。今回はこれらの方法を組み合わせて使用します。最初に、新しく作成したsubscriptionビューのメールフィールドのすぐ上に次のコードを追加します。</p>
 
-
-
 ``` /app/views/subscriptions/new.html.erb
-
 <div class="field">
   <%= radio_button_tag :pay_with, :card, true %>
   <%= label_tag :pay_with_card do %>
@@ -109,26 +98,18 @@ end
 <div id="paypal_checkout" style="display:none">
   <%= image_tag("https://www.paypal.com/en_US/i/btn/btn_xpressCheckout.gif") %>
 </div>
-
 ```
-
-
 
 <p>このコードはページに2つのラジオボタンを追加します。1つ目には各種のクレジットカードの画像を付け、2つ目にはPayPalアイコンをつけます。それに加えて、PayPalのチェックアウトボタンを設定し、デフォルトではhiddenにしておきます。ユーザがPayPalを選択した場合はこのボタンを表示し、メールとクレジットカードのフィールドと送信ボタンを隠します。これはPayPalで支払いをおこなうユーザがもはやこれらを入力する必要がないからです。そのためにこれらのフィールドを、<code>id</code>を<code>billing_fields</code>に設定した<code>div</code>でラップすることにより、アプリケーションのJavaScriptがそれらを探して修正できるようにします。</p>
 
-
-
 ```/app/view/subscriptions/new.html.erb
-
 <div id="billing_fields">
   <div class="field">
     <%= f.label :email %>
     <%= f.text_field :email %>
   </div>
   <% if @subscription.stripe_card_token.present? %>
-    
     Credit card has been provided.
-  
   <% else %>
     <div class="field">
       <%= label_tag :card_number, "Credit Card Number" %>
@@ -151,10 +132,7 @@ end
     <%= f.submit "Subscribe" %>
   </div>
 </div>
-
 ```
-
-
 
 <p>ここでフォームをリロードすると新しく設定したラジオボタンが表示されます。</p>
 
@@ -163,8 +141,6 @@ end
 </div>
 
 <p>これでユーザは支払い方法をクレジットカードかPayPalから選択できるようになりました。次に、選択した支払い方法によってPayPalのチェックアウトボタンとクレジットカードフィールドを表示あるいは隠すためのCoffeeScriptコードを書きます。このアプリケーションにはすでにこのフォームに関連してCoffeeScriptコードがあり、ページのDOMの読み込みが完了したときにsetupForm関数が呼び出されるようになっています。この関数を修正して、PayPalによる支払いが選択されたときにはチェックアウトボタンを表示してクレジットカードフィールドを隠し、クレジットカードのラジオボタンがクリックされたときにはチェックアウトを隠してクレジットカードフィールドを表示するようにします。</p>
- 
-
  
 ```/app/assets/javascripts/subscriptions.js.coffee
 setupForm: -&gt;
@@ -187,8 +163,6 @@ setupForm: -&gt;
       true
 ```      
 
-      
-
 <p>ページをリロードしてPayPalでの支払いを選択すると、チェックアウトボタンが表示されてクレジットカードフィールドは隠されます。クレジットカードのラジオボタンをクリックすると、フィールドが再度表示され、ボタンが隠されます。</p>
 
 <div class="imageWrapper">
@@ -197,22 +171,13 @@ setupForm: -&gt;
 
 <p>PayPalボタンはまだ何にも関連づけられていないので、これから修正します。ボタンを、まだ作成していない<code>paypal_checkout_path</code>にリンクして、選択されたプランの<code>id</code>を渡します。これはPayPalに対してユーザがどのプランに登録するかを伝えなくてはいけないからです。</p>
 
-
-
 ``` /app/views/subscriptions/new.html.erb
-
 <div id="paypal_checkout" style="display:none">
   &lt;%= link_to image_tag("https://www.paypal.com/en_US/i/btn/btn_xpressCheckout.gif"), paypal_checkout_path(:plan_id =&gt; @subscription.plan_id) %&gt;
-
 </div>
-
 ```
 
-
-
 <p>routesファイルに<code>paypal_checkout_path</code>を作成し、<code>SubscriptionsController</code>に新規に作成する <code>paypal_checkout</code>アクションを指定します。</p>  
-
-  
 
 ``` /config/routes.rb
 Saas::Application.routes.draw do
@@ -223,13 +188,28 @@ Saas::Application.routes.draw do
 end
 ```
 
-
-
 <p>新規に作成したrouteを名前付きrouteにしなかったことに注意してください。Railsは指定したパスに基づいてこれを自動的に処理してくれます。</p>
 
 <p><code>SubscriptionsController</code>に新たに<code>paypal_checkout</code>アクションを作成します。</p>
 
-``` /app/controllers/subscriptions_controller.rb def paypal_checkout plan = Plan.find(params[:plan_id]) ppr = PayPal::Recurring.new( return_url: new_subscription_url(:plan_id =&gt; plan.id), cancel_url: root_url, description: plan.name, amount: plan.price, currency: "USD" ) response = ppr.checkout if response.valid?redirect_to response.checkout_url else raise response.errors.inspect end end ```
+```/app/controllers/subscriptions_controller.rb
+def paypal_checkout
+  plan = Plan.find(params[:plan_id])
+  ppr = PayPal::Recurring.new(
+    return_url: new_subscription_url(:plan_id => plan.id),
+    cancel_url: root_url,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
 
 <p>このアクションでは渡された<code>plan_id</code>パラメータを持ったプランを探して、新規の<code>PayPal::Recurring</code>オブジェクトを生成して新しい支払いを作成します。このオブジェクトが受け取るパラメータは、見れば意味がわかるでしょう。そしてそのオブジェクトに対して<code>checkout</code>を呼び出してPayPal APIを起動するとレスポンスが返されます。レスポンスが有効であれば、レスポンスの<code>checkout_url</code>にリダイレクトします。これはユーザがログインできるPayPalのURLです。レスポンスが無効だった場合はエラーを<code>raise</code>して、何が悪かったかをチェックできるようにします。</p>
 
@@ -240,8 +220,6 @@ end
 </div>
 
 <p>先に設定した購入者のテスト用アカウントの情報を使ってこのページにログインできます。これによって、処理しようとしているトランザクションを確認するためのページが表示されます。それに同意すると、アプリケーションの新しいsubscriptionページに戻されますが、URLには2つの新しいパラメータがついています。一つは<code>token</code>というもので、もう一つは<code>PayerID</code>です。PayPalでの支払いを完了するにはこれらが必要なので、<code>Subscription</code>モデルに新規フィールドを追加してそれらを保存できるようにします。<code>PayerID</code>パラメータがあったらsubscriptionの<code>payment_customer_token</code>をその値に設定し、一時的なトークンを<code>paypal_payment_token</code>として保存します。</p>
-
-
 
 ``` /app/controllers/subscriptions_controller.rb
 def new
@@ -254,31 +232,27 @@ def new
 end
 ```
 
-
-
 <p><code>paypal_payment_token</code>は一時的なものにすぎないので、仮の属性として<code>Subscription</code>モデルに追加します。</p>
 
 
-```/app/models/subscription.rb attr_accessor :stripe_card_token, :paypal_payment_token ``` 
+```/app/models/subscription.rb
+attr_accessor :stripe_card_token, :paypal_payment_token
+```
 
-<code>もう一つのパラメータのpayment_customer_tokenはより永続的なものなので、subscriptionsテーブルに保存します。新しいフィールドを追加するためのmigrationを作成し、rake db:migrateを実行してデータベースへの追加をおこないます。この対応をおこなっている間に、この処理の一環としてPayPalから与えられて後で保存する必要があるもう一つのトークンがあります。これもpaypal_recurring_profile_tokenとして今保存しておきます。</code> 
+<p>もう一つのパラメータの<code>payment_customer_token</code>はより永続的なものなので、subscriptionsテーブルに保存します。新しいフィールドを追加するためのmigrationを作成し、<code>rake db:migrate</code>を実行してデータベースへの追加をおこないます。この対応をおこなっている間に、この処理の一環としてPayPalから与えられて後で保存する必要があるもう一つのトークンがあります。これも<code>paypal_recurring_profile_token</code>として今保存しておきます。</p> 
 
-``` terminal $ rails g migration add_paypal_to_subscriptions paypal_customer_token:string paypal_recurring_profile_token:string ```
+``` terminal
+$ rails g migration add_paypal_to_subscriptions paypal_customer_token:string paypal_recurring_profile_token:string
+```
 
 <p>新しいsubscriptionページを見ると<code>paypal_customer_token</code>と<code>paypal_payment_token</code>の2つのフィールドがsubscriptionオブジェクトに保存されていますが、これらは新しいsubscriptionを作成するためにフォームでPOST送信される必要があります。新たに2つのhiddenフィールドをフォームに追加してこれらの値を保存し、フォームが送信されたときにそれらが送られるようにします。</p>
-
-
 
 ``` /app/views/subscriptions/new.html.erb
 <%= f.hidden_field :paypal_customer_token %>
 <%= f.hidden_field :paypal_payment_token %>
 ```
 
-
-
 <p>ユーザがPayPalにログインしたあとにsubscriptionフォームに戻ると、クレジットカードフィールドが再度ページに表示されます。ビューのコードには、Stripeの支払いが済んでいたらこれらのフィールドを隠すロジックがすでに組み込まれているので、これを拡張してPayPalトークンが存在するかどうかもチェックすることにします。</p>
-
-
 
 ``` /app/views/subscriptions/new.html.erb
 <% if @subscription.stripe_card_token.present? ||
@@ -287,21 +261,19 @@ end
 <% else %>
   <!-- Credit card fields omitted. -->
 <% end %>
-
 ```
-
-
 
 <p>ページをリロードすると、クレジットカードフィールドは隠されています。しかし支払い方法のフィールドの方は、ユーザがPayPalで支払うことがすでにわかっているのに、まだ表示されていています。同じ方法でチェックしてこれらを隠すことができますが、その前にロジックをモデルに移動してコードを少し整理します。subscriptionモデルに新たに<code>payment_provided?</code>メソッドを作成し、ビューでそれを使用してこれらのフィールドを表示するかどうかを決定するようにします。</p>
 
-``` /app/models/subscription.rb def payment_provided?stripe_card_token.present?|| paypal_payment_token.present?end ```
+``` /app/models/subscription.rb
+def payment_provided?
+  stripe_card_token.present? || paypal_payment_token.present?
+end
+```
 
 <p>同じくこのメソッドを使って、支払いが済んでいたら支払いオプションを隠します。</p>
 
-
-
 ``` /app/views/subscriptions/new.html.erb
-
 <% unless payment_provided? %>
 <div class="field">
   <%= radio_button_tag :pay_with, :card, true %>
@@ -318,14 +290,9 @@ end
   <% end %>
 </div>
 <% end %>
-
 ```
 
-
-
 <p>またクレジットカードフィールドを隠すコードもこれを使って整理します。</p>
-
-
 
 ```/app/views/subscriptions/new.html.erb
 <% if @subscription.payment_provided? %>
@@ -333,10 +300,7 @@ end
 <% else %>
   <!-- Credit card fields omitted. -->
 <% end %>
-
 ```
-
-
 
 <p>再度ページをリロードすると、支払い方法を選択する部分は隠されていて、あとはメールアドレスを入力して「subscribe」をクリックすればsubscriptionが完了するという状態です。</p>
 
@@ -345,8 +309,6 @@ end
 </div>
 
 <p>実はユーザはメールアドレスも入力する必要はありません。返された一時的トークンを使えば、PayPalにログインするときに入力した情報からチェックアウト時に必要な情報、つまりメールアドレスを取得することができます。</p>
-
-
 
 ``` /app/controllers/subscriptions_controller.rb
 def new
@@ -360,8 +322,6 @@ def new
 end
 ```
 
-
-
 <p>subscriptionフォームが、PayPalサイトから戻ってページが読み込まれるときにPayPalにリクエストを送信して、ログイン時に使用したメールアドレスを取得します。</p>
 
 <div class="imageWrapper">
@@ -370,19 +330,42 @@ end
 
 <p>最後は、ユーザがsubscribeをクリックしたときの支払い処理の扱いです。ここまでで実際の支払いはまだ発生していません。ユーザが支払いを承認しましたが、我々のところにはまだお金は届いていません。Subscriptionモデル内にはすでにStripeを介してクレジットカードによる支払いを処理する<code>save_with_payment</code>メソッドがあります。このメソッドを修正して、PayPalによる支払いも処理するようにします。<code>save_with_payment</code>のコードはStripe専用になっているので名前を<code>save_with_stripe_payment</code>に変更します。その上で新規に、<code>save_with_stripe_payment</code>メソッドかあるいは新規に作る<code>save_with_paypal_payment</code>メソッドのいずれかを呼び出す、より汎用的な<code>save_with_payment</code>メソッドを作成します。</p>
 
-``` /app/models/subscription.rb def save_with_payment if valid?if paypal_payment_token.present?save_with_paypal_payment else save_with_stripe_payment end end end ```
+``` /app/models/subscription.rb
+def save_with_payment
+  if valid?
+    if paypal_payment_token.present?
+      save_with_paypal_payment
+    else
+      save_with_stripe_payment
+    end
+  end
+end
+```
 
 <p>次にこの<code>save_with_paypal_payment</code>メソッドを新規に作成します。繰り返しの支払いをおこなうためには2つのことが発生する必要があります。最初の支払いをリクエストし、そして繰り返しのプロフィールを作成して支払いが毎月おこなわれるようにします。最初の支払いをリクエストするコードは次のようになります。</p>
 
-``` /app/models/subscription.rb def save_with_paypal_payment ppr = PayPal::Recurring.new( token: paypal_payment_token, payer_id: paypal_customer_token, description: plan.name, amount: plan.price, currency: "USD" ) response = ppr.request_payment if response.errors.present?raise response.errors.inspect end # 2. Make recurring profile end ```
+``` /app/models/subscription.rb
+def save_with_paypal_payment
+  ppr = PayPal::Recurring.new(
+    token: paypal_payment_token,
+    payer_id: paypal_customer_token,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.request_payment
+  if response.errors.present?
+    raise response.errors.inspect
+  end
+  # 2. Make recurring profile
+end
+```
 
 <p>このコードは新規に<code>PayPal::Recurring</code>オブジェクトを生成し、<code>token</code>や<code>payer_id</code>のような情報を渡して、支払いをリクエストします。これは<code>SubscriptionsController</code>にある<code>paypal_checkout</code>メソッドのコードに似ています。PayPalに渡される情報、特に<code>description</code>と<code>amount</code>が一致するということが重要です。そこでそれを専用のモデルに抽出することで<code>PayPal::Recurring</code>オブジェクトが複数のモデルやコントローラに散らばらないようにします。</p>
 
 <h3>PaypalPaymentクラスへのリファクタリング</h3>
 
 <p><code>PayPal::Recurring</code>オブジェクトを生成するコードをリファクタリングして、<code>app/models</code>の下に新しく置く<code>PaypalPayment</code>クラスに移動させます。新たにActiveRecordモデルを作成しないので、このクラスは<code>/lib</code>ディレクトリの下に入ると思われるかも知れませんが、モデルは常にActiveRecordから継承しなくてはいけないわけではありません。もしクラスがアプリケーション固有の情報を表している場合、そして今回のクラスはほとんど<code>Subscription</code>とやり取りするだけなのでそれに該当しますが、ここに置くのがもっとも適しています。処理の対象であるsubscriptionオブジェクトを<code>initialize</code>メソッドに渡してインスタンス変数に割り当てます。</p>
-
-
 
 ``` /app/models/paypal_payment.rb
 class PaypalPayment
@@ -392,13 +375,9 @@ class PaypalPayment
 end
 ```
 
-
-
 <p>ではリファクタリングを始めます。これが終わったときには、コードは今よりもずっときれいになってほとんどのPayPal固有のロジックは新規に作成する<code>PaypalPayment</code>クラスに入るはずです。</p> 
 
 <p>まず最初に、<code>Subscription</code>モデルの<code>save_with_paypal_payment</code>メソッドのコードを、<code>PaypalPayment</code>クラス内に新規に作成する<code>make_recurring_payment</code>メソッドの中に移動します。このクラスで新規の<code>PaypalPayment</code>オブジェクトを複数回生成することになるので、これを簡略化するためにpaypal用のメソッドも作成しておきます。</p>
-
-
 
 ``` /app/models/subscription.rb
 def paypal
@@ -410,37 +389,40 @@ def save_with_paypal_payment
 end
 ```
 
-
-
 <p><code>save_with_paypal_payment</code>から取り除いたコードは、新規の<code>make_recurring_payment</code> メソッドの中に移します。</p>
 
-``` /app/models/paypal_payment.rb def make_recurring ppr = PayPal::Recurring.new( token: @subscription.paypal_payment_token, payer_id: @subscription.paypal_customer_token, description: @subscription.plan.name, amount: @subscription.plan.price, currency: "USD" ) response = ppr.prequest_payment if response.errors.present?raise response.errors.inspect end # 2. Make recurring profile end ```
+```/app/models/paypal_payment.rb
+def make_recurring
+ ppr = PayPal::Recurring.new(
+    token: @subscription.paypal_payment_token,
+    payer_id: @subscription.paypal_customer_token,
+    description: @subscription.plan.name,
+    amount: @subscription.plan.price,
+    currency: "USD"
+  )
+  response = ppr.prequest_payment
+  if response.errors.present?
+    raise response.errors.inspect
+  end
+  # 2. Make recurring profile
+end
+```
 
 <p><code>Subscription</code>クラス内にいないため、トークンとプランを<code>@subscription</code>インスタンス変数から取得しなくてはいけないことに注意してください。</p>
 
 <p><code>PayPal::Recurring</code>の呼び出しはすべて、<code>SubscriptionController</code>から抽出して新しい<code>PaypalPayment</code>クラスに移動します。まず最初に<code>new</code>アクションのこの行、</p>
 
-
-
 ``` /app/controllers/subscription_controller.rb
 @subscription.email = PayPal::Recurring.new(token: params[:token]).checkout_details.email
 ```
 
-
-
 <p>を以下と置き換えます。</p>
-
-
 
 ``` /app/controllers/subscription_controller.rb
 @subscription.email = @subscription.paypal.checkout_details.email
 ```
 
-
-
 <p>これで、トークンを<code>params</code>からではなく、<code>subscription</code>オブジェクトから取得するようになりました。次に<code>checkout_details</code>メソッドを書きます。</p>
-
-
 
 `` /app/models/paypal_payment.rb
 def checkout_details
@@ -448,17 +430,30 @@ def checkout_details
 end
 ```
 
-
-
 <p>すでに<code>PaypalPayment</code>クラス内のメソッド間で重複部分が見られますが、これをリファクタリングする前にすべてをまずここに集めて、それから整理することにします。次に取り組むコードはSubscriptionsControllerのpaypal_checkoutメソッドです。</p>
 
-``` /app/controllers/subscriptions_controller.rb def paypal_checkout plan = Plan.find(params[:plan_id]) ppr = PayPal::Recurring.new( return_url: new_subscription_url(:plan_id =&gt; plan.id), cancel_url: root_url, description: plan.name, amount: plan.price, currency: "USD" ) response = ppr.checkout if response.valid?redirect_to response.checkout_url else raise response.errors.inspect end end ```
+``` /app/controllers/subscriptions_controller.rb
+def paypal_checkout
+  plan = Plan.find(params[:plan_id])
+  ppr = PayPal::Recurring.new(
+    return_url: new_subscription_url(:plan_id => plan.id),
+    cancel_url: root_url,
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  )
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
 
 <p>このコードのほとんどを<code>PaypalPayment</code>クラスに抽出することができますが、<code>subscription</code>を渡さなくてはいけないので、<code>plan</code>から新たに作成します。新たに作成するメソッドから取得する情報はチェックアウト用URLだけなので、名前を<code>checkout_url</code>にします。</p>
 
 <p>上のコードの中にはモデル層からはアクセスできない情報がいくつかあります。具体的には<code>new_subscription_url</code>と<code>root_url</code>です。これらをコントローラからのパラメータとして<code>options</code>ハッシュで渡します。</p>
-
-
 
 ```/app/controllers/subscriptions_controller.rb
 def paypal_checkout
@@ -470,25 +465,69 @@ def paypal_checkout
 end
 ```
 
-
-
 <p>新しい<code>checkout_url</code>モデルは以下のようになります。</p>
 
-``` /app/models/paypal_payment.rb def checkout_url(options) ppr = PayPal::Recurring.new( description: plan.name, amount: plan.price, currency: "USD" ).merge(options) response = ppr.checkout if response.valid?redirect_to response.checkout_url else raise response.errors.inspect end end ```
+``` /app/models/paypal_payment.rb
+def checkout_url(options)
+  ppr = PayPal::Recurring.new(
+    description: plan.name,
+    amount: plan.price,
+    currency: "USD"
+  ).merge(options)
+
+  response = ppr.checkout
+  if response.valid?
+    redirect_to response.checkout_url
+  else
+    raise response.errors.inspect
+  end
+end
+```
 
 <h3>Paypal Paymentクラスを整理する</h3>
 
 <p>PayPal関連のコードをすべて<code>PaypalPayment</code>クラスに移しましたが、3つの主要なメソッド間ではかなりの重複があります。これを整理するために、クラス内に新規にprivateの<code>process</code>メソッドを作成します。このメソッドは、引数として<code>PayPal::Recurring</code>オブジェクトから呼び出したいメソッドとオプションのハッシュをとり、<code>response</code>オブジェクトを返します。このオブジェクトから必要に応じてメソッドを呼び出すことができます。これによってクラス内の重複の大部分を排除できます。この作業が終わると<code>PaypalPayment</code>クラスは次のようになります。</p>
 
-``` /app/models/paypal_payment.rb class PaypalPayment def initialize(subscription) @subscription = subscription end def checkout_details process :checkout_details end def checkout_url(options) process(:checkout, options).checkout_url end def make_recurring process :request_payment # 2. Make recurring profile end private def process(action, options = {}) options = options.reverse_merge( token: @subscription.paypal_payment_token, payer_id: @subscription.paypal_customer_token, description: @subscription.plan.name, amount: @subscription.plan.price, currency: "USD" ) response = PayPal::Recurring.new(options).send(action) raise response.errors.inspect if response.errors.present?response end end ```
+``` /app/models/paypal_payment.rb
+class PaypalPayment
+  def initialize(subscription)
+    @subscription = subscription
+  end
+  
+  def checkout_details
+    process :checkout_details
+  end
+
+  def checkout_url(options)
+    process(:checkout, options).checkout_url
+  end
+  
+  def make_recurring
+    process :request_payment
+    # 2. Make recurring profile
+  end
+  
+  private
+  def process(action, options = {})
+    options = options.reverse_merge(
+      token: @subscription.paypal_payment_token,
+      payer_id: @subscription.paypal_customer_token,
+      description: @subscription.plan.name,
+      amount: @subscription.plan.price,
+      currency: "USD"
+    )
+    response = PayPal::Recurring.new(options).send(action)
+    raise response.errors.inspect if response.errors.present?
+    response
+  end
+end
+```
 
 <p>PayPalの処理のいくつかに関して必要以上の情報を渡していますが、PayPal-Recurring gemが要らない情報をフィルタリングしてくれるので問題ありません。</p>  
 
 <h3>make_recurringメソッドを完成させる</h3>
 
 <p>リファクタリングが終わったので、再度<code>make_recurring</code>メソッドに集中して、繰り返しのプロファイルを作成するためのコードを書かなくてはいけません。リファクタリングをおこなったおかけでこの作業は簡単です。必要なのは、<code>process</code>を呼び出してアクションとして<code>create_recurring_profile</code>を、支払いの頻度を定義するいくつかのオプションと一緒に渡すだけです。</p>
-
-
 
 ``` /app/models/paypal_payment.rb
 def make_recurring
@@ -497,13 +536,17 @@ def make_recurring
 end
 ```
 
-
-
 <p>PayPal-Recurringにどのようなオプションを渡して何をできるかについて興味があるなら、 <a href="https://github.com/fnando/paypal-recurring/blob/master/lib/paypal/recurring/request.rb">関連するソースコードファイル</a>を見て調べることができます。各オプションがリストになっていて、PayPal Name-Value Pair APIの対応するオプションがわかるように関連づけられています。</p> 
 
 <p>まだSubscriptionモデルの<code>save_with_paypal</code>メソッドで作業が残っています。recurring profileを作った後にPayPalから返される<code>profile_id</code>を保存できるようにして、完成させます。ここで呼び出される<code>make_recurring</code>メソッドは<code>profile_id</code>を含む<code>response</code>を返すので、これをデータベースに保存します。先に<code>paypal_payment_token</code>フィールド用のためのmigrationを作成したときに、合わせて<code>paypal_recurring_profile_token</code>フィールドを作ったので、この値をそこに保存できます。</p>
 
-``` /app/models/subscription.rb def save_with_paypal_payment response = paypal.make_recurring self.paypal_recurring_profile_token = response.profile_id save!end ```
+``` /app/models/subscription.rb
+def save_with_paypal_payment
+  response = paypal.make_recurring
+  self.paypal_recurring_profile_token = response.profile_id
+  save!
+end
+```
 
 <p>繰り返しのPayPalの支払いを行うのに必要なコードがすべて完成したので、うまく動作するか試してみましょう。ホームページでI’m in Heaven”プランを選択してsubscriptionページで「PayPal」ラジオボタンをクリックすると、PayPalのサイトにリダイレクトされます。先に作ったテスト用のユーザ名とパスワードでログインできます。ログインして支払いを行うことを確認すると元のサイトにリダイレクトされてsubscriptionが完了します。</p>
 
