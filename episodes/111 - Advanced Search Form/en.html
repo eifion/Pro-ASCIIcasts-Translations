@@ -1,0 +1,187 @@
+<p>Way back in <a href="http://railscasts.com/episodes/37-simple-search-form">episode 37</a> we showed how you can add a simple search form to a page. This form allows users to type in a simple query into a text field and get a list of the matching products back.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/846/original/E111I01.png" width="800" height="349" alt="Our simple search form."/>
+</div>
+
+<p>The search form performs a GET request that calls the <code>ProductsController</code>&rsquo;s <code>index</code> action, passing a <code>search</code> parameter to it. For most scenarios this is the best way to add searching to an application. Even if you want to have multiple search fields using a GET request for the search is a good approach. </p>
+
+<p>There may be times though when you want to add more advanced searching to an application and present a complicated form to the user. In these cases there may be too many parameters and too much data to send in a GET request. An example of such a form is the <a href="https://www.vbulletin.com/forum/search.php?search_type=1">advanced search page</a> on the vBulletin forums. This form has a over a dozen different fields for submitting various search parameters, probably more than you&rsquo;d want to submit via a GET request.</p>
+
+<p>So how should we handle this kind of situation in a Rails application? The key is not to treat search as a simple request but as a separate resource that has a model and which is backed by a database.</p>
+
+<h3>Using a Search Model</h3>
+
+<p>To add advanced searching to our simple e-commerce application we&rsquo;ll need to add a <code>Search</code> model and give it attributes to match the fields we want to have in our new advanced search form. We&rsquo;re going to allow users to search by keyword, category and minimum and maximum price.</p>
+
+``` terminal
+$ rails g model search keywords:string category_id:integer min_price:decimal max_price:decimal
+```
+
+<p>We&rsquo;ll need to migrate the database with <code>rake db:migrate</code> to add the new table.</p> 
+
+<p>Next we&rsquo;ll create a <code>SearchesController</code> to handle the form and show the results.</p>
+
+``` terminal
+$ rails g controller searches
+```
+
+<p>Searches should be a RESTful style resource so we&rsquo;ll add it as such in the routes file.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  root to: 'products#index'
+  resources :products
+  resources :searches
+end
+```
+
+<p>Now that we have a <code>Search</code> resource we&rsquo;ll add an advanced search link to the products page underneath the simple search form. This will point to the <code>SearchesController</code>&rsquo;s new action.</p>
+
+```/app/views/products/index.html.erb
+<h1>Products</h1>
+
+<%= form_tag products_path, method: :get do %>
+  <p>
+    <%= text_field_tag :search, params[:search] %>
+    <%= button_tag "Search", name: nil %>
+  </p>
+<% end %>
+
+<p><%= link_to "Advanced Search", new_search_path %></p>
+
+<div id="products">
+  <%= render @products %>
+</div>
+```
+
+<p>Next we&rsquo;ll create that action in the controller.</p>
+
+``` /app/controllers/searches_controller.rb
+class SearchesController < ApplicationController
+  def new
+    @search = Search.new
+  end
+end
+```
+
+<p>Then create a view to go along with it.</p>
+
+``` /app/views/searches/new.html.erb
+<h1>Advanced Search</h1>
+
+<%= form_for @search do |f| %>
+  <div class="field">
+    <%= f.label :keywords %><br />
+    <%= f.text_field :keywords %>
+  </div>
+  <div class="field">
+    <%= f.label :category_id %><br />
+    <%= f.collection_select :category_id, Category.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= f.label :min_price, "Price Range" %><br />
+    <%= f.text_field :min_price, size: 10 %> -
+    <%= f.text_field :max_price, size: 10 %>
+  </div>
+  <div class="actions"><%= f.submit "Search" %></div>
+<% end %>
+```
+
+<p>This form is fairly simple. It uses <code>form_for</code> on our <code>@search</code> object and has a text field for the <code>keywords</code>, a dropdown for the <code>category</code>, and two more text fields for the minimum and maximum price fields. We can now click on the advanced search link and view our new form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/847/original/E111I02.png" width="800" height="404" alt="The new advanced search form."/>
+</div>
+
+<p>We&rsquo;ll need a <code>create</code> action to handle the user submitting the form. This will create a new <code>Search</code> record then redirect to its show page to show the results so we&rsquo;ll write the show action now as well.</p>
+
+``` /app/controllers/searches_controller.rb
+class SearchesController < ApplicationController
+  def new
+    @search = Search.new
+  end
+  
+  def create
+    @search = Search.create!(params[:search])
+    redirect_to @search
+  end
+  
+  def show
+    @search = Search.find(params[:id])
+  end
+end
+```
+
+<p>We&rsquo;ll need a template for <code>show</code> on which we can display the results.</p>
+
+``` /app/views/searches/show.html.erb
+<h1>Search Results</h1>
+
+<%= render @search.products %>
+```
+
+<p>Our template uses a new products method on the <code>Search</code> model (we&rsquo;ll write this shortly) that returns a list of the matching products and <code>render</code>s it. This renders a partial for each <code>Product</code> and we&rsquo;ll write that partial now.</p>
+
+``` /app/views/products/_product.html.erb
+<div class="product">
+  <h2><%= link_to product.name, product %></h2>
+  <div class="details">
+    <%= number_to_currency(product.price) %>
+    <% if product.category %>
+      | Category: <%= product.category.name %>
+    <% end %>
+  </div>
+</div>
+```
+<p>Now we just have to add the <code>products</code> method to the <code>Search</code> model.</p> 
+
+``` /app/models/search.rb
+class Search < ActiveRecord::Base
+  def products
+    @products ||= find_products
+  end
+  
+private
+  def find_products
+    products = Product.order(:name)
+    products = products.where("name like ?", "%#{keywords}%") if keywords.present?
+    products = products.where(category_id: category_id) if category_id.present?
+    products = products.where("price >= ?", min_price) if min_price.present?
+    products = products.where("price <= ?", max_price) if max_price.present?
+    products
+  end
+end
+```
+
+<p>We&rsquo;ve cached the results of our search in an instance variable so that if <code>products</code> is called multiple times the search won&rsquo;t be performed more than once. The actual work has been delegated to a private method called <code>find_products</code>. The logic in this method is fairly specific to our application but it should be easy to modify for other searches. In this case it gets the products by name then adds where clauses for the <code>name</code>, <code>category_id</code>, <code>min_price</code> and <code>max_price</code>, if that parameter has been supplied by the user. Finally it returns the list of matching products.</p>
+
+<p>We could, if we wanted to, make the form even fancier and give the user the option to specify the order in which the results should be presented and the maximum number of results that should be returned.</p>
+
+<p>We can try out our form now. We&rsquo;ll search for products called &ldquo;catan&rdquo; in the &ldquo;Toys &amp; Games&rdquo; category with a minimum price of $10.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/848/original/E111I03.png" width="800" height="402" alt="Searching for products."/>
+</div>
+
+<p>This brings back the two matching products.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/849/original/E111I04.png" width="800" height="307" alt="The advanced search results."/>
+</div>
+
+<h3>Clearing Old Searches</h3>
+
+<p>One thing to be aware of when using this approach is that every advanced search made stores a record in the database. This means that the <code>searches</code> table can become very large so it&rsquo;s a good idea to regularly clear out old searches. We can easily create a <code>rake</code> task to do this.</p> 
+
+``` /lib/tasks/searches.rake
+desc "Remove searches older than a month"
+task :remove_old_searches => :environment do
+  Search.delete_all ["created_at < ?", 1.month.ago]
+end
+```
+<p>We need to make this task dependent on the Rails environment which we do by passing in the <code>:environment</code> option. We then delete any searches made over a month ago.</p>
+
+<p>Whenever this rake task is run it will remove old searches but ideally we want it to run automatically via a <code>cron</code> job. The best way to do this is to use the Whenever gem to set this up as a daily task. This gem was covered back in <a href="http://railscasts.com/episodes/164-cron-in-ruby">episode 164</a>.</p>
+
+<p>That is for our episode on creating an advanced search form. One advantage of this approach is that as the search is stored in the database it&rsquo;s easy to allow users to save searches and give them links to search they&rsquo;ve made.</p>
