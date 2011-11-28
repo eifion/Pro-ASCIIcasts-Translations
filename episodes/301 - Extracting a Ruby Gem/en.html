@@ -1,0 +1,455 @@
+<p>We&rsquo;ve shown how to create a Ruby gem before, most recently in <a href="http://railscasts.com/episodes/245-new-gem-with-bundler">episode 245</a>, but this time we&rsquo;re going to show you the whole process involved in making a gem across two episodes. In this episode we&rsquo;ll show you how to extract functionality from an existing application into a gem and test it while later we&rsquo;ll show you how to publish a gem and share it with the world.</p>
+
+<h3>The format_url Method</h3>
+
+<p>The code we want to extract is in a <code>Comment</code> model in a blogging applicaition.</p>
+
+``` /app/models/comment.rb
+def self.format_url(url)
+    if url.to_s !~ url_regexp && "http://#{url}" =~ url_regexp
+      "http://#{url}"
+    else
+      url
+    end
+  end
+
+  def self.url_regexp
+    /^https?:\/\/([^\s:@]+:[^\s:@]*@)?[-[[:alnum:]]]+(\.[-[[:alnum:]]]+)+\.?(:\d{1,5})?([\/?]\S*)?$/iux
+  end
+
+  before_validation do
+    self.website = self.class.format_url(website)
+  end
+
+  validates_format_of :website, with: url_regexp, message: "is not a valid URL"
+```  
+
+<p>This code handles the formatting and validation of URLs entered by the user when they add a comment to a post. If the validation fails an error message is shown.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/852/original/E301I01.png" width="800" height="542" alt="An error message shows when a user enters a bad URL."/>
+</div>
+
+<p>When the user enters a valid URL their comment is added. A valid URL doesn&rsquo;t need to  include the <code>http://</code> at the start, as long as it is otherwise valid this will be added before its saved to the database.</p> 
+
+<p>We want to extract this code out into a gem so that we can use it in other applications. It&rsquo;s always a good idea to extract a gem from an existing application as this way we have a good idea of the requirements and of the level of abstraction to use. Otherwise this can be a bit of a guessing game. Remember that Rails itself was initially extracted from an existing application.</p>
+
+<h3>Creating a New Gem</h3>
+
+<p>We&rsquo;ll be using Bundler to create our gem, as we did in episode 245. To create a new gem we use the <code>bundle gem</code> command.</p>
+
+``` terminal
+$ bundle gem url_formatter
+      create  url_formatter/Gemfile
+      create  url_formatter/Rakefile
+      create  url_formatter/.gitignore
+      create  url_formatter/url_formatter.gemspec
+      create  url_formatter/lib/url_formatter.rb
+      create  url_formatter/lib/url_formatter/version.rb
+Initializating git repo in /Users/eifion/url_formatter
+```
+
+<p>The first thing we should do is open the generated gemspec file and fill in the <code>homepage</code>, <code>summary</code> and <code>description</code> properties.</p> 
+
+``` /url_formatter.gemspec
+# -*- encoding: utf-8 -*-
+$:.push File.expand_path("../lib", __FILE__)
+require "url_formatter/version"
+
+Gem::Specification.new do |s|
+  s.name        = "url_formatter"
+  s.version     = UrlFormatter::VERSION
+  s.authors     = ["Eifion Bedford"]
+  s.email       = ["eifion@asciicasts.com"]
+  s.homepage    = "http://github.com/ryanb/url_formatter"
+  s.summary     = %q{Format and validate a URL in Active Record}
+  s.description = %q{Example of creating a Ruby gem for ASCIIcast #301}
+
+  s.rubyforge_project = "url_formatter"
+
+  s.files         = `git ls-files`.split("\n")
+  s.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n")
+  s.executables   = `git ls-files -- bin/*`.split("\n").map{ |f| File.basename(f) }
+  s.require_paths = ["lib"]
+
+  # specify any dependencies here; for example:
+  # s.add_development_dependency "rspec"
+  # s.add_runtime_dependency "rest-client"
+end
+```
+
+<p>Bundler keeps the version number in a separate file and it&rsquo;s a good idea to append <code>alpha</code> to the version number while working on a specific version of a gem so that everyone knows that this version is still under development. When we&rsquo;re ready to release that version we can remove this suffix or mark it as  a beta or release candidate version.</p>
+
+``` /lib/url_formatter/version.rb
+module UrlFormatter
+  VERSION = "0.0.1.alpha"
+end
+```
+
+<p>We shouldn&rsquo;t be afraid to release version 1.0 once we feel that our application is production-ready and has a stable API. There&rsquo;s a great article that&rsquo;s well worth reading on this subject called <a href="http://semver.org/">Semantic Versioning</a>. You might expect us to start coding the gem now but instead we&rsquo;re going to write the README. This approach is known as <a href="http://tom.preston-werner.com/2010/08/23/readme-driven-development.html">Readme-Driven Development</a>.</p>
+
+```/README.md
+# URL Formatter
+
+Format and validate a URL attribute in Active Record. This is an example gem created for [RailsCasts episode #301](http://railscasts.com/episodes/301-extracting-a-ruby-gem).
+
+
+## Installation
+
+Add to your Gemfile and run the `bundle` command to install it.
+
+ ```ruby
+ gem "url_formatter"
+ ```
+
+**Requires Ruby 1.9.2 or later.**
+
+
+## Usage
+
+Call `format_url` in an ActiveRecord class and pass the name of the attribute you wish to format into a URL and validate.
+
+ ```ruby
+ class Comment < ActiveRecord::Base
+   format_url :website
+ end
+ ```
+
+This will automatically add "http://" to the beginning of the `website` attribute upon saving if no protocol is present. It will also do validation to ensure it looks like a URL.
+
+
+## Development
+
+Questions or problems? Please post them on the [issue tracker](https://github.com/ryanb/url_formatter/issues). You can contribute changes by forking the project and submitting a pull request. You can ensure the tests passing by running `bundle` and `rake`.
+
+This gem is created by Ryan Bates and is under the MIT License.
+```
+
+<p>We now have a clear idea as to what the interface will look like to the user. You can see from the README that we want the gem to be a simple install through Bundler and that we want a simple <code>format_url</code> method that the user can add to an ActiveRecord model to format and validate a URL. We&rsquo;ll also need a licence file so that users know what they can do with our gem. We&rsquo;ll use the <a href="http://en.wikipedia.org/wiki/MIT_License">MIT licence</a>.</p>
+
+<p>Next we&rsquo;ll set up RSpec so that we can use it for testing. We&rsquo;ll need to define RSpec as a development dependency in the gemspec file. There&rsquo;s already a line of code in this file that we can just uncomment.</p>
+
+``` /url_formatter.gemspec
+s.add_development_dependency "rspec"
+```
+<p>To install RSpec we&rsquo;ll need to run <code>bundle</code> again.</p>
+
+<p>We want RSpec to default to displaying its output in colour. To do this we can create a <code>.rspec</code> file containing the default options we want.</p>
+
+``` terminal
+$ echo "--color" > .rspec
+```
+
+<p>While we&rsquo;re here we&rsquo;ll also make a <code>spec/url_formatter</code> directory and a <code>spec/spec_helper.rb</code> file.</p>
+
+``` terminal
+$ mkdir -p spec/url_formatter
+$ touch spec/spec_helper.rb
+```
+
+<p>Inside our new <code>spec_helper</code> file we&rsquo;ll just load our <code>url_formatter</code> class for now.</p>
+
+``` /spec/spec_helper.rb
+require 'url_formatter'
+```
+
+<p>We&rsquo;ll also add a few lines to the Rakefile so that we can run RSpec through Rake. This will load up the RSpec Rake task and make it the default task.</p>
+
+``` /Rakefile
+require "bundler/gem_tasks"
+require 'rspec/core/rake_task'
+
+RSpec::Core::RakeTask.new(:spec)
+task default: :spec
+```
+
+<p>Running <code>rake</code> now will run RSpec but as we don&rsquo;t have any spec files we&rsquo;ll just get an error.</p>
+
+``` terminal
+$ rake
+No examples matching ./spec{,/*/**}/*_spec.rb could be found
+```
+
+<p>Now we can write our first spec. If we look at the <code>Comment</code> model back in our Rails app we&rsquo;ll see that most of the logic is in two class methods called <code>format_url</code> and <code>url_regexp</code>. These are utility methods that we could put into any module in our gem. We already have some specs to test these methods so we&rsquo;ll move these into a new <code>url_formatter_spec</code> file in our gem before we move the code itself. Two of the specs in the application are specific to ActiveRecord and how it handles saving and validation so we&rsquo;ll leave these out for now.</p>
+
+The specs we&rsquo;ve copied over are defined for a <code>Comment</code> model but they should now be defined for the <code>UrlFormatter</code> module, so we&rsquo;ll need to do a quick find and replace on this code.
+
+``` /spec/url_formatter_spec.rb
+# encoding: utf-8
+require 'spec_helper'
+describe UrlFormatter do
+  describe ".format_url" do
+    it "adds http:// to a URL if not provided" do
+      UrlFormatter.format_url("example.com").should eq("http://example.com")
+    end
+
+    it "does not add http:// to a URL if already provided" do
+      UrlFormatter.format_url("http://example.com").should eq("http://example.com")
+    end
+
+    it "returns an invalid URL unchanged" do
+      UrlFormatter.format_url("foo bar").should eq("foo bar")
+      UrlFormatter.format_url(nil).should eq(nil)
+    end
+  end
+
+  describe ".url_regexp" do
+    it "matches valid URLs" do
+      [
+        'http://example.com/',
+        'HTTP://E-XAMLE.COM',
+        'https://example.co.uk./foo',
+        'http://example.com:8080',
+        'http://www.example.com/anything/after?slash',
+        'http://www.example.com?anything_after=question',
+        'http://user123:sEcr3t@example.com',
+        'http://user123:@example.com',
+        'http://example.com/~user',
+        'http://1.2.3.4:8080',
+        'http://ütf8.com',
+      ].each do |url|
+        url.should match(UrlFormatter.url_regexp)
+      end
+    end
+
+    it "does not match invalid URLs" do
+      [
+        "www.example.com",
+        "http://",
+        "http://example..com",
+        "http://e xample.com",
+        "http://example.com/foo bar",
+        "http://example", # technically valid but not what we want from user
+        "other://example.com", # we also don't want other protocols
+      ].each do |url|
+        url.should_not match(UrlFormatter.url_regexp)
+      end
+    end
+  end
+end
+```
+
+<p>When we run <code>rake</code> we&rsquo;ll see five failing specs as <code>format_url</code> and <code>url_regexp</code> aren&rsquo;t defined in our module. To fix this we just need to copy the code over from our application into our gem.</p>
+
+``` /lib/url_formatter.rb
+require "url_formatter/version"
+
+module UrlFormatter
+  def self.format_url(url)
+    if url.to_s !~ url_regexp && "http://#{url}" =~ url_regexp
+      "http://#{url}"
+    else
+      url
+    end
+  end
+
+  def self.url_regexp
+    /^https?:\/\/([^\s:@]+:[^\s:@]*@)?[-[[:alnum:]]]+(\.[-[[:alnum:]]]+)+\.?(:\d{1,5})?([\/?]\S*)?$/iux
+  end
+end
+```
+
+<p>When we run our specs now, they all pass.</p>
+
+``` terminal
+$ rake
+/Users/eifion/.rvm/rubies/ruby-1.9.2-p290/bin/ruby -S rspec ./spec/url_formatter_spec.rb
+.....
+
+Finished in 0.00153 seconds
+5 examples, 0 failures
+```
+
+<h3>Adding Validators To The Gem</h3>
+
+<p>Now that we&rsquo;ve moved the URL-related code into our new gem we can remove it from our Rails application&rsquo;s <code>Comment</code> model.</p>
+
+``` /app/models/comment.rb
+class Comment < ActiveRecord::Base
+  belongs_to :article
+
+  before_validation do
+    self.website = self.class.format_url(website)
+  end
+
+  validates_format_of :website, with: url_regexp, message: "is not a valid URL"
+end
+```
+
+<p>We want our gem to work so that adding the <code>format_url</code> method to a model will automatically generate the callback and formatting validators for the attribute we specify so we still need to move the <code>before_validation</code> callback and the format validator. This code is ActiveRecord-specific so we&rsquo;ll need to put in in a different location in our gem.</p> 
+
+<p>As we&rsquo;re extending ActiveRecord we&rsquo;ll put these methods in a module called ModelAdditions so we start by creating a <code>model_additions_spec</code> file. We&rsquo;ve already have two specs to test the validators in our application so we&rsquo;ll copy them here and change the class in the describe method from <code>Comment</code> to <code>UrlFormatter::ModelAdditions</code>.</p>
+
+``` /spec/url_formatter/model_additions_spec.rb
+require 'spec_helper'
+
+describe UrlFormatter::ModelAdditions do
+  it "adds http:// to URL upon saving" do
+    Comment.create!(website: "example.com").website.should eq("http://example.com")
+    Comment.create!(website: "http://example.com").website.should eq("http://example.com")
+  end
+
+  it "validates URL format" do
+    comment = Comment.new(website: "foo bar")
+    comment.should_not be_valid
+    comment.errors[:website].should eq(["is not a valid URL"])
+    comment.website = "example.com"
+    comment.should be_valid
+  end
+end
+```
+
+<p>There&rsquo;s a problem here, however. These specs rely on a <code>Comment</code> model that we don&rsquo;t have access to in our gem as we don&rsquo;t load ActiveRecord there. There are a couple of nice solutions that will handle this situation for us, one of which is a gem called <a href="https://github.com/maccman/supermodel">Supermodel</a>. This gem is great if you need to test the interaction between a gem and ActiveRecord. It uses ActiveModel internally with an memory-based store and simulates ActiveRecord without us having to set up a database. If we do need to use ActiveRecord with a database in our gem&rsquo;s specs we can use a different gem called <a href="https://github.com/Casecommons/with_model">WithModel</a>, but Supermodel will work perfectly well for us here as our gem only needs to interact with validations and callbacks.</p>
+
+<p>To add Supermodel to a gem we need to add it as a development dependency in the gemspec file and then run bundle to install it.</p>
+
+``` /url_formatter_specpec
+  # specify any dependencies here; for example:
+  s.add_development_dependency "rspec"
+  s.add_runtime_dependency "supermodel"
+```  
+  
+<p>Next we&rsquo;ll modify the <code>spec_helper</code> file and require <code>Supermodel</code> so that it&rsquo;s loaded.</p>
+
+``` /spec/spec_helper.rb
+require 'url_formatter'
+require 'supermodel'
+```
+
+<p>We can now use Supermodel to simulate the ActiveRecord <code>Comment</code> model in the specs. To use it we need to create a <code>Comment</code> class that inherits from <code>SuperModel::Base</code>.</p>
+
+``` /spec/url_formatter/model_additions.rb
+require 'spec_helper'
+
+class Comment < SuperModel::Base
+  extend UrlFormatter::ModelAdditions
+  format_url :website
+end
+
+describe UrlFormatter::ModelAdditions do
+  # specs omitted
+end
+```
+
+<p>To truly simulate what we&rsquo;re doing in the Rails application we&rsquo;ve called <code>format_url</code> on the <code>website</code> attribute in the <code>Comment</code> class here. This method is something we&rsquo;re still yet to write, but we&rsquo;ll do so in the <code>ModelAdditions</code> module. This model isn&rsquo;t available in our <code>Comment</code> class and so we&rsquo;ve had to extend the class with this module.</p>
+
+<p>When we run <code>rake</code> now we get an error message that says that RSpec doesn&rsquo;t know about our <code>ModelAdditions</code> module. This isn&rsquo;t surprising as we haven&rsquo;t written it yet, so lets do that now.</p>
+
+``` /lib/url_formatter/model_additions.rb
+module UrlFormatter
+  module ModelAdditions
+    def format_url(attribute)
+      
+    end
+  end
+end
+```
+
+<p>The validations and formatting will be handled inside the <code>format_url</code> method but let&rsquo;s try what we&rsquo;ve got for now.</p>
+
+<p>Files aren&rsquo;t autoloaded inside a Ruby gem so it&rsquo;s up to us to include them inside the <code>url_formatter</code> base file.</p> 
+
+``` /lib/url_formatter.rb
+require "url_formatter/version"
+require "url_formatter/model_additions"
+```
+
+<p>When we run our specs now we get two failures, one related to validation and one related to formatting. This is to be expected given that we haven&rsquo;t written the <code>format_url</code> method yet. We can copy the code from the same method in our Rails application and modify it a little to suit.</p>
+
+``` /lib/url_formatter/model_additions.rb
+module UrlFormatter
+  module ModelAdditions
+    def format_url(attribute)
+      before_validation do
+        send("#{attribute}=", UrlFormatter.format_url(send(attribute)))
+      end
+      validates_format_of attribute, with: UrlFormatter.url_regexp, message: "is not a valid URL"
+    end
+  end
+end
+```
+
+<p>When this code was in our <code>Comment</code> class we set the <code>website</code> attribute directly but here we need to make this dynamic based on the attribute that&rsquo;s passed in. To do that we call <code>send</code> wherever we called <code>website</code>. To get the formatted value we need to call <code>format_url</code> on the <code>UrlFormatter</code> module. Similarly in the format validator we&rsquo;ve replaced <code>:website</code> with <code>attribute</code> and have called <code>url_regexp</code> through <code>UrlFormatter</code>.</p>
+
+<p>When we run our specs now they still fail with an error about an undefined <code>before_validation</code> method. This is a Supermodel error as it doesn&rsquo;t completely simulate ActiveRecord or ActiveModel and seems not to support this callback. Fortunately this is easy to fix. We just have to modify the Comment class in the <code>model_additions_spec</code> file to include ActiveRecord&rsquo;s <code>Callbacks</code> module.</p>
+
+``` /spec/url_formatter/model_additions.rb
+class Comment < SuperModel::Base
+  include ActiveModel::Validations::Callbacks
+  extend UrlFormatter::ModelAdditions
+  format_url :website
+end
+```
+
+<p>This time when we run our specs they all pass. Our gem is now functionally complete and behaves like the equivalent code in our Rails application, but there&rsquo;s still one more thing we need to add to our gem to get it working.</p>
+
+<h3>Extending ActiveRecord</h3>
+
+<p>In our Rails application we want to be able to call <code>format_url</code> in any model without also having to manually  include <code>UrlFormatter::ModelAdditions</code>. To be able to do this we&rsquo;re going to have to include the <code>ModelAdditions</code> module in <code>ActiveRecord::Base</code> so that we don&rsquo;t have to do it every time we want to use <code>format_url</code>.</p>
+
+<p>Whenever we want to load something into Rails like this we should use a Railtie. There&rsquo;s an <a href="http://www.engineyard.com/blog/2010/extending-rails-3-with-railties/">excellent article</a> on this topic on EngineYard&rsquo;s blog. A Railtie allows us to add an initializer call that adds behaviour to a Rails application and we can use this to add our <code>ModelAdditions</code> to ActiveRecord.</p>
+
+<p>Our Railtie goes in the <code>/lib/url_formatter</code> directory.</p>
+
+``` /lib/url_formatter/railtie.rb
+module UrlFormatter
+  class Railtie < Rails::Railtie
+    initializer 'url_formatter.model_additions' do
+      ActiveSupport.on_load :active_record do
+        extend ModelAdditions
+      end
+    end
+  end
+end
+```
+
+<p>Our class has to inherit from <code>Rails::Railtie</code> and needs to call <code>initializer</code>. The initializer needs a unique name and its block is called when the Rails application starts up. We add functionality to ActiveRecord through ActiveSupport by calling <code>ActiveSupport.on_load</code> and the code inside the <code>on_load</code> block is executed in the scope of <code>ActiveRecord::Base</code>. By calling <code>extend ModelAdditions</code> in here we extend the module directly into ActiveRecord.</p>
+
+<p>This is all we need to do in our Railtie but the file won&rsquo;t be included automatically so we need to require it in our <code>url_formatter</code> file but only if <code>Rails</code> is defined. This way it isn&rsquo;t always included which is important when we run our specs.</p>
+
+``` /lib/url_formatter.rb
+require "url_formatter/version"
+require "url_formatter/model_additions"
+require "url_formatter/railtie" if defined? Rails
+```
+
+<p>This brings up a point: we haven&rsquo;t tested the code in the <code>railtie</code> file. It&rsquo;s difficult to do a high-level integration test through an entire Rails app in a gem. It&rsquo;s better to do these tests outside the gem in a separate Rails application.</p>
+
+<h3>Testing Our Gem in a Rails Application</h3>
+
+<p>Before we release our gem it&rsquo;s a good idea to test it in a Rails application and we&rsquo;ll test it in the app we extracted the gem&rsquo;s code from. As with any gem we start by adding it to the application&rsquo;s Gemfile but as our gem hasn&rsquo;t been published yet we need to use the <code>path</code> option to specify the path on our local hard drive where the gem is located. As ever we&rsquo;ll need to run <code>bundle</code> to make sure that the gem is included in our application.</p>
+
+``` /Gemfile
+gem 'url_formatter', path: '~/url_formatter'
+```
+
+<p>Our application&rsquo;s code is almost set up to use our new gem already. The <code>Comment</code> model already uses <code>format_url</code>, but we&rsquo;ll need to change <code>Comment</code>&rsquo;s specs a little as most of the specs there are now duplicated in our gem.</p>
+
+``` /spec/models/comment_spec.rb
+# encoding: utf-8
+require 'spec_helper'
+
+describe Comment do
+  it "adds http:// to URL upon saving" do
+    Comment.create!(website: "example.com").website.should eq("http://example.com")
+    Comment.create!(website: "http://example.com").website.should eq("http://example.com")
+  end
+
+  it "validates URL format" do
+    comment = Comment.new(website: "foo bar")
+    comment.should_not be_valid
+    comment.errors[:website].should eq(["is not a valid URL"])
+    comment.website = "example.com"
+    comment.should be_valid
+  end
+end
+```
+<p>We&rsquo;ll leave the other two specs in place so that we can check that the gem integrates correctly into our Rails application.</p>
+
+<p>Our application&rsquo;s specs pass when we run them so we&rsquo;ll start up our server and test the application in a browser. When we enter a comment with a bad URL now we see the same error message we saw before we moved the code into a gem so it seems that everything is working correctly.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/853/original/E301I02.png" width="800" height="427" alt="The page still works when we use our new gem."/>
+</div>
+
+<p>That&rsquo;s it for this episode We&rsquo;ve successfully moved some of our application&rsquo;s logic out into a Ruby gem but we haven&rsquo;t published our gem and share it with the world. This will be covered in the next pro episode.</p>
