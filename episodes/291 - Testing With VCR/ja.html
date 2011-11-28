@@ -1,0 +1,284 @@
+
+<p>外部Webサービスと通信するRailsアプリケーションを持っていたら、テストを楽にする<a href="https://www.relishapp.com/myronmarston/vcr">VCR</a>を使うことをお勧めします。Myron MarstonによるこのRuby gemで、テストの時に外部HTTPリクエストを「カセット」に記録することができます。テストが1度実行されたら、VCRは前に記録したリクエストとレスポンスを使用して、本物のリクエストとレスポンスをモック(mock)します。これを使うことによって、外部リクエストを行うことで余分な時間がかかってしまうことなしに実際のAPIをテストできるという利点があります。</p>
+
+<h3>VCRを使用してSOAPリクエストを記録する</h3>
+
+<p>今回のエピソードではVCRを使用して、前回作成したアプリケーションにテスト駆動開発によって機能を追加します。このアプリケーションはSOAP APIと通信してZipコードに対応する情報を取得します。APIとやりとりする部分のコードはまだ書いていないため、Zipコードを入力して「Lookup」をクリックしてもデータは何も表示されません。VCRとテスト駆動開発を用いてこのコードを追加していきます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/790/original/E291I01.png" width="800" height="390" alt="Zipコードを参照するアプリケーション"/>
+</div>
+
+<p><a href="http://railscasts.com/episodes/275-how-i-test">エピソード275</a>で紹介したのと同じ方法で設定したテスト環境と、空のrequest specがあります。新しい機能をテストするために、specにコードを書きます。</p>
+
+```/spec/request/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+end
+```
+
+<p>作成するspecは、Zipコードを入力したときに正しい都市名が表示されるかどうかをチェックします。ハイレベルなrequest specの優れている点は、ブラウザを操作する手順を再現できるということなので、ZipコードのページにアクセスしてテキストフィールドにZipコードを入力して「Lookup」ボタンをクリックするというコードを書くことができます。</p>
+
+``` /spec/request/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210" do
+    visit root_path
+    fill_in "zip_code", with: "90210"
+    click_on "Lookup"
+    page.should have_content("Beverly Hills") 
+  end
+end
+```
+
+<p>その機能はまだ作成していないため、テストを実行すると当然のこととして失敗します。これを成功させるために、前回書いたコードをペーストします。</p>
+
+```/app/models/zip_code.rb
+class ZipCode
+  attr_reader :state, :city, :area_code, :time_zone
+
+  def initialize(zip)
+    client = Savon::Client.new("http://www.webservicex.net/uszip.asmx?WSDL")
+    response = client.request :web, :get_info_by_zip, body: { "USZip" =&gt; zip }
+    data = response.to_hash[:get_info_by_zip_response][:get_info_by_zip_result][:new_data_set][:table]
+    @state = data[:state]
+    @city = data[:city]
+    @area_code = data[:area_code]
+    @time_zone = data[:time_zone]
+  end
+end
+```
+
+<p>テストスイートからの出力を見ると、テストは成功して外部データを取得するためのSOAPリクエストが作成されています。このケースではテストの実行に3秒かかっています。外部データと通信するテストをさらに追加すると、近々許容できないほど遅いテストスイートになってしまうでしょう。</p>
+
+<h3>VCRでテストをスピードアップする</h3>
+
+<p>VCRを使って、このテストの実行速度を速くします。そのために、アプリケーションに<code>vcr</code> gem とHTTP mockingを扱うためのもう一つのgemを追加します。VCRはいくつかのHTTP mockingライブラリをサポートしていますが、もっとも人気があるのは<a href="https://github.com/chrisk/fakeweb">FakeWeb</a>と<a href="https://github.com/bblimke/webmock">WebMock</a>です。 FakeWebの方が少し速い一方、WebMockはより多くの種類のHTTPライブラリをサポートしています。<a href="http://railscasts.com/episodes/276-testing-time-web-requests">エピソード276</a>でFakeWebを使用したので、ここでも再度それを使います。2つのgemを<code>:test</code>グループに追加して、<code>bundle</code>コマンドを実行してインストールします。</p>
+
+```/Gemfile
+group :test do
+  gem 'capybara'
+  gem 'guard-rspec'
+  gem 'vcr'
+  gem 'fakeweb'
+end
+```
+
+<p>VCRを使用できるようにするために設定をおこないます。VCRに対してカセットをどこに置くかと、どのライブラリをスタブ化するかを指定します。これを<code>/spec/support</code>ディレクトリに新たに作成する<code>vcr.rb</code>ファイルでおこないます。</p>
+
+``` /spec/support/vcr.rb
+VCR.config do |c|
+  c.cassette_library_dir  = Rails.root.join("spec", "vcr")
+  c.stub_with :fakeweb
+end
+```
+
+<p>もしVCRのバージョン2(現在はベータ)を使用している場合は、コマンドは<code>config</code>ではなく<code>configure</code>を使うことに注意してください。指定できる設定オプションについてさらに情報が必要であれば、<a href="https://www.relishapp.com/myronmarston/vcr">VCR</a>のRelishドキュメンテーションを参照してください。ここには役に立つ情報がたくさんあり、設定についてもまるごと1セクションが割かれています。</p>
+
+<p>Now that we’ve set up VCR our test fails again with a error message telling us that “Real HTTP connections are disabled.”.  </p>
+
+``` terminal
+1) ZipCodeLookup shows Beverly Hills given 90210
+   Failure/Error: click_on "Lookup"
+   FakeWeb::NetConnectNotAllowedError:
+     Real HTTP connections are disabled. 
+     Unregistered request: 
+GET http://www.webservicex.net/uszip.asmx?WSDL. You can use VCR 
+to automatically record this request and replay it later.  For
+more details, visit the VCR documentation at: 
+http://relishapp.com/myronmarston/vcr/v/1-11-3
+```
+
+<p>デフォルトではVCRは外部HTTPリクエストがVCRレコーダ以外で行われた場合に例外を投げるように設定されているので、その機能を利用するようにspecを修正します。specでVCRを有効化するために<code>VCR.use_cassette</code>を呼び出してカセットに名前をつけ、specの残りのコードをブロックの中に入れます。これでブロック内で出される外部HTTPリクエストはカセットに記録されます。(カセットの名前のスラッシュ(/)に注目してください。これはカセットがサブディレクトリに保存されることを意味します。)</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210" do
+    VCR.use_cassette "zip_code/90210" do
+      visit root_path
+      fill_in "zip_code", with: "90210"
+      click_on "Lookup"
+      page.should have_content("Beverly Hills") 
+    end
+  end
+end
+```
+
+<p>次回specを実行するときには、外部HTTPリクエストがおこなわれたらカセットに保存されます。呼び出したWebサービスの実行速度が少し遅くなり、これによってspecが終了するまでに時間がかかるかも知れません。しかし同じspecを2度目に実行すると、VCRがリクエストを再生しカセットからレスポンスを取得するので、ずっと高速に実行されます。(今おこなったspecでは、15.49秒対1.09秒という結果になりました。)</p>
+
+<p>カセットは<code>/spec/vcr</code>ディレクトリに保存されます。カセットの名前を<code>zip_code/90210</code>としたので、データは<code>zip_code</code>ディレクトリの下の<code>90210.yml</code>ファイルに保存されます。このファイルにはVCRが記録したものが、WSDLファイルから始まってリクエストとレスポンスと、すべて含まれます。</p>
+
+<h3>カセットの管理</h3>
+
+<p>今のところVCRは便利に使えていますが、使い続けるにしたがってすべてのカセットを管理するのが難しくなってきます。カセットを自動的に管理してくれるしくみがあれば便利なのですが、幸運なことに実はそれがあります。<a href="https://www.relishapp.com/myronmarston/vcr/docs/test-frameworks/usage-with-rspec">Relish documentationのRSpecページ</a>で<code>use_vcr_cassette</code>マクロについて言及されていてこれが便利なので、違うアプローチをとることにしてRSpecタグを代わりに使います。実現したいのは、VCRを使う必要があるspecに<code>:vcr</code>タグを追加したら自動的にVCRを使うように設定され、specの名前に基づいてカセットが作成されるという状態です。具体的には以下のようなものです。</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+require "spec_helper"
+
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210", :vcr do
+    visit root_path
+    fill_in "zip_code", with: "90210"
+    click_on "Lookup"
+    page.should have_content("Beverly Hills") 
+  end
+end
+```
+
+<p>前に作成した<code>vcr.rb</code>ファイルにRSpecの設定を追加することで、これをおこなうことが可能です。</p>
+
+```/spec/support/vcr.rb
+RSpec.configure do |c|
+  c.treat_symbols_as_metadata_keys_with_true_values = true
+  c.around(:each, :vcr) do |example|
+    name = example.metadata[:full_description].split(/\s+/, 2).join("/").underscore.gsub(/[^\w\/]+/, "_")
+    VCR.use_cassette(name) { example.call }
+  end
+end
+```
+
+<p>上のコードの1行目によって、<code>true</code>を指定しなくてもタグを追加できるようになります。つまり<code>:vcr</code>タグを追加するだけで、<code>:vcr =&gt; true</code>を書かなくてもよくなります。これにはRSpecの最新版が要求されるため、うまくいかなかい場合はアップグレードが必要かもしれません。</p> 
+
+<p>次に<code>around</code>ブロックがあります。これは<code>:vcr</code>タグ付きのspecが見つかる度に実行されます。ブロックの最初の行は多少複雑に見えるかも知れませんが、単にspecの記述に基づいてカセットの名前を決定しているだけです。この名前を使って、新規の<code>cassette</code>を作成し、specを呼び出します。spec毎に個別に<code>:vcr</code>のタグを付けると、specの記述に基づいた名前のカセットでVCRを使用するようになります。</p>
+
+<p>specを実行すると、前と変わらず成功し、<code>zip_code_lookup</code>ディレクトリに<code>shows_beverly_hills_given_90210.yml</code>という名前のカセットが作成されます。これらの名前は<code>it</code>と<code>describe</code>に渡される記述に基づいています。</p> 
+
+<h3>カセットの設定</h3>
+
+<p>ときどき個々のカセットの振る舞いを個別に設定したいときがあるでしょう。例えば<code>record</code>オプションを使用すると、いつVCRがリクエストをカセットに記録するかを細かく指定できます。デフォルトは<code>:once</code>で、これはカセットは一度記録され、それ以降specを実行するときにはそれが再生されます。これを<code>:new_episodes</code>に変更すると便利です。このオプションを使用すると、追加のリクエストがあるとそれが既存のカセットに追加されます。リクエストに秘密情報が含まれていて触りたくない、ただ再生するだけでいいという場合は<code>:none</code>を使えます。最後に、まだアプリケーションの開発中でAPIを使って実験中の場合は<code>:all</code>を指定するのがいいでしょう。この場合はカセットを再生することはなく、常に外部リクエストを発行します。このオプションは<code>use_cassette</code>を呼び出すときに指定します。例を以下に示します。</p>
+
+``` ruby
+VCR.use_cassette('example', :record =&gt; :new_episodes) do
+  response = Net::HTTP.get_response('localhost', '/', 7777)
+  puts "Response: #{response.body}"
+end
+```
+
+<p>specを介して<code>:vcr</code>タグを指定するときに、以下のように<code>record</code>というもう一つのオプションを追加することでこれらのオプションを指定できたら便利でしょう。</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+describe "ZipCodeLookup" do
+  it "shows Beverly Hills given 90210", :vcr, record: :all do
+     #spec omitted
+  end
+end
+```
+
+<p>RSpecの設定を修正したときに書いた<code>around</code>ブロックを修正することでこれが可能です。このブロックで<code>example.metadata</code>を呼び出しますが、この中のハッシュには各specについての多くの情報があり、オプションを渡した場合にはそれも含まれています。<code>slice</code>を使ってハッシュからこれらのオプションを抽出します。<code>:record</code>オプションと<code>:match_requests_on</code>オプションを取得します。しかしここで一つ問題があります。<code>metadata</code>は単純なハッシュではなく、<code>:example_group</code>というキーが残っているようです。そこで<code>except</code>メソッドを使って、このキーを除外します。これで<code>use_cassette</code>にオプションを渡すことができます。</p>
+
+``` /spec/support/vcr.rb
+RSpec.configure do |c|
+  c.treat_symbols_as_metadata_keys_with_true_values = true
+  c.around(:each, :vcr) do |example|
+    name = example.metadata[:full_description].split(/\s+/, 2).join("/").underscore.gsub(/[^\w\/]+/, "_")
+    options = example.metadata.slice(:record, :match_requests_on).except(:example_group)
+    VCR.use_cassette(name, options) { example.call }
+  end
+end
+```
+
+<p><code>:all</code>を指定したので、外部リクエストはspecを実行するごとに発行され、それによって実行にかかる時間に遅れが発生します。 </p>
+
+<h3>秘密情報の保護</h3>
+
+<p>APIに対して作業を行なっているときに、秘密キーを記録に含めたくないという場合もあるでしょう。これにフィルターをかけて除外することが重要です。今回のリクエストには該当するものはないですが、例を示すためにリクエストの<code>uri</code>フィールドを秘密にしなくてはいけないと仮定します。</p>
+
+```/spec/vcr/zip_code_lookup/shows_beverley_hills_given_90210.yml
+--- 
+- !ruby/struct:VCR::HTTPInteraction 
+  request: !ruby/struct:VCR::Request 
+    method: :get
+    uri: http://www.webservicex.net:80/uszip.asmx?WSDL
+    body: 
+    headers: 
+    # Rest of file omitted.
+```    
+
+<p><code>VCR.config</code>ブロックの中の<code>filter_sensitive_data</code>というオプションを使って秘密情報にフィルタをかけます。このオプションは2つの引数をとります。一つ目はカセットに秘密情報のプレースホルダとして書き込まれる文字列、二つ目は置き換えたいテキストを返すブロックです。</p>
+
+``` /spec/support/vcr.rb
+VCR.config do |c|
+  c.cassette_library_dir  = Rails.root.join("spec", "vcr")
+  c.stub_with :fakeweb
+  c.filter_sensitive_data('&lt;WSDL&gt;') { "http://www.webservicex.net:80/uszip.asmx?WSDL" }
+end
+```
+
+<p>specが次に実行されると、秘密情報は置き換えられました。</p>
+
+``` /spec/vcr/zip_code_lookup/shows_beverley_hills_given_90210.yml
+--- 
+- !ruby/struct:VCR::HTTPInteraction 
+  request: !ruby/struct:VCR::Request 
+    method: :get
+    uri: &lt;WSDL&gt;
+    body: 
+    headers: 
+    # Rest of file omitted.
+```
+
+<h3>外部サイトへのリダイレクトを処理する</h3>
+
+<p>場合によってはユーザを外部のwebサイトにリダイレクトしてユニークなトークンとともに元のサイトに戻させなくてはいけないときもあります。これは、Twitterなどの第三者を介して認証をしなくてはいけない場合や、PayPalで支払いをおこなう場合などに発生します。このサイトではそのような状況は発生しませんが、Railscastsサイトで検索を行うspecを書いてこれを模擬できます。</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+it "searches RailsCasts" do
+  visit "http://railscasts.com"
+  fill_in "search", with: "how I test"
+  click_on "Search Episodes"
+  page.should have_content('#275')
+end	
+```
+
+<p>Capybaraが外部サイトへのアクセスのしかたがわからないため、このテストは失敗します。Capybaraはその下で<code>Rack::Test</code>を利用していますが、これはRackアプリケーションをテストするためのものでHTTPの処理は全くわかりません。これへの対応として、Jeroen van Dijkによる<a href="https://github.com/jeroenvandijk/capybara-mechanize">Capybara-mechanize</a>を使用します。このgemはその下で<a href="https://github.com/tenderlove/mechanize">Mechanize</a>を利用して外部URLにアクセスします。利用している他のgemと同じ方法でインストールできるので、<code>:test</code>グループに追加し<code>bundle</code>コマンドを実行します。</p>
+
+``` /Gemfile
+group :test do
+  gem 'capybara'
+  gem 'guard-rspec'
+  gem 'vcr'
+  gem 'fakeweb'
+  gem 'capybara-mechanize'
+end
+```
+
+<p>インストールされたら、<code>spec_helper</code>ファイルでそれをrequireします。</p>
+
+```/spec/spec_helper.rb
+# This file is copied to spec/ when you run 'rails generate rspec:install'
+ENV["RAILS_ENV"] ||= 'test'
+require File.expand_path("../../config/environment", __FILE__)
+require 'rspec/rails'
+require 'capybara/rspec'
+require 'capybara/mechanize'
+# rest of file omitted.
+```
+
+<p>最後にspecを修正して、ドライバーとして<code>mechanize</code>を使用するようにします。</p>
+
+``` /spec/requests/zip_code_lookup_spec.rb
+it "searches RailsCasts", :vcr do
+  Capybara.current_driver = :mechanize
+  visit "http://railscasts.com"
+  fill_in "search", with: "how I test"
+  click_on "Search Episodes"
+  page.should have_content('#275')
+end
+```
+
+<p>これらがすべて設定されるとspecは再度成功します。他のspecと同じように、これも最初の一回は外部リクエストを発行し、その結果を対応した名前のカセットに保存します。</p>
+
+<h3>出力を整理する</h3>
+
+<p>VCRを使用してテストを実行すると多くの情報が表示されるためにテストの出力がうるさく感じるかも知れません。前回のエピソードで紹介したSavonライブラリを使用している場合、spec_helperファイルに数行のコードを追加することで、この出力を表示させないようにもできます。</p>
+
+``` /spec/spec_helper.rb
+HTTPI.log = false
+Savon.log = false
+```
+
+<p>specを実行すると、出力はずっときれいになりました。</p>
