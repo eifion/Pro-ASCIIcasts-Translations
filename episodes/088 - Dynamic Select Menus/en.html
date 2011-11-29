@@ -1,0 +1,145 @@
+<p>Below is a form for creating a new Person record. This form has two dropdown menus, one for selecting the person&rsquo;s country and one for their state or province.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/854/original/E088RI01.png" width="800" height="425" alt="The New Person form."/>
+</div>
+
+<p>This second menu contains every state, province or county for every country in the world so it&rsquo;s very long which makes it difficult to select the correct option. This form would be much better if the second menu was filtered when the user selected a country from the first so that only the relevant items were shown.</p>
+
+<h3>Grouping The State Options</h3>
+
+<p>Let&rsquo;s start by taking a look at the template that renders this form.</p>
+
+```/app/views/people/new.html.erb
+<h1>New Person</h1>
+
+<%= form_for @person do |f| %>
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :country_id %><br />
+    <%= f.collection_select :country_id, Country.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= f.label :state_id, "State or Province" %><br />
+    <%= f.collection_select :state_id, State.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="actions"><%= f.submit %></div>
+<% end %>
+```
+
+<p>The two dropdown menus are populated by using <code>collection_select</code> which is the usual way of populating a <code>belongs_to</code> association in a form. In our application a <code>Person</code> belongs both to a <code>Country</code> and a <code>State</code>.</p> 
+
+<p>We want to filter out the states that are shown depending on the <code>Country</code> that is selected and we&rsquo;ll do this all on the client with JavaScript, but right now there&rsquo;s no way for JavaScript to work our which states belong to a given country. We&rsquo;ll need to give a little more information about the states and a good way to do this is through a grouped menu.</p> 
+
+<p>Rails provides a <a href="http://apidock.com/rails/ActionView/Helpers/FormOptionsHelper/grouped_collection_select"><code>grouped_collection_select</code> method</a> which will do just this for us. This method takes quite a few arguments so it&rsquo;s worth taking a look at the documentation to see exactly how it works. Bear in mind though that if you&rsquo;re using <code>form_for</code> and calling this method through a form builder that the first argument isn&rsquo;t used and needs to be left out.</p>
+
+<p>We&rsquo;ll change our state <code>collection_select</code> to use <code>grouped_collection_select</code> instead.</p>
+
+``` /app/views/people/new.html.erb
+<%= f.grouped_collection_select :state_id, Country.order(:name), :states, :name, :id, :name, include_blank: true %>
+```
+<p>When we reload the page now the states are grouped by their country.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/855/original/E088RI02.png" width="800" height="427" alt="The states are now grouped by country."/>
+</div>
+
+<p>This not only provides a nicer user experience but it means that there&rsquo;s enough information in the dropdown list for JavaScript to determine which states belong to each country.</p>
+
+<h3>Adding The JavaScript</h3>
+
+<p>We can now start writing the code needed to write the filter which we&rsquo;ll write in CoffeeScript.</p>
+
+```/app/assets/javascripts/people.js.coffee
+jQuery ->
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change ->
+    country = $('#person_country_id :selected').text()
+    options = $(states).filter("optgroup[label=#{country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+    else
+      $('#person_state_id').empty()
+```      
+
+<p>In this script we first check that the DOM has loaded. Once it has we get the states dropdown by its <code>id</code>, which is <code>person_state_id</code>, and copy its HTML (including all the options it holds) into a variable. This is so that we have a copy of the full contents of the dropdown when we change it.</p> 
+
+<p>We need to change the states that are displayed whenever the user changes the country dropdown so we&rsquo;ve added a function that runs when its change event fires.  In this function we get the text of the selected item using jQuery&rsquo;s <code>:selected</code> selector and store it in a <code>country</code> variable.</p>
+
+<p>Next we need to filter the states so that only the selected country&rsquo;s states are shown.  We can use <code>filter</code> here to get the states for the selected country. The <code>states</code> variable holds the countries and states as a string of HTML a part of which is shown below so finding the correct <code>optgroup</code> by its label and getting its contents will filter the list as we want.</p>
+
+``` html
+<optgroup label="Australia">
+  <option value="173">Australian Capital Territory</option>
+  <option value="174">Northern Territory</option>
+  <option value="175">New South Wales</option>
+  <option value="176">Queensland</option>
+  <option value="177">South Australia</option>
+  <option value="178">Tasmania</option>
+  <option value="179">Victoria</option>
+  <option value="180">Western Australia</option>
+</optgroup>
+```
+
+<p>If any options are found we populate our state dropdown with them, otherwise we empty it.</p> 
+
+<p>We can try our form out now to see if it works. When we select a country, say Australia in the first dropdown, the second will now show just the states for that country. If we select a country with no states the second dropdown will be empty.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/856/original/E088RI03.png" width="800" height="459" alt="Only the states belonging to the selected country are now shown."/>
+</div>
+
+<p>It would be better if the second dropdown disappeared completely when the user selects a country that has no states. This is an easy fix to implement.</p>
+
+```/app/assets/javascripts/people.js.coffee
+jQuery ->
+  $('#person_state_id').parent().hide()
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change ->
+    country = $('#person_country_id :selected').text()
+    options = $(states).filter("optgroup[label=#{country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+      $('#person_state_id').parent().show()      
+    else
+      $('#person_state_id').empty()
+      $('#person_state_id').parent().hide()
+```      
+<p>The second dropdown will now be hidden by default and only shown when the user selects a country that has states.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/857/original/E088RI04.png" width="800" height="352" alt="The state dropdown is now hidden for countries without states."/>
+</div>
+
+<h3>Escaping Country Names</h3>
+
+<p>A country with special characters in its name, especially one with a single quote in its name, say <em>C&ocirc;te d&rsquo;Ivoire</em>, could cause a problem with our JavaScript code as we&rsquo;re embedding the name directly into a jQuery selector. It&rsquo;s sensible to escape these names so we&rsquo;ll alter our CoffeeScript code.</p>
+
+``` /app/assets/javascripts/people.js.coffee
+jQuery ->
+  $('#person_state_id').parent().hide()
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change ->
+    country = $('#person_country_id :selected').text()
+    escaped_country = country.replace(/([ #;&,.+*~\':"!^$[\]()=>|\/@])/g, '\\$1')
+    options = $(states).filter("optgroup[label=#{escaped_country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+      $('#person_state_id').parent().show()      
+    else
+      $('#person_state_id').empty()
+      $('#person_state_id').parent().hide()
+```      
+
+<p>Our dynamic menu will now work with any country name we select.</p>
+
+<p>That&rsquo;s it for this episode. It&rsquo;s interesting to compare the code we&rsquo;ve written here with the code from the <a href="http://railscasts.com/episodes/88-dynamic-select-menus">original episode 88</a> where we generated JavaScript dynamically. This solution is less obtrusive and works even when the user has JavaScript disabled in their browser.</p>
