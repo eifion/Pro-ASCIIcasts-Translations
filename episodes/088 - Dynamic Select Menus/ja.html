@@ -1,0 +1,147 @@
+<p>下の画面は、Personに新規レコードを作成するフォームです。このフォームには2つのドロップダウンメニューがあり、1つはその人の国を選択し、もう1つは州を選択するためのものです。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/854/original/E088RI01.png" width="800" height="425" alt="The New Person form."/>
+</div>
+
+<p>この2番目のメニューにはすべての国の州(state, province, county)が含まれるためにとても長くなり、選択しにくくなります。そこで、ユーザが1つ目のメニューで国を選択したときに、2つ目のメニューにフィルターがかかってその国に関連する項目だけが表示されれば、このフォームはとても使いやすくなるでしょう。</p>
+
+<h3>州の選択肢をグループ化する</h3>
+
+<p>まずこのフォームを表示しているテンプレートを見てみましょう。</p>
+
+```/app/views/people/new.html.erb
+<h1>New Person</h1>
+
+<%= form_for @person do |f| %>
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :country_id %><br />
+    <%= f.collection_select :country_id, Country.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= f.label :state_id, "State or Province" %><br />
+    <%= f.collection_select :state_id, State.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="actions"><%= f.submit %></div>
+<% end %>
+```
+
+<p>2つのドロップダウンメニューには<code>collection_select</code>を使ってデータが表示されますが、 これはフォームで<code>belongs_to</code>の関連のデータを表示する場合の通常のやり方です。今回のアプリケーションでは、<code>Person</code>は<code>Country</code>(国)と<code>State</code>(州)の両方に属して(belongs_to)います。</p> 
+
+<p>選択された国によって表示される州にフィルターをかけたいのですが、これをすべてクライアント側でJavaScriptを用いて行います。しかし現状ではどの州が選択された国に属するのかをJavaScriptが知るすべはありません。州について少し追加の情報を与える必要がありますが、それにはグループ化されたメニューを使う方法がいいでしょう。</p> 
+
+<p>Railsが提供する<a href="http://apidock.com/rails/ActionView/Helpers/FormOptionsHelper/grouped_collection_select"><code>grouped_collection_select</code>メソッド</a>を使えば、まさにこれをおこなうことができます。このメソッドは多くの引数をとるので、そのしくみを理解するためにドキュメントを見ておくことをお勧めします。ただし、注意しなくてはいけないのは、<code>form_for</code>を使用していてこのメソッドをform builderから呼び出している場合、1つ目の引数は使われず空にしておく必要があります。</p>
+
+<p>州の<code>collection_select</code>の代わりに<code>grouped_collection_select</code>を使います。</p>
+
+``` /app/views/people/new.html.erb
+<%= f.grouped_collection_select :state_id, Country.order(:name), :states, :name, :id, :name, include_blank: true %>
+```
+
+<p>ページをリロードすると州は国ごとにグループ化されています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/855/original/E088RI02.png" width="800" height="427" alt="州は国ごとにグループ化されている"/>
+</div>
+
+<p>これはよりよいユーザ体験を提供するだけでなく、ドロップダウンリストでどの州がどの国に属するかをJavaScriptが知るための情報があるということを意味します。</p>
+
+<h3>JavaScriptを追加する</h3>
+
+<p>次にフィルター用のコードを書き始めますが、これはCoffeeScriptで書きます。</p>
+
+```/app/assets/javascripts/people.js.coffee
+jQuery -&gt;
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change -&gt;
+    country = $('#person_country_id :selected').text()
+    options = $(states).filter("optgroup[label=#{country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+    else
+      $('#person_state_id').empty()
+```      
+
+<p>このスクリプトではまずDOMがロードされたことを確認します。DOMがロードされたら、州のドロップダウンを<code>id</code>(今回は<code>person_state_id</code>)から取得し、HTML(すべての選択肢を含む)を変数にコピーします。これは、ドロップダウンが変更されるときにすべての内容のコピーを保持している必要があるからです。</p> 
+
+<p>ユーザが国のドロップダウンを変更したら、表示される州も変更しなければいけないので、変更のイベント発生時に実行される関数を追加します。この関数ではjQueryの<code>:selected</code>セレクタを使って選択された項目のテキストを取得して<code>country</code>変数に保持します。</p>
+
+<p>次に州にフィルターをかけて、選択された国の州だけを表示させます。ここで<code>filter</code>を使って選択された国の州を取得します。<code>states</code>変数はHTML文字列として国と州を保持します(その一部を下に示しています)。 そこでラベルによって正しい<code>optgroup</code>を見つけて内容を取得することで、希望通りにリストにフィルターをかけることができます。</p>
+
+``` html
+<optgroup label="Australia">
+  <option value="173">Australian Capital Territory</option>
+  <option value="174">Northern Territory</option>
+  <option value="175">New South Wales</option>
+  <option value="176">Queensland</option>
+  <option value="177">South Australia</option>
+  <option value="178">Tasmania</option>
+  <option value="179">Victoria</option>
+  <option value="180">Western Australia</option>
+</optgroup>
+```
+
+<p>選択肢が見つかったら州のドロップダウンに値を埋め、見つからなかったらそれを空にします。</p> 
+
+<p>正しく動作するかを見るためにフォームを試してみます。1つ目のドロップダウンで国、例えばオーストラリア、を選択すると、2つ目にはオーストラリアの州だけが表示されるようになりました。州がない国を選択すると、2つ目のドロップダウンは空になります。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/856/original/E088RI03.png" width="800" height="459" alt="選択された国に属する州だけが表示される"/>
+</div>
+
+<p>ユーザが州を持たない国を選択した場合には、2つ目のドロップダウンがまったく表示されなくした方がいいでしょう。これを組み込むのは簡単です。</p>
+
+```/app/assets/javascripts/people.js.coffee
+jQuery -&gt;
+  $('#person_state_id').parent().hide()
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change -&gt;
+    country = $('#person_country_id :selected').text()
+    options = $(states).filter("optgroup[label=#{country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+      $('#person_state_id').parent().show()      
+    else
+      $('#person_state_id').empty()
+      $('#person_state_id').parent().hide()
+```      
+      
+<p>2つ目のドロップダウンはデフォルトでは隠されていて、ユーザが州がある国を選択した場合のみ表示されるようになりました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/857/original/E088RI04.png" width="800" height="352" alt="州のドロップダウンは州のない国では隠される"/>
+</div>
+
+<h3>国名をエスケープする</h3>
+
+<p>国名に特殊文字、特にシングルクォート(’)が含まれる場合(例えば<em>Côte d’Ivoire</em>)、直接jQueryセレクタに名前を埋めこんでいるため、JavaScriptコードで問題が発生します。このような名前はエスケープ処理した方がいいので、CoffeeScriptコードを修正します。</p>
+
+``` /app/assets/javascripts/people.js.coffee
+jQuery -&gt;
+  $('#person_state_id').parent().hide()
+  states = $('#person_state_id').html()
+  console.log(states)
+  $('#person_country_id').change -&gt;
+    country = $('#person_country_id :selected').text()
+    escaped_country = country.replace(/([ #;&amp;,.+*~\':"!^$[\]()=&gt;|\/@])/g, '\\$1')
+    options = $(states).filter("optgroup[label=#{escaped_country}]").html()
+    console.log(options)
+    if options
+      $('#person_state_id').html(options)
+      $('#person_state_id').parent().show()      
+    else
+      $('#person_state_id').empty()
+      $('#person_state_id').parent().hide()
+```      
+
+<p>動的なメニューはどの国名を選択しても正しく機能するようになりました。</p>
+
+<p>今回のエピソードは以上です。今回書いたコードを、<a href="http://railscasts.com/episodes/88-dynamic-select-menus">オリジナルのエピソード88</a>のJavaScriptを動的に生成するコードと比べてみると面白いでしょう。このソリューションはより控えめ(less obtrusive)で、ブラウザのJavaScriptが無効化されていても正しく動作します。</p>
