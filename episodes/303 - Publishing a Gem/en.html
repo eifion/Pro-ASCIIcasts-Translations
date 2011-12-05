@@ -1,0 +1,175 @@
+<p>In <a href="http://railscasts.com/episodes/301-extracting-a-ruby-gem">episode 301</a> we extracted a Ruby gem from an existing Rails application. This gem, called url_formatter, hasn&rsquo;t been published yet so it&rsquo;s only available on our development machine. This means that if we want to use the gem in an application we have to specify the path option in the gemfile.</p>
+
+``` /Gemfile
+gem 'url_formatter', path: '~/code/url_formatter'
+```
+
+<p>In this episode we&rsquo;ll publish the gem so that we can share it with the world and let anyone use it in their Rails applications.</p>
+
+<h3>Publishing The Source on Github</h3>
+
+<p>We&rsquo;ll host the gem&rsquo;s source code on <a href="https://github.com/">Github</a>. When we used Bundler to create the gem&rsquo;s initial files it created a git repository for us in this directory but we haven&rsquo;t committed any files to it yet so our first step is to do that. We&rsquo;ll add all the files and then make the initial commit.</p>
+
+``` terminal
+$ git add .
+$ git commit -m "Initial commit."
+```
+
+<p>Next we&rsquo;ll need to go to Github and create a <a href="https://github.com/repositories/new">repository</a>. (If you don&rsquo;t have a Github account you&rsquo;ll need to sign up first.) Once we&rsquo;ve done so we&rsquo;ll be taken to a page that shows the next steps we&rsquo;ll need to take. As we&rsquo;re adding an existing repository we just need to add the new remote and push the files up.</p>
+
+``` terminal
+$ git remote add origin git@github.com:eifion/url_formatter.git
+$ git push -u origin master
+```
+
+<p>Our project is now up on Github and anyone can use our url_formatter gem by copying its git URL, <code>git@github.com:eifion/url_formatter.git</code>, and using it in the Gemfile for a Rails application like this.</p>
+
+```/Gemfile
+gem 'url_formatter', git: 'git@github.com:eifion/url_formatter.git'
+```
+
+<p>When we run bundle for this application now it will pull this gem from Github instead of using the local version.</p>
+
+<h3>Publishing Our Gem</h3>
+
+<p>Our gem is now publicly available but hasn&rsquo;t been officially released. To this we need to publish our gem to <a href="http://rubygems.org/">RubyGems</a>. This is easy to do, we just have to run a couple of <code>gem</code> commands, but we need to do a couple of other things first.</p>
+
+<p>We have a version file in our gem&rsquo;s source code that contains the current version of the gem. In the last episode we set this to <code>0.0.1.alpha</code> as the first version of the gem was still in development.  Now that we&rsquo;re ready to release the first version of our gem we can remove the &lsquo;alpha&rsquo;.</p>
+
+``` /lib/url_formatter/version.rb
+module UrlFormatter
+  VERSION = "0.0.1"
+end
+```
+
+<p>As we&rsquo;re making the first official release of our gem it&rsquo;s a good idea to make a change log file where we can log the changes between each version. This is our first version so we&rsquo;ll simply note that this is the initial release.</p>
+
+``` /CHANGELOG
+## v0.0.1
+
+* Initial release
+```
+
+<p>It&rsquo;s important that we commit any outstanding changes before we build our gem so we&rsquo;ll commit the changed version file and the change log now.</p>
+
+``` terminal
+$ git add .
+$ git commit -m "Releasing v0.0.1"
+```
+
+<p>We&rsquo;re ready to build our gem now. We could use <code>gem build</code> and <code>gem push</code> here but Bundler provides a Rake task that will do all of this for us.</p>
+
+``` terminal
+$ rake release
+```
+
+<p>This command will also tag our release and push it to Github and RubyGems. You might be asked for your RubyGems login details when you do this, so if you haven&rsquo;t created a RubyGems account you&rsquo;ll need to do so. If we visit our Github repository now we&rsquo;ll see that that commit has been pushed and that we have a <code>v0.0.1</code> tag listed, too.</p> 
+
+<p>Now when someone wants to use our gem it&rsquo;s no longer necessary to use the <code>git</code> option as the gem has been officially published. To include the gem in a Rails app we only need to specify its name.</p>
+
+``` /Gemfile
+gem 'url_formatter'
+```
+
+<p>Now that the gem has been officially released we&rsquo;ll bump up the version number to the next release version. This is sign that we&rsquo;re developing the next version on the current codebase.</p> 
+
+``` /lib/url_formatter/version.rb
+module UrlFormatter
+  VERSION = "0.0.2.alpha"
+end
+```
+
+<h3>Continuous Integration</h3>
+
+<p>Next we&rsquo;ll show some tools and services that we can use to improve our gem now that it&rsquo;s been released. The first of these is <a href="http://travis-ci.org/">Travis CI</a>. This is a Continuous Integration server that will automatically run your tests in the background when you push changes up to Github. To get started with this we just need to visit the site and sign in through Github. Once we&rsquo;ve signed up we can go to our profile page where we&rsquo;ll see a list of our Github repositories and can choose the ones to enable for Travis CI. If we need to customize this functionality we can do so on the repository&rsquo;s Github site. In the Service Hooks section we can select the Travis Hook and configure the options there. Normally, though this shouldn&rsquo;t be necessary.</p>
+
+<p>When Travis CI tries to run our gem&rsquo;s tests it fails. We can find out why by clicking on the build number where we&rsquo;ll see the output that we&rsquo;d get from the console as it ran its commands. The error message we see says &ldquo;rake is not part of the bundle&rdquo; so we&rsquo;ll need to add this to our gem&rsquo;s dependencies.</p>
+
+``` /url_formatter.gemspec
+# specify any dependencies here; for example:
+s.add_development_dependency "rake"
+s.add_development_dependency "rspec"
+s.add_runtime_dependency "supermodel"
+```
+<p>Next we&rsquo;ll commit the changes and push them to Github.</p>
+
+``` terminal
+$ git commit -a -m "Adding rake dependency."
+$ git push origin master
+```
+
+<p>Travis will automatically pick up the commit to Github and will run the tests again. They fail again, though this isn&rsquo;t surprising as Travis CI is using Ruby 1.8.7 while our gem is written in Ruby 1.9 and uses some of the new 1.9 syntax. We need to tell Travis to use 1.9 for testing and we do so by creating a new file in our gem&rsquo;s root directory and specifying the version of Ruby to use there.</p>
+
+``` /.travis.yml
+rvm:
+  - 1.9.2
+```  
+  
+<p>If we want to support multiple Ruby versions we can do so here, but for this gem we only need to support 1.9.2. We&rsquo;ll need to add, commit and push this file for Travis to pick it up.</p>
+
+``` terminal
+$ git add .
+$ git commit -m "Added travis.yml file."
+$ git push origin master
+```
+
+<p>Travis will pick up this change and now all of the tests pass.</p>
+
+<p>Travis CI provides a build status image. We&rsquo;ll link to this in our project&rsquo;s README so that people browsing the project on Github can see its current status.</p>
+
+``` /README.md
+# URL Formatter [![Build Status](https://secure.travis-ci.org/eifion/url_formatter.png)](https://secure.travis-ci.org/eifion/url_formatter.png)
+```
+
+<p>The project&rsquo;s build status will now show on Github next to the README&rsquo;s title.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/865/original/E303I01.png" width="800" height="280" alt="The Travis CI image showing in our Github README."/>
+</div>
+
+<h3>Documentation</h3>
+
+<p>Next we&rsquo;ll focus on the gem&rsquo;s documentation. A README file often isn&rsquo;t enough so we&rsquo;ll share the RDocs on <a href="http://rubydoc.info/">RubyDoc.info</a>. Our gem doesn&rsquo;t have any inbuilt documentation yet but by adding comments to the source code we can add some. We should add documentation for every public method that&rsquo;s considered part of the API. Our gem only has one public method, <code>format_url</code> in the <code>ModelAdditions</code> module so we&rsquo;ll add some comments to it that describe how it works.</p>
+
+``` /lib/url_formatter/model_additions.rb
+module UrlFormatter
+  module ModelAdditions
+    # To format and validate a URL attribute, call <tt>format_url</tt>
+    # in any Active Record model class and pass it the name of an attribute.
+    #
+    #   class User < ActiveRecord::Base
+    #     format_url :website
+    #   end
+    #
+    # This will add a <tt>before_validation</tt> callback to add "http://" to
+    # the attribute if a protocol doesn't exist already. It then validates the
+    # format of the URL.
+    def format_url(attribute)
+      before_validation do
+        send("#{attribute}=", UrlFormatter.format_url(send(attribute)))
+      end
+      validates_format_of attribute, with: UrlFormatter.url_regexp, message: "is not a valid URL"
+    end
+  end
+end
+```
+
+<p>If any of your gem&rsquo;s public methods take arguments or a hash of options it&rsquo;s a good idea to describe those in detail here. Note that we&rsquo;re using some custom RDoc formatting in the comments; wrapping text in <code>tt</code> tags will turn that text into a code snippet. There&rsquo;s more information on the markup syntax on the <a href="http://rdoc.sourceforge.net/doc/">RDoc Readme page</a>. If we use YARD, which is supported by RubyDoc.info, there are some additional options that we can pass inside the documentation and the <a href="http://rubydoc.info/docs/yard/0.7.3">Getting Started guide</a> has more information on that.</p>
+
+<p>Once we&rsquo;ve committed and pushed the <code>model_additions</code> file we can add our project to RubyDoc.info. All we need to do is click the &ldquo;Add Project&rdquo; button on the home page, enter our repository&rsquo;s public git URL, in this case <code>git://github.com/eifion/url_formatter.git</code> and click &ldquo;Go&rdquo;. After we do that we&rsquo;ll be taken to our project&rsquo;s new documentation page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/866/original/E303I02.png" width="884" height="572" alt="Our documentation on RubyDoc.info."/>
+</div>
+
+<p>The generated documentation includes the gem&rsquo;s README and if we click on the &ldquo;ModelAdditions&rdquo; link in the left frame we&rsquo;ll see the documentation that we wrote for the <code>format_url</code> method.</p>
+
+<p>It&rsquo;s a good idea to link to this documentation from the README file so that anyone browsing the project on Github will see it. Each method listed has a permalink so that we can link to it if we need to. We should also add some documentation on our project&rsquo;s Github wiki.</p> 
+
+<p><a href="https://www.relishapp.com/">Relish</a> is another service that can help with documentation. It ties in nicely with Cucumber features so if your project uses Cucumber you should consider using it.</p> 
+
+<h3>Advertising Our New Gem</h3>
+
+<p>Now that our gem is well documented and tested its time to advertise it so that other Ruby developers know about it. One good place to do this is <a href="https://www.ruby-toolbox.com/">The Ruby Toolbox</a> which is an excellent resource for finding gems that solve a specific problem. We&rsquo;ll need to sign in to this site through Github to use it and once we have we can suggest that they add our project on <a href="https://www.ruby-toolbox.com/suggestions/new">this page</a>.</p>
+
+<p>We can also advertise our gem on <a href="http://www.rubyflow.com/">RubyFlow</a>. We can write a blog post here that shows what our gem does and how to use it. Once we feel that our gem is production ready and rock-solid we can share it with some podcasts such as <a href="http://rubyshow.com/">The Ruby Show</a> and <a href="http://ruby5.envylabs.com/">Ruby 5</a>.</p>
