@@ -1,0 +1,328 @@
+<p>Below is a form from a Rails application for creating a new <code>User</code> record with a name and an avatar.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/867/original/E182RI01.png" width="800" height="347" alt="The new user form."/>
+</div>
+
+<p>The image we&rsquo;ve chosen for this user is 1200 pixels wide but when we upload it it&rsquo;s automatically resized and cropped to make it 100 pixels square.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/868/original/E182RI02.png" width="800" height="374" alt="The new user's avatar is cropped automatically."/>
+</div>
+
+<p>We&rsquo;d like to give the user more control over how their avatar image is cropped by allowing them to pick the portion of the uploaded image they want to use as their avatar and that&rsquo;s what we&rsquo;ll do in this episode.</p>
+
+<h3>Creating The Crop Page</h3>
+
+<p>Our application currently has a User model and uses <a href="https://github.com/jnicklas/carrierwave">CarrierWave</a> to handle image uploads. (If you&rsquo;re unfamiliar with CarrierWave we covered it in <a href="http://railscasts.com/episodes/253-carrierwave-file-uploads">episode 253</a>.)</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  mount_uploader :avatar, AvatarUploader
+end
+```
+
+<p>In <code>User</code> we call <code>mount_uploader</code> with an <code>avatar</code> field and an <code>AvatarUploader</code> class. Here&rsquo;s what that class looks like:</p>
+
+``` /app/uploaders/avatar_uploader.rb
+# encoding: utf-8
+
+class AvatarUploader < CarrierWave::Uploader::Base
+  include CarrierWave::RMagick
+
+  storage :file
+
+  # Override the directory where uploaded files will be stored.
+  # This is a sensible default for uploaders that are meant to be mounted:
+  def store_dir
+    "uploads/#{model.class.to_s.underscore}/#{mounted_as}/#{model.id}"
+  end
+
+  version :thumb do
+    resize_to_fill(100, 100)
+  end
+end
+```
+
+<p>This class inherits from <code>RMagick</code> so that it can handle resizing and cropping images and it creates a thumbnail for each image called thumb resized to fit inside a 100x100 square.</p>
+
+<p>Once a user has entered their name, chosen an image and submitted the form we want them to be taken to a second page where they can choose the portion of the image they want to use as their avatar. Users can upload images at any size so we&rsquo;ll create another variation of each image that&rsquo;s resized to a known size and present that version to the user to crop their avatar from.</p>
+
+``` /app/uploaders/avatar_uploader.rb
+version :large do
+  resize_to_limit(600, 600)
+end
+```
+
+<p>We&rsquo;ve called this new version large and used <code>resize_to_limit</code> instead of <code>resize_to_fill</code> so that the image isn&rsquo;t cropped at all, just resized to fit within a 600 pixel square if the original is bigger than 600 pixels high or wide.</p>
+
+<p>In the <code>UsersController</code> we&rsquo;ll edit the <code>edit</code> and <code>update</code> actions so that the secondary page is shown when an avatar has been uploaded. If no image has been supplied we&rsquo;ll redirect as before.</p>
+
+``` /app/controllers/users_controller.rb
+class UsersController < ApplicationController
+
+  # index, show, new, edit and destroy actions omitted.
+
+  def create
+    @user = User.new(params[:user])
+    if @user.save
+      if params[:user][:avatar].present?
+        render :crop
+      else
+        redirect_to @user, notice: "Successfully created user."
+      end
+    else
+      render :new
+    end
+  end
+
+  def update
+    @user = User.find(params[:id])
+    if @user.update_attributes(params[:user])
+      if params[:user][:avatar].present?
+        render :crop
+      else
+        redirect_to @user, notice: "Successfully updated user."
+      end
+    else
+      render :new
+    end
+  end
+end
+```
+
+<p>We could make a dedicated crop action so that the user can crop their image at any time but this will work for us here.</p> 
+
+<p>Next we&rsquo;ll write the new crop template. All we do on this page for now is show the large version of the uploaded image.</p>
+
+``` /app/views/users/crop.html.erb
+<h1>Crop Avatar</h1>
+<%= image_tag @user.avatar_url(:large) %>
+```
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/869/original/E182RI03.png" width="800" height="593" alt="The crop page."/>
+</div>
+
+<p>We&rsquo;ll need to add some functionality to enable users to crop this large image and we&rsquo;ll use a jQuery plugin called <a href="http://deepliquid.com/content/Jcrop.html">jCrop</a> to help with this. We need to download this plugin then copy <code>Jcrop.gif</code> into <code>/vendor/assets/images</code>, <code>jquery.Jcrop.js</code> into <code>/vendor/assets/javascripts</code> and <code>jquery.Jcrop.css</code> into <code>/vendor/assets/stylesheets</code>.</p> 
+
+<p>The image file is referenced by the stylesheet and while this works in development mode in production Rails will add a hash to the end of the image name which may cause problems. If it does we can either move the image into the public assets directory, change the stylesheet so that it dynamically references the image correctly or turn off hashing in production.</p>
+
+<p>We&rsquo;re in development mode so we don&rsquo;t need to worry about this for now but we do have to include the files we&rsquo;ve added in the appropriate manifest files. First we&rsquo;ll add Jcrop&rsquo;s JavaScript file after jQuery in the JavaScript manifest.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require jquery.Jcrop
+//= require_tree .
+```
+
+<p>Similarly we&rsquo;ll need to reference Jcrop&rsquo;s stylesheet in the CSS manifest.</p>
+
+``` /app/assets/stylesheets/application.css
+/*
+ *= require jquery.Jcrop
+ *= require_self
+ *= require_tree . 
+*/
+```
+
+<p>We&rsquo;ll need to enable Jcrop on our large avatar image and we&rsquo;ll do that in the <code>users</code> CoffeeScript file. Before we do so we&rsquo;ll need to give the large image an <code>id</code> so that we can reference it from JavaScript.</p>
+
+``` app/views/users/crop.html.erb
+<h1>Crop Avatar</h1>
+<%= image_tag @user.avatar_url(:large), id: "cropbox" %>
+```
+
+<p>To add Jcrop to this image we just need to call <code>Jcrop()</code> on it.</p>
+
+``` /app/assets/javascripts/users.js.coffee
+jQuery ->
+  $('#cropbox').Jcrop()
+```  
+
+<p>We may have to restart our Rails server for these changes to be picked up but once we have we&rsquo;ll be able to select an area of the image.</p>
+
+<h3>Sending The Cropped Area Back to The Server</h3>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/870/original/E182RI04.png" width="800" height="593" alt="Users can now select an area to crop."/>
+</div>
+
+<p>We&rsquo;ve got JCrop working now but we still need a way to submit the co-ordinates of the cropped area back to the server. Before we do that we&rsquo;ll add some options to JCrop to restrict the area that can be selected. While we do this we&rsquo;ll also move the code into a class as we&rsquo;re going to have to write a lot more JavaScript code before we&rsquo;re done.</p> 
+
+``` /app/assets/javascripts/users.js.coffee
+jQuery ->
+  new AvatarCropper()
+  
+class AvatarCropper
+  constructor: ->
+    $('#cropbox').Jcrop
+      aspectRatio: 1
+      setSelect: [0, 0, 600, 600]
+```      
+
+<p>Our JCrop code is now in an <code>AvatarCropper</code> class and we&rsquo;ve set two options. The first restricts the aspect ratio of the selected area so that the selected part of the image is square; the second sets the initial selected area and here we&rsquo;ve chosen to select the largest possible square from the image.</p>
+
+<p>We need to pass the selected cropping area back to the server so that we can crop the image. We can do that in the <code>crop</code> template by adding a form with four fields that will store the coordinates of the cropped area. These fields will be hidden in the final form but for now we&rsquo;ll make them text fields so that we can see what&rsquo;s being passed in.</p>
+
+``` /app/views/users/crop.html.erb
+<h1>Crop Avatar</h1>
+<%= image_tag @user.avatar_url(:large), id: "cropbox" %>
+
+<%= form_for @user do |f| %>
+  <div class="actions">
+    <% %w[x y w h].each do |attribute| %>
+      <%= f.text_field "crop_#{attribute}"%>
+    <% end %>
+    <%= f.submit "Crop" %>
+  </div>
+<% end %>
+```
+
+<p>Our <code>User</code> model doesn&rsquo;t have these <code>crop</code> attributes so we&rsquo;ll add them as virtual attributes.</p> 
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  mount_uploader :avatar, AvatarUploader
+  attr_accessor :crop_x, :crop_y, :crop_w, :crop_h
+end
+```
+
+<p>We&rsquo;ll need to modify our JavaScript code so that the form fields are populated when the selected area changes. JCrop has a couple of event callbacks that will help with this: <code>onSelect</code> and <code>onChange</code>. These take a function so we&rsquo;ll create an <code>update</code> function that will be called each time the selected area changes.</p>
+
+``` /app/assets/javascripts/user.js.coffee
+jQuery ->
+  new AvatarCropper()
+  
+class AvatarCropper
+  constructor: ->
+    $('#cropbox').Jcrop
+      aspectRatio: 1
+      setSelect: [0, 0, 600, 600]
+      onSelect: @update
+      onChange: @update
+    
+  update: (coords) =>
+    $('#user_crop_x').val(coords.x)
+    $('#user_crop_y').val(coords.y)
+    $('#user_crop_w').val(coords.w)
+    $('#user_crop_h').val(coords.h)
+```    
+
+<p>The <code>update</code> function has the coordinates passed to it in an object and we use this to set the values of the form fields. Note that we use the &lsquo;fat arrow&rsquo; in this function to preserve the context. When we reload the cropping page now we&rsquo;ll see the coordinates for the currently selected area and these will update automatically as we move the crop area around.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/871/original/E182RI05.png" width="800" height="631" alt="The coordinates of the selected area are now shown in the form."/>
+</div>
+
+<p>When the form is submitted the <code>User</code> model is updated with the <code>crop</code> attributes from the form. We can use an <code>after_update</code> callback to trigger the cropping.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  mount_uploader :avatar, AvatarUploader
+  attr_accessor :crop_x, :crop_y, :crop_w, :crop_h
+  after_update :crop_avatar
+  
+  def crop_avatar
+    avatar.recreate_versions! if crop_x.present?
+  end
+end
+```
+
+<p>The callback calls a new <code>crop_avatar</code> method which tells CarrierWave to recreate the images to crop them, though only if the <code>crop</code> attributes have been passed in.</p>
+
+<p>In the <code>AvatarUploader</code> class the thumbnail version is recreated when <code>crop_avatar</code> is called. We&rsquo;ll add some code to this method so that the image is cropped based on the coordinates in the <code>User</code> model.</p>
+
+``` /app/uploaders/avatar_uploader.rb
+version :thumb do
+  process :crop
+  resize_to_fill(100, 100)
+end
+  
+def crop
+  if model.crop_x.present?
+    manipulate! do |img|
+      x = model.crop_x.to_i
+      y = model.crop_y.to_i
+      w = model.crop_w.to_i
+      h = model.crop_h.to_i
+      img.crop!(x, y, w, h)
+    end
+  end
+end
+```
+
+<p>We can call <code>model</code> at any time in the <code>AvatarUploader</code> class to reference the <code>User</code> model so after checking that the <code>crop_x</code> value is present we crop the image. In CarrierWave we can call <code>manipulate!</code> to get the current image from ImageMagick and then call <code>crop!</code> on it to change the cropping value based off the cropping coordinates from the <code>User</code> model.</p> 
+
+<p>When we try this it doesn&rsquo;t work. An area of the image is cropped but it&rsquo;s not the one we selected. The problem is that the image we crop from is the original full resolution image, but the coordinates come from the large version of the image. A quick fix for this is to resize the original image to the size of the large image before we drop it.</p>
+
+``` /app/uploaders/avatar_uploader.rb
+def crop
+  if model.crop_x.present?
+    resize_to_limit(600, 600)
+    manipulate! do |img|
+      x = model.crop_x.to_i
+      y = model.crop_y.to_i
+      w = model.crop_w.to_i
+      h = model.crop_h.to_i
+      img.crop!(x, y, w, h)
+    end
+  end
+end
+```
+
+<p>When we try this now the thumbnail image is cropped correctly based on the area we selected.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/872/original/E182RI06.png" width="800" height="338" alt="The cropped image is now correct."/>
+</div>
+
+<h3>Adding a Preview</h3>
+
+<p>Now that we know this is working, we&rsquo;ll replace the text fields on the cropping page with hidden field and add some code to add a live preview to the page.</p>
+
+``` /app/views/users/crop.html.erb
+<h1>Crop Avatar</h1>
+<%= image_tag @user.avatar_url(:large), id: "cropbox" %>
+
+<h4>Preview</h4>
+<div style="width:100px; height:100px; overflow:hidden;">
+  <%= image_tag @user.avatar.url(:large), :id => "preview" %>
+</div>
+
+<%= form_for @user do |f| %>
+  <div class="actions">
+    <% %w[x y w h].each do |attribute| %>
+      <%= f.hidden_field "crop_#{attribute}"%>
+    <% end %>
+    <%= f.submit "Crop" %>
+  </div>
+<% end %>
+```
+
+<p>We&rsquo;ll also need some JavaScript to update the preview image as the selected image changes so we&rsquo;ll call a new <code>updatePreview</code> function that will do this when the selected area changes.</p>
+
+``` /app/assets/javascripts/user.js.coffee
+  update: (coords) =>
+    $('#user_crop_x').val(coords.x)
+    $('#user_crop_y').val(coords.y)
+    $('#user_crop_w').val(coords.w)
+    $('#user_crop_h').val(coords.h)
+    @updatePreview(coords)
+    
+  updatePreview: (coords) =>
+    $('#preview').css
+      width: Math.round(100/coords.w * $('#cropbox').width()) + 'px'
+      height: Math.round(100/coords.h * $('#cropbox').height()) + 'px'  
+      marginLeft: '-' + Math.round(100/coords.w * coords.x) + 'px'
+      marginTop: '-' + Math.round(100/coords.h * coords.y) + 'px'
+```      
+
+<p>When we move or resize the selected area now the preview updates live.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/873/original/E182RI07.png" width="800" height="604" alt="A preview now shows when the area is selected."/>
+</div>
+
+<p>Now users can know exactly what their avatar will look like before they click &lsquo;Crop&rsquo;.</p>
