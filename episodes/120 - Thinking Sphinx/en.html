@@ -1,0 +1,248 @@
+<p>Below is a page from a Rails application that shows a list of articles. We want to add a search feature to this page and, as these articles are text-based, we&rsquo;ll use a full-text search engine instead of stringing together SQL queries.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/887/original/E120RI01.png" width="800" height="474" alt="The articles page."/>
+</div>
+
+<h3>Installing Thinking Sphinx</h3>
+
+<p>There are a variety of solutions for adding full-text searching to a Rails application and in this episode we&rsquo;ll use <a href="http://freelancing-god.github.com/ts/en/">Thinking Sphinx</a>. You should consider all of the options before deciding which one to use and we have already covered one alternative using Sunspot and Solr in <a href="http://railscasts.com/episodes/278-search-with-sunspot">episode 278</a>.</p>
+
+<p>To get started we&rsquo;ll need to install Sphinx. Sphinx communicates directly with an SQL database so there are limitations as to which databases it works with. Sphinx currently only supports MySQL or PostgreSQL so if you&rsquo;re using Sqlite or MongoDB as the database for your Rails application you&rsquo;ll need to find an alternative solution.</p>
+
+<p>The easiest way to install Sphinx on OS X  is to use <a href="http://mxcl.github.com/homebrew/">Homebrew</a>. With it we can install Sphinx by running</p>
+
+``` terminal
+$ brew install sphinx
+```
+
+<p>If you&rsquo;re not running OS X or you don&rsquo;t want to install Homebrew there are <a href="http://sphinxsearch.com/downloads/">other download options available</a>. We&rsquo;ll need to have MySQL or PostgreSQL installed and we can do that through Homebrew too if need be.</p>
+
+<p>Rails uses Sqlite by default, but we can create a application that uses a different database by using the <code>-d</code> option.</p>
+
+``` terminal
+$ rails new foo -d mysql
+```
+
+<p>Our Rails application is already running with MySQL as its database so we can start to use Thinking Sphinx with it. Thinking Sphinx is an older gem but it&rsquo;s still well maintained. Before starting with it it&rsquo;s worth reading the <a href="http://freelancing-god.github.com/ts/en/">documentation</a>, especially the pages on <a href="http://freelancing-god.github.com/ts/en/indexing.html">indexing</a> and <a href="http://freelancing-god.github.com/ts/en/searching.html">searching</a>. To add Thinking Sphinx to our application we need to add its gem to the gemfile and run bundle.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+# Bundle edge Rails instead:
+# gem 'rails',     :git => 'git://github.com/rails/rails.git'
+
+gem 'mysql2'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'thinking-sphinx'
+```
+
+<h3>Adding Indexes</h3>
+
+<p>Next we need to define the index in the model we want to search, in this case the <code>Article</code> model. We do this by calling <code>define_index</code> and passing it a block. Inside the block we call <code>indexes</code> and pass it the name of the column we want to index.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  belongs_to :author
+  has_many :comments
+  
+  define_index do
+    indexes content
+  end
+end
+```
+
+<p>Note that we don&rsquo;t pass the column as a string or a symbol but as a method call as this is the way that the Thinking Sphinx DSL works.</p> 
+
+<p>We also want to index the <code>name</code> column, but there&rsquo;s a trap here. The methods <code>name</code> and <code>id</code> are reserved so if we want to index one of these columns we do need to pass it in as a symbol. If we want to make a column sortable we can use the <code>sortable</code> option. We can then use the sort option in the search itself to sort the matching articles.</p>
+
+``` /app/models/article.rb
+define_index do
+  indexes content
+  indexes :name, sortable: true
+end
+```
+
+<p>It&rsquo;s also possible to index columns through associations. Our <code>Article</code> model has many <code>comments</code>. If we want the comments to be included in the index we can do so like this:</p>
+
+``` /app/models/article.rb
+define_index do
+  indexes content
+  indexes :name, sortable: true
+  indexes comments.content, as: :comment_content
+end
+```
+
+<p>When we index an association it&rsquo;s a good idea to use to the <code>as</code> option to assign a name to it and we&rsquo;ve done so here.</p>
+
+<p>If we want to index multiple columns at once we can pass in an array. For example we want to index the authors name, but it&rsquo;s stored in separate <code>first_name</code> and <code>last_name</code> fields. We can index it like this:</p>
+
+``` /app/models/article.rb
+define_index do
+  indexes content
+  indexes :name, sortable: true
+  indexes comments.content, as: :comment_content
+  indexes [author.first_name, author.last_name], as: :author_name
+end
+``` 
+
+<h3>Adding a Search Form</h3>
+
+<p>Our <code>Article</code> model now has the indexes we want but before we can search the articles we need to build the index which we do by running a Rake task.</p>
+
+``` terminal
+$ rake ts:index
+```
+
+<p>Once Thinking Sphinx has finished indexing we can start up the Sphinx server.</p>
+
+``` terminal
+$ rake ts:start
+```
+
+<p>Next we need to add a search field to the articles page and hook it up to Thinking Sphinx. This form is will submit to the articles page, the same page that the form itself is on, and use GET.</p>
+
+``` /app/views/articles/index.html.erb
+<h1>Articles</h1>
+
+<%= form_tag articles_path, method: :get do %>
+  <div class="field">
+    <%= text_field_tag :search, params[:search] %>
+    <%= submit_tag "Search", name: nil %>
+<% end %>
+
+<!-- #Rest of page omitted -->
+```
+
+<p>The <code>ArticlesController</code>&rsquo;s <code>index</code> action is triggered when the user makes a search so we need to search against the <code>Article</code> model there. Thinking Sphinx adds a <code>search</code> method to model classes and we can use that here. All we need to do is pass it the <code>search</code> parameter from the form.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search])
+end
+```
+
+<p>When we reload the articles page now the search form is there and we can use it to search for say, &ldquo;Batman&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/888/original/E120RI02.png" width="" height="" alt="Only articles matching &ldquo;Batman&rdquo; are returned."/>
+</div>
+
+<p>Only the article that contains the text we&rsquo;ve searched for has been returned so it looks like this is working. We can also search by author name or even combine the two and search for part of the title and part of the author&rsquo;s name and the matching articles will be correctly returned.</p>
+
+<h3>Customizing The Search</h3>
+
+<p>There are a number of options that we can pass to <code>search</code>. One of these is <code>order</code> which we can use with any column that&rsquo;s been marked as <code>sortable</code>. Earlier we made the <code>name</code> column sortable so we can use this here and any searches we make now will be sorted by name, rather than by the default, which is to sort by relevance.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], order: :name)
+end
+```
+
+<p>If we want to paginate the results we can pass in pagination options with the <code>page</code> and <code>per_page</code> options, like this:</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], page: 1, per_page: 20)
+end
+```
+
+<p>This will work if we have <a href="https://github.com/mislav/will_paginate/">will_paginate</a> installed and <a href="https://github.com/amatsuda/kaminari">Kaminari</a> support is being worked on.</p>
+
+<p>If we want to filter the results based on the value in a specific field we can use a <code>conditions</code> hash. For example if we want to return only articles that have &ldquo;Batman&rdquo; in their name we can do this:</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], conditions: { name: "Batman" })
+end
+```
+
+<p>What, though, if we want to filter the results on a non text-based field such as the <code>author_id</code>? We might expect to be able to do something like this.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], conditions: { author_id: 2 })
+end
+```
+
+<p>This won&rsquo;t work as we haven&rsquo;t indexed the <code>author_id</code> field. There are a number of ways to index something in Sphinx. One is to use a field, which is what the <code>indexes</code> method that we&rsquo;ve been using does, but this is meant for text fields. For numeric, date or time fields it&rsquo;s better to use an attribute. Thinking Sphinx handles these with a has method we can pass a list of fields to.</p>
+
+``` /app/models/article.rb
+define_index do
+  indexes content
+  indexes :name, sortable: true
+  indexes comments.content, as: :comment_content
+  indexes [author.first_name, author.last_name], as: :author_name
+    
+  has author_id, published_at
+end
+```
+
+<p>Since we&rsquo;ve changed the index&rsquo;s definition we need to rebuild it. We can do that by running</p>
+
+``` terminal
+$ rake ts:rebuild
+```
+
+<p>This will stop Sphinx, rebuild the index and then start it again.</p>
+
+<p>In the controller we&rsquo;re using the conditions hash to filter by the <code>author_id</code> but again this is meant for fields rather than attributes. To filter by attributes we should use <code>with</code>.</p>
+
+```/app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], with: { author_id: 2 })
+end
+```
+
+<p>When we reload the page now it will filter the articles so only those written by the author with an <code>id</code> of <code>2</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/889/original/E120RI03.png" width="881" height="567" alt="The articles are filtered by the author id."/>
+</div>
+
+<p>We also added to <code>published_at</code> column to the index so we can filter by this field too. We can use a range here to find all the articles published in, say, the last three weeks.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], with: { published_at: 3.weeks.ago..Time.zone.now })
+end
+```
+
+<p>There are a couple of other options we can use when searching. If we want to give results from certain fields more weight than others we can use <code>field_weights</code>.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.search(params[:search], field_weights: {name: 20, content: 10, author_name: 5})
+end
+```
+
+<p>The default weight for a field is <code>1</code>. We&rsquo;ve given the name field the highest weighting above, followed by <code>content</code> and <code>author_name</code>, so matches in the articles&rsquo; names will be treated as the most relevant when showing the results.</p>
+
+<h3>Match Modes</h3>
+
+<p>We&rsquo;ll finish off by showing the <code>match_mode</code> option. There are various modes we can switch to, for example <code>boolean</code>. If this option is set and we pass in a query with more than one keyword, say, &ldquo;Superman Krypton&rdquo; only the articles which match both words will be returned. If we separate the keywords with a pipe and search for &ldquo;Superman | Krypton&rdquo; then we&rsquo;ll see articles that match either keyword returned.</p>
+
+<p>We can also use a minus sign to return articles that match one keyword but which don&rsquo;t include the other. A search for &ldquo;Superman -Krypton&rdquo; will return only those articles that contain &ldquo;Superman&rdquo; but not &ldquo;Krypton&rdquo;.</p>
+
+<p>As we&rsquo;ve shown in this episode Thinking Sphinx has some has some nice options for adding searching to Rails applications. It can fall a little short when it comes to reindexing, however. If we create, update or delete an article in our application the index won&rsquo;t be automatically updated and so will be out-of-date. To pick up any database changes we have to run</p> 
+
+``` terminal
+$ rake ts:reindex
+```
+
+<p>which will reindex everything. Thinking Sphinx reindexes quite quickly but this command still needs to be triggered. One way to do this is to set up a cron task to update the index every so often and we can use the Whenever gem which was covered in <a href="http://railscasts.com/episodes/164-cron-in-ruby">episode 164</a> to do this.</p>
+
+<p>If you have a large database and need to update in index frequently you should read up on <a href="http://freelancing-god.github.com/ts/en/deltas.html">Delta Indexes</a>. These allow you to reindex only the records that have changed rather than everything.</p>
