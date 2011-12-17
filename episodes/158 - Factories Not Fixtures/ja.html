@@ -57,7 +57,7 @@ end
 <p>ここでテストスイートを実行すると、テストは失敗します。原因は、<code>User</code>モデルの中にバリデーションがあり、作成したユーザがこれを満たさないからです。Userモデルにはたくさんのバリデーションがあり、specでユーザを作成するたびにそれらを考慮しなくてはいけません。後からさらにバリデーションを追加する場合、すでにあるspecが動作しなくなるリスクを負うことになります。</p>
 
 ``` /app/models/user.rb
-class User &lt; ActiveRecord::Base
+class User < ActiveRecord::Base
   attr_accessible :username, :email, :password, :password_confirmation
 
   has_secure_password
@@ -71,7 +71,7 @@ class User &lt; ActiveRecord::Base
 
   def self.authenticate(username, password)
     user = find_by_username(username)
-    return user if user &amp;&amp; user.authenticate(password)
+    return user if user && user.authenticate(password)
   end
 
   def can_manage_article?(article)
@@ -91,15 +91,15 @@ gem 'sqlite3'
 # Gems used only for assets and not required
 # in production environments by default.
 group :assets do
-  gem 'sass-rails',   '~&gt; 3.1.4'
-  gem 'coffee-rails', '~&gt; 3.1.1'
-  gem 'uglifier', '&gt;= 1.0.3'
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
 end
 
 gem 'jquery-rails'
 gem 'bcrypt-ruby'
 
-gem 'rspec-rails', :group =&gt; [:test, :development]
+gem 'rspec-rails', :group => [:test, :development]
 group :test do
   gem 'capybara'
   gem 'factory_girl_rails'
@@ -176,7 +176,7 @@ end
 <p>Factory Girlは関連も正しく処理します。アプリケーションには<code>Article</code>モデルがあり、<code>User</code>に対して<code>belongs_to</code>の関係を持っていて、<code>user_id</code>があることを検証します。これによって、作成される記事がすべてユーザに属することが保証されます。</p>
 
 ``` /app/models/article.rb
-class Article &lt; ActiveRecord::Base
+class Article < ActiveRecord::Base
   belongs_to :user
   validates_presence_of :name, :user_id
 end
