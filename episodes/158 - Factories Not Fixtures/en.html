@@ -135,7 +135,7 @@ it "does not authenticate with incorrect password" do
 end
 ```
 
-<p>When we run our specs now they both pass again and they no longer have any dependencies on external fixtures. There&rsquo;s a potential problem with out factory, however. Each user we create from the factory will have the same <code>username</code> and <code>password</code> and these fields both have <code>validates_uniqueness_of</code> validators. Any test we write that creates more than one user will throw an error.</p>
+<p>When we run our specs now they both pass again and they no longer have any dependencies on external fixtures. There&rsquo;s a potential problem with our factory, however. Each user we create from the factory will have the same <code>username</code> and <code>password</code> and these fields both have <code>validates_uniqueness_of</code> validators. Any test we write that creates more than one user will throw an error.</p>
 
 <p>We can solve this by using a numeric sequence when we create each new user so that the name is unique, like this:</p>
 
