@@ -1,0 +1,389 @@
+<p>In the previous episode we showed you how to add full-text searching to a Rails application with <a href="http://www.elasticsearch.org/">Elasticsearch</a> and the <a href="https://github.com/karmi/tire">Tire gem</a>. Our application has a page that shows a list of articles and we can now search them by keyword.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/894/original/E307I01.png" width="800" height="485" alt="The articles page with the search form."/>
+</div>
+
+<p>Elasticsearch supports many more features than we covered last time so in this episode we&rsquo;ll expand on what we&rsquo;ve done so far and show some additional features and configuration options we can add to improve the search functionality.</p>
+
+<h3>Refining Searches With Search Terms</h3>
+
+<p>We&rsquo;ll start by showing some additional options that we can use in the search text field. Our current search is for <code>superman</code> and this returns articles that have that text anywhere within them.</p> 
+
+<p>If we only want to find articles whose <code>name</code> matches &ldquo;Superman&rdquo; we can use the search term <code>name:superman</code>. Similarly if we want to perform a wildcard search we can use an asterisk. Searching for <code>name:*man</code> will give us all the articles with names that end with &ldquo;man&rdquo;, in this case Batman and Superman.</p>
+
+<p>To search for phrases we use quotes. A search for <code>&quot;fictional character&quot;</code> will return only the articles that contain that phrase. Without the quotes the search will return any article that contains either &ldquo;fictional&rdquo; or &ldquo;character&rdquo;. We get the same results if we search for <code>fictional OR character</code>. If we search for <code>fictional AND character</code> only the articles that contain both of those words will be returned. Finally, a search for <code>fictional NOT character</code> will return articles that contain &ldquo;fictional&rdquo; but not &ldquo;character&rdquo;.</p>
+
+<p>There are a number of ways to customize the search behaviour. If we look at the <a href="http://www.elasticsearch.org/guide/reference/query-dsl/query-string-query.html">Query String Query page</a> of Elasticsearch&rsquo;s guide we&rsquo;ll see a list of all of the options we can use, one of which is <code>default_operator</code>. We&rsquo;ll set this to AND rather than the default OR so that only articles matching all the entered terms are returned. We do this in the <code>Article</code> model which is where the search is performed. We need to add the <code>default_operator</code> option to the query method.</p>
+
+``` /app/models/articles.rb
+def self.search(params)
+  tire.search(load: true) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+  end
+end
+```
+
+<p>Now when we search for <code>fictional character</code> only the articles that match both keywords will be returned.</p> 
+
+<h3>Sorting</h3>
+
+<p>By default the returned articles are sorted by relevance but we can customize this by using the <code>sort</code> method in the <code>search</code> block and passing it a by option. We can pass in a direction, too.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(load: true) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+    sort { by :published_at, "desc" } if params[:query].blank?
+  end  
+end
+```
+
+<p>We&rsquo;ve made this the default sort, but only if no search query has been entered. If the user types in a search term the results will still be sorted by relevance.</p>
+
+<h3>Pagination</h3>
+
+<p>Another common requirement is pagination and we can add <code>pagination</code> options to the search method.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(load: true, page: params[:page], per_page: 2) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+    sort { by :published_at, "desc" } if params[:query].blank?
+  end  
+end
+```
+
+<p>We set the <code>page</code> option to be the value of the <code>page</code> param and we&rsquo;ve set the pagination to show two articles per page. We also need to add a gem to handle pagination such as <a href="https://github.com/mislav/will_paginate/">will_paginate</a> or <a href="https://github.com/amatsuda/kaminari">Kaminari</a>. We&rsquo;ll add will_paginate to the gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+# Bundle edge Rails instead:
+# gem 'rails',     :git => 'git://github.com/rails/rails.git'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+
+gem 'tire'
+gem 'will_paginate'
+```
+
+<p>We can now add a call to <code>will_paginate</code> at the bottom of the articles page.</p>
+
+``` /app/views/articles/index.html.erb
+<%= will_paginate @articles %>
+```
+
+<p>When we reload the page now we&rsquo;ll see only two articles and the pagination links. (We&rsquo;ve already added some CSS to style the pagination.)</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/895/original/E307I02.png?" width="800" height="623" alt="The search results now have pagination."/>
+</div>
+
+<p>A quick note here about Tire&rsquo;s DSL. Tire uses blocks a lot and inside each one the current context changes. This means that inside the <code>tire.search</code> block <code>self</code> doesn&rsquo;t refer to the <code>Article</code> class, but will instead be a <code>Tire</code> search object. This gives us a nice DSL that lets us call methods against the class directly but it can cause confusion if we need to use other class methods inside the block. If this becomes a problem we can pass a parameter to the block and access the methods through that parameter.</p>  
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(load: true, page: params[:page], per_page: 2) do |s|
+    s.query { string params[:query], default_operator: "AND" } if params[:query].present?
+    s.filter :range, published_at: {lte: Time.zone.now}
+    s.sort { by :published_at, "desc" } if params[:query].blank?
+  end  
+end
+```
+
+<p>This approach has the advantage that inside the block <code>self</code> still refers to the <code>Article</code> class. It works with most of the blocks that Tire uses including the <code>query</code> and <code>sort</code> blocks but the default syntax is cleaner so we&rsquo;ll stick with that here.</p>
+
+<h3>Adding More Fields To The Index</h3>
+
+<p>Now that our search behaviour is feature complete we&rsquo;ll move on to indexing. All of the attributes in each <code>Article</code> are indexed but the attributes of the associated models, e.g. <code>Author</code> and <code>Comment</code> aren&rsquo;t. If we search for <code>clark</code> no articles will be returned as this attribute isn&rsquo;t indexed.</p>
+
+<p>To add these associated attributes we must override the model&rsquo;s <code>to_indexed_json</code> method. This method returns a JSON string containing the data that will be indexed. To add the author name we call <code>to_json</code> and pass it any extra data we want to include. To include the author&rsquo;s name we call <code>methods</code> with an array of the methods that should be called. We&rsquo;ll need an <code>author_name</code> method that returns the article&rsquo;s author&rsquo;s name.</p>
+
+``` /app/models/article.rb
+def to_indexed_json
+  to_json(methods: [:author_name])
+end
+  
+def author_name
+  author.name
+end
+```
+
+<p>As our application uses Rails 3.1 this will all work perfectly as <code>to_json</code> will serialize the article&rsquo;s attributes and, in this case, include the associated author&rsquo;s name. In earlier versions of Rails this will include a root element but we can remove this by adding this line of code in the model.</p>
+
+``` /app/models/article.rb
+self.include_root_in_json = false
+```
+
+<p>For these changes to take effect we need to reindex the articles&rsquo; records and Tire provides a Rake task for doing this. This task expects the name of the class we want to reindex and we also need to pass in the <code>FORCE</code> argument as we&rsquo;re rebuilding an existing index. As our <code>Article</code> class is inside the Rails environment we have to load the environment so we prefix the task with the <code>environment</code> task.</p>
+
+``` terminal
+$ rake environment tire:import CLASS=Article FORCE=true
+[IMPORT] Deleting index 'articles'
+[IMPORT] Creating index 'articles' with mapping:
+{"article":{"properties":{}}}
+[IMPORT] Starting import for the 'Article' class
+--------------------------------------------------------------------------------
+4/4 | 100% ###########################################################
+================================================================================
+Import finished in 0.36422 seconds
+```
+
+<p>This task requires some kind of pagination so if you see an error about an undefined paginate method you&rsquo;ll need to add will_paginate or Kaminari to the application&rsquo;s gemfile before running it. Now that we&rsquo;ve reindexed the articles we can search for an author and we&rsquo;ll see the matching articles returned.</p>
+
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/896/original/E307I03.png" width="800" height="401" alt="Searching for an author's name now works."/>
+</div>
+
+<h3>Fetching All of The Data From The Index</h3>
+
+<p>When we perform the search in our <code>Article</code> model we pass it the option <code>load: true</code>. This means that the matching articles are loaded from the database rather than using the attributes from the index. We had to set this in the previous episode as we hadn&rsquo;t indexed all of the attributes necessary to display the articles. If we were to add these attributes to the index we could remove this option and this would give us better performance as we wouldn&rsquo;t have to load the records from the database.</p>
+
+<p>To do this we need to remove everything in the view that displays data through an association. For example we call <code>article.author.name</code> to display the author&rsquo;s name and <code>article.comments.size</code> to show the number of comments. We need to replace these with methods from <code>Article</code> so that they can be easily fetched from the index. We already have an <code>author_name</code> method and next we&rsquo;ll write a <code>comment_count</code> method to return the number of comments.</p>
+
+``` /app/views/articles/index.html.erb
+<div id="articles">
+<% @articles.each do |article| %>
+  <h2>
+    <%= link_to article.name, article %>
+    <span class="comments">(<%= pluralize(article.comment_count, 'comment') %>)</span>
+  </h2>
+  <div class="info">
+    by <%= article.author_name %>
+    on <%= article.published_at.strftime('%b %d, %Y') %>
+  </div>
+  <div class="content"><%= article.content %></div>
+<% end %>
+</div>
+```
+
+<p>Next we&rsquo;ll add that method in the model and add the method to the index.</p>
+
+``` /app/models/article.rb
+def to_indexed_json
+  to_json(methods: [:author_name, :comment_count])
+end
+  
+def author_name
+  author.name
+end
+  
+def comment_count
+  comments.size
+end
+```
+
+<p>Since we&rsquo;ve changed the index we&rsquo;ll need to rebuild it using the command we ran earlier.</p>
+
+``` terminal
+$ rake environment tire:import CLASS=Article FORCE=true
+```
+
+<p>Now that we&rsquo;re storing all the attributes that we display on the page in the index we can remove the <code>load: true</code> option that loads the articles from the database.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(page: params[:page], per_page: 2) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+    sort { by :published_at, "desc" } if params[:query].blank?
+  end  
+end
+```
+
+<p>Now that we&rsquo;ve made these changes does our articles page work? It doesn&rsquo;t. Instead of the list of articles we&rsquo;re expecting we get an &ldquo;undefined strftime method&rdquo; exception.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/897/original/E307I04.png" width="800" height="389" alt="Displaying a date from the index throws an error."/>
+</div>
+
+<p>Each article&rsquo;s <code>published_at</code> attribute is stored as a string in the index rather than as a <code>DateTime</code> and we can&rsquo;t call <code>strftime</code> on a string. A quick fix for this is to call <code>to_time</code> on this attribute before calling <code>strftime</code>.</p>
+
+``` /app/views/articles/index.html.erb
+<div class="info">
+  by <%= article.author_name %>
+  on <%= article.published_at.to_time.strftime('%b %d, %Y') %>
+</div>
+```
+
+<p>When we reload the page now it works and its fetching all its data from the index instead of from the database.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/898/original/E307I05.png" width="800" height="389" alt="The date now displays correctly."/>
+</div>
+
+<p>Tire even provides a persistence module which allows us to store records entirely on Elasticsearch so we don&rsquo;t need a separate database. There are details on how to do this towards the bottom of Tire&rsquo;s <a href="https://github.com/karmi/tire/blob/master/README.markdown">README file</a>.</p>
+
+<h3>Using Custom Mappings</h3>
+
+<p>There may be a time when we need more control over how the attributes are indexed in Elasticsearch. Currently we&rsquo;re just passing it a simple JSON string and this generally works well enough. If we need to fine-tune things, though, it&rsquo;s best to create a mapping. We do this by calling <code>mapping</code> in a model. This takes a block and inside that block we use <code>indexes</code> to define the attributes we want indexed.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  belongs_to :author
+  has_many :comments
+
+  include Tire::Model::Search
+  include Tire::Model::Callbacks
+  
+  mapping do
+    indexes :id, :type: 'integer'
+    indexes :author_id, type: 'integer'
+    indexes :author_name
+    indexes :name, boost: 10
+    indexes :content
+    indexes :published_at, type: 'date'
+    indexes :comment_count, type: 'integer'
+  end
+  
+  # Rest of class omitted
+end
+```
+
+<p>The type defaults to a string but we can change that by specifying the type option. There are other options we can use here and for the <code>name</code> attribute we&rsquo;ve used boost to prioritize the name option. This defaults to 1 but if we make it higher then any matching keywords found in that attribute will give given a higher relevance than if the same keywords were found in the other attributes.</p>
+
+<p>We can also use the <code>analyzer</code> option. This option changes how the text is indexed; a different analyzer may split words differently or change how casing is handled. Analyzers are out of the scope of this episode but it&rsquo;s good to know that this option is available if we need it.</p>
+
+<p>For more information about the options we can pass to indexes take a look at the <a href="http://www.elasticsearch.org/guide/reference/mapping/core-types.html">Core Types page</a> in the documentation. There&rsquo;s <a href="http://www.elasticsearch.org/guide/reference/index-modules/analysis/">more information about analyzers</a> in the documentation, too.</p>
+
+<p>Once we&rsquo;ve defined our index mapping we&rsquo;ll need to reindex the data again.</p>
+
+``` terminal
+$ rake environment tire:import CLASS=Article FORCE=true
+[IMPORT] Deleting index 'articles'
+[IMPORT] Creating index 'articles' with mapping:
+{"article":{"properties":{"id":{"type":"integer"},"author_id":{"type":"integer"},"author_name":{"type":"string"},"name":{"boost":10,"type":"string"},"content":{"type":"string"},"published_at":{"type":"date"},"comment_count":{"type":"integer"}}}}
+[IMPORT] Starting import for the 'Article' class
+--------------------------------------------------------------------------------
+4/4 | 100% ###########################################################
+================================================================================
+Import finished in 0.23757 seconds
+```
+
+<p>Note that this time we see the mapping details as the data is reindexed.</p>
+
+<h3>Facets</h3>
+
+<p>Now that the new index is set up we&rsquo;ll add some faceted search functionality. We&rsquo;ll add a list of authors to the page as links so that users can click one to further filter the search results. To add facets we need to modify the code in the model&rsquo;s <code>search</code> block by making a call to <code>facet</code>.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(page: params[:page], per_page: 2) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+    sort { by :published_at, "desc" } if params[:query].blank?
+    facet "authors" do
+      terms :author_id
+    end
+  end  
+end
+```
+
+<p>We need to give the facet a name and pass it a block. Inside it we set up a terms facet for the <code>author_id</code> attribute. To display the facets in the view we can add this code.</p>
+
+``` /app/views/articles/index.html.erb
+<div id="facets">
+  <h3>Authors</h3>
+  <ul>
+    <% @articles.facets['authors']['terms'].each do |facet| %>
+      <li>
+        <%= link_to_unless_current Author.find(facet['term']).name, params.merge(author_id: facet['term']) %>
+        <% if params[:author_id] == facet['term'].to_s %>
+          (<%= link_to "remove", author_id: nil %>)
+        <% else %>
+          (<%= facet['count'] %>)
+        <% end %>
+      </li>
+    <% end %>
+  </ul>
+</div>
+```
+
+<p>In this code we list the authors that the user can filter the articles by. We fetch the authors by calling <code>@articles.facets</code> and using the name of the facet in the model and we call <code>[&#x27;terms&#x27;]</code> on this to fetch each facet. We then create a link for each author except the currently selected one. We can get the <code>id</code> for each one by calling <code>facet[&#x27;term&#x27;]</code> and we use this to fetch each author so that we can display their name in the link.</p> 
+
+<p>If there&rsquo;s an <code>author_id</code> parameter present then the articles have already been filtered by that author so we&rsquo;ll also add a &ldquo;remove&rdquo; link for that author. For the other&rsquo;s we&rsquo;ll show the number of articles written by that author.</p>
+
+<p>Here&rsquo;s now the new part of the page looks. We&rsquo;ve already added some CSS to make it look pretty.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/899/original/E307I06.png" width="800" height="389" alt="We can now filter by author by clicking one of the links."/>
+</div>
+
+<p>When we select one of the authors the articles will be filtered by that author. We can then click the &ldquo;remove&rdquo; link next to the selected author&rsquo;s name to remove that filter.</p>
+
+<p>We need to set up the search so that it takes account of the selected author. We do this by adding another filter to the <code>search</code> block.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(page: params[:page], per_page: 2) do
+    query { string params[:query], default_operator: "AND" } if params[:query].present?
+    filter :range, published_at: {lte: Time.zone.now}
+    filter :term, author_id: params[:author_id] if params[:author_id].present?
+    sort { by :published_at, "desc" } if params[:query].blank?
+    facet "authors" do
+      terms :author_id
+    end
+  end  
+end
+```
+
+<p>This filter is a <code>term</code> filter and it filters by the <code>author_id</code> if it&rsquo;s present in the <code>params</code>. If we reload the page now and select an author the articles will be filtered so that only those written by that author are shown.</p>
+
+<p>There&rsquo;s a small problem with this, however. If we have no author selected the authors panel shows that there are three articles by Clark Kent, but when we click &ldquo;Clark Kent&rdquo; we&rsquo;ll only see two. Clark Kent has an unpublished article and we have a filter that hides any article with a <code>published_at</code> date in the future. Filters are ignored by facets, however, so to get this working we need to turn the filters into queries. We chose filters over queries as they generally give better performance but for the counting to work we&rsquo;ll need to use queries instead.</p>
+
+``` /app/models/article.rb
+def self.search(params)
+  tire.search(page: params[:page], per_page: 2) do
+    query do
+      boolean do
+        must { string params[:query], default_operator: "AND" } if params[:query].present?
+        must { range :published_at, lte: Time.zone.now }
+        must { term :author_id, params[:author_id] } if params[:author_id].present?
+      end
+    end
+    sort { by :published_at, "desc" } if params[:query].blank?
+    facet "authors" do
+      terms :author_id
+    end
+  end
+end
+```
+
+<p>We&rsquo;ve taken the filters we had and merged them the a <code>boolean</code> query. All of the conditions in the <code>must</code> calls need to pass for the query to pass. When we reload the page now we&rsquo;ll see the correct number of articles displayed for each author.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/900/original/E307I07.png" width="800" height="389" alt="The correct number of articles is now shown for each author."/>
+</div>
+
+<p>When we select an author the other authors disappear from the list but this is how query facets work.</p>
+
+<h3>Debugging</h3>
+
+<p>We&rsquo;ll finish off this episode by showing a couple of methods that help with debugging search queries. The first is <code>to_json</code> and if we call this at the <code>search</code> block level it will give us a string representation of the search that will be sent to Elasticsearch. The other is <code>to_curl</code> which gives us the JSON string along with a <code>curl</code> command that we can run from the command line.</p>
+
+<p>If we add <code>raise to_curl</code> at the end of the <code>search</code> block and reload the page we&rsquo;ll see the command we need to run.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/901/original/E307I08.png" width="800" height="389" alt="The curl command to help debug the page."/>
+</div>
+
+<p>If we run this command in the console we&rsquo;ll see the JSON response data that would be sent back to Tire from Elasticsearch. This is really useful for debugging when a search isn&rsquo;t returning the results you&rsquo;re expecting.</p>
