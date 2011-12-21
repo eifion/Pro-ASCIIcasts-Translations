@@ -1,0 +1,119 @@
+<p>Below is a page that shows a list of products. It currently uses pagination to enable users to browse between pages but we&rsquo;d like to replace this with endless scrolling so that as a user scrolls to the bottom of the page the next set of products is fetched automatically.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/902/original/E114RI01.png" width="800" height="447" alt="The list of products with the pagination at the bottom."/>
+</div>
+
+<p>We&rsquo;re using will_paginate to do the pagination, which we covered back in <a href="http://railscasts.com/episodes/51-will-paginate">episode 51</a>, although we could just as easily have used Kaminari. In the <code>ProductsController</code>&rsquo;s <code>index</code> action we fetch the products for the given page ten at a time.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").page(params[:page]).per_page(10)
+end
+```
+
+<p>The template renders the products through a <code>_products</code> partial and shows the pagination links at the bottom of the page.</p>
+
+``` /app/views/products/index.html.erb
+<h1>Products</h1>
+
+<div id="products">
+  <%= render @products %>
+</div>
+
+<%= will_paginate @products %>
+```
+
+<p>We&rsquo;re not going to change any of this existing code to add the endless scrolling,  we&rsquo;ll add it all through JavaScript. This way the page will fall back to the traditional pagination behaviour when JavaScript is disabled. There are many different ways to add endless scrolling. The one we&rsquo;ve chosen is the simplest solution we&rsquo;ve found and doesn&rsquo;t require any external plugins. We&rsquo;ll write the code in the <code>products</code> CoffeeScript file and we&rsquo;ll start by adding some code that will be triggered when the user scrolls near the bottom of the page.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $(window).scroll ->
+    if $(window).scrollTop() > $(document).height() - $(window).height() - 50
+      alert('near bottom')
+```	  
+	  
+<p>Once the DOM has loaded we listen to the <code>scroll</code> event on the window and when the user scrolls the browser window the we detect how close to the bottom of the page they are. <code>$(window).scrollTop()</code> tells us how far from the top of the page the user has scrolled. If this value is greater than <code>$(document).height()</code> minus <code>$(window).height()</code> then the user is past the bottom of the page so we also subtract a buffer so that the code is triggered when they scroll to within 50 pixels of the bottom of the page. For now we just show an <code>alert</code> when this happens.</p>
+
+<p>An alternative solution is to use the <a href="http://imakewebthings.github.com/jquery-waypoints/">jQuery Waypoints</a> plugin to monitor when the pagination element enters the window, but our solution is perfectly adequate for our simple page. If we reload our page now and scroll towards the bottom the alert will be shown so our code is working as it should be so far.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/903/original/E114RI02.png" width="800" height="447" alt="The alert shows when we scroll to the bottom of the page."/>
+</div>
+
+<h3>Adding Results</h3>
+
+<p>Next we&rsquo;ll modify our code so that it adds more products when the user scrolls near to the bottom of the page and we&rsquo;ll replace with the <code>alert</code> with some code to do that. We can use jQuery&rsquo;s <code>getScript</code> function to do this but which URL should it call? The code needs to fetch the next page of results and that link is already available on the page in the pagination so we can reuse that here. The next page in the pagination will have a class of <code>next_page</code> and we can use that to get the correct URL. (If you&rsquo;re using Kaminari rather than will_paginate note that these names will be different.)</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $(window).scroll ->
+    if $(window).scrollTop() > $(document).height() - $(window).height() - 50
+      $.getScript($('.pagination .next_page').attr('href'))
+```	  
+
+<p>This code triggers the <code>ProductController</code>&rsquo;s <code>index</code> action, passing in the correct page, and expects some JavaScript to be returned. The action doesn&rsquo;t currently respond to JavaScript so we&rsquo;ll need to add the relevant template. We&rsquo;ll use a <code>js.erb</code> template here. We could use <code>js.coffee</code> and which allows us to execute Erb in CoffeeScript but that&rsquo;s not necessary for our simple script.</p>
+
+```/app/views/products/index.js.erb
+$('#products').append('<%= j render(@products %>)');
+$('.pagination').replaceWith('<%= j will_paginate(@products) %>');
+```
+
+<p>The first line of this page renders the next page of products and appends them to the div that contains the list of products. As the products are rendered out to a JavaScript string we use the <code>j</code> method to safely escape this.  We also update the pagination control as our endless scrolling depends on it having the correct page selected. We do this by calling <code>will_paginate</code> for the new page of products and replacing the current pagination control with this.</p>
+
+<p>If we test this in the browser now we do see more products as we scroll down the page, but more products than we want are fetched at once.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/904/original/E114RI03.png" width="800" height="534" alt="The scroll event is triggered multiple times when we scroll to the bottom of the page."/>
+</div>
+
+<p>We can see why by looking at the development console. When we scrolled down to the bottom of the page the code that fetches more products was called a number of times when we only want it to be called once. The problem is that while we fetch more products the scroll event continues to be fired and fetches products over and over again.  To prevent this from happening we need to stop the <code>scroll</code> event from firing while we&rsquo;re fetching more products. Here&rsquo;s our solution.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $(window).scroll ->
+    url = $('.pagination .next_page').attr('href')
+    if url &&  $(window).scrollTop() > $(document).height() - $(window).height() - 50
+      $('.pagination').text('Fetching more products...')
+      $.getScript(url)
+```	  
+
+<p>While we&rsquo;re fetching more products we now replace the pagination HTML with some text. This means that until the next set has been rendered the link for the next page of products won&rsquo;t exist on the page and we can check for that before fetching any more products. Once the next page of results has been rendered and the user scrolls down to the bottom of the page the URL will be available again and we can fetch the next page of products when the user scrolls to the bottom of the page again.</p>
+
+<p>We can try our page again now and when we scroll to the bottom of the page the code to fetch more products is run only once, just as we want.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/905/original/E114RI04.png" width="800" height="560" alt="The scroll even now only fires once."/>
+</div>
+
+<p>There&rsquo;s still one small issue. When we scroll down until we&rsquo;ve displayed all the products the pagination control shows at the bottom of the page. We can&rsquo;t remove it from the page as our endless scrolling depends on it so let&rsquo;s hide it instead.</p>
+
+<p>We can fix this in the <code>index.js.erb</code> file. Instead of always replacing the pagination we&rsquo;ll only do so if there&rsquo;s another page of products still to display.</p>
+
+``` /app/views/products/index.js.erb
+$('#products').append('<%= j render(@products) %>');
+<% if @products.next_page %>
+$('.pagination').replaceWith('<%= j will_paginate(@products) %>');
+<% else %>
+$('.pagination').remove();
+<% end %>
+```
+
+<p>Now when we scroll down to the bottom of the list of products the pagination control doesn&rsquo;t show on the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/906/original/E114RI05.png" width="800" height="359" alt="The pagination is now hidden when we scroll right to the bottom of the page."/>
+</div>
+
+<p>Our endless scrolling behaviour is now almost complete but there are a couple of loose ends that we should tie up. One good practice is to trigger the window&rsquo;s <code>scroll</code> event when the page first loads. If the user&rsquo;s browser window is tall enough to display all of the first page the second page of products will then automatically be loaded. We should also check that we&rsquo;re on the correct page before we start listening to the <code>scroll</code> event, otherwise this code will listen for that event on every page under the <code>ProductsController</code>. We can do this by checking that the pagination control exists on the page before listening to the scroll event. With these in place the final version of the code looks like this.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('.pagination').length
+  	$(window).scroll ->
+  		url = $('.pagination .next_page').attr('href')
+  		if url &&  $(window).scrollTop() > $(document).height() - $(window).height() - 50
+  			$('.pagination').text('Fetching more products...')
+  			$.getScript(url)
+    $(window).scroll()
+```	
