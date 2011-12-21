@@ -1,0 +1,294 @@
+<p>Railsアプリケーションのテストを書くときには、各テストを独立させて外部依存性を最小限にするように習慣づけるのがいいでしょう。<a href="http://ar.rubyonrails.org/classes/Fixtures.html">Fixture</a>はこの考え方に反して、各テストが外部データに依存した形になります。今回のエピソードではFixtureをFactoryに置き換える方法を見ていきます。</p>
+
+<h3>Fixtureの問題点</h3>
+
+<p>下に示したのは、<code>User</code>モデルの<code>authenticate</code>メソッドをテストするspecです。最初のspecは<code>authenticate</code>に有効なユーザ名とパスワードが渡されたときに一致するユーザが返されることをチェックし、二つ目のspecは無効な情報が渡されたときに<code>nil</code>が返されることを確認します。</p>
+
+``` /spec/models/user_spec.rb
+require 'spec_helper'
+
+describe User do
+  fixtures :all
+
+  it "authenticates with matching username and password" do
+    User.authenticate("batman", "secret").should eq(users(:batman))
+  end
+
+  it "does not authenticate with incorrect password" do
+    User.authenticate("batman", "incorrect").should be_nil
+  end
+end
+```
+
+<p>テストの中では認証をおこなうユーザを作成しないのですが、どこからユーザ情報を得ているのでしょうか? 答えは、これらのユーザはfixtureファイルで定義され、テストはそこから情報を読み込みます。</p>
+
+```/spec/fixtures/users.yml
+batman:
+  username: batman
+  email: batman@example.com
+  password_digest: "$2a$10$uh/MLjEjRXyKK9jZLFld7OMmaqP9o3uPC8jgr6iebMdD.hpcVfKwe"
+  admin: false
+
+admin:
+  username: admin
+  email: admin@example.com
+  password_digest: "$2a$10$uh/MLjEjRXyKK9jZLFld7OMmaqP9o3uPC8jgr6iebMdD.hpcVfKwe"
+  admin: true
+```  
+
+<p>テストとfixtureの間には強い依存関係があり、fixtureを変更するだけでテストが失敗する可能性があります。これほど強く外部に依存しているのはいい方法とは言えず、テストが壊れやすくなります。ここでのもう一つの問題は、パスワードがハッシュ化されているため一人目のユーザのパスワードが「secret」であることがわかりません。</p>
+
+<h3>Factoryを導入する</h3>
+
+<p>fixtureで外部依存をなくすにはどうすればいいでしょうか? ひとつの方法は、fixtureを削除して、各テストに必要なユーザをテスト自体の中で作成するやり方です。例を以下に示します。</p>
+
+``` /spec/models/user_spec.rb
+it "authenticates with matching username and password" do
+  user = User.create(username: "batman", password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+
+it "does not authenticate with incorrect password" do
+  user = User.create(username: "batman", password: "secret")
+  User.authenticate("batman", "incorrect").should be_nil
+end
+```
+
+<p>ここでテストスイートを実行すると、テストは失敗します。原因は、<code>User</code>モデルの中にバリデーションがあり、作成したユーザがこれを満たさないからです。Userモデルにはたくさんのバリデーションがあり、specでユーザを作成するたびにそれらを考慮しなくてはいけません。後からさらにバリデーションを追加する場合、すでにあるspecが動作しなくなるリスクを負うことになります。</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  attr_accessible :username, :email, :password, :password_confirmation
+
+  has_secure_password
+
+  validates_presence_of :username
+  validates_uniqueness_of :username, :email, allow_blank: true
+  validates_format_of :username, with: /^[-\w\._@]+$/i, allow_blank: true, message: "should only contain letters, numbers, or .-_@"
+  validates_format_of :email, with: /^[-a-z0-9_+\.]+\@([-a-z0-9]+\.)+[a-z0-9]{2,4}$/i
+  validates_presence_of :password, on: :create
+  validates_length_of :password, minimum: 4, allow_blank: true
+
+  def self.authenticate(username, password)
+    user = find_by_username(username)
+    return user if user && user.authenticate(password)
+  end
+
+  def can_manage_article?(article)
+    admin? || article.user == self
+  end
+end
+```
+
+<p>このような場合にはFactoryが有効です。何種類かのfactoryフレームワークが利用可能ですが、今回は<a href="https://github.com/thoughtbot/factory_girl">Factory Girl</a>を使用します。インストールするには、アプリケーションの<code>Gemfile</code>の<code>:test</code>グループに追加して、<code>bundle</code>コマンドを実行します。Railsアプリケーションでは<a href="https://github.com/thoughtbot/factory_girl_rails"><code>factory_girl_rails</code></a> gemを使えば依存関係として<code>factory_girl</code>が自動的にインストールされます。</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'bcrypt-ruby'
+
+gem 'rspec-rails', :group => [:test, :development]
+group :test do
+  gem 'capybara'
+  gem 'factory_girl_rails'
+end
+```
+
+<p>Factory Girlの<a href="https://github.com/thoughtbot/factory_girl/blob/master/GETTING_STARTED.md">Getting Startedのファイル</a>にすばらしいドキュメントがあり、そこにfactoryをどこに置けるかについての説明があります。<code>/test</code>か<code>/spec</code>のいずれかのディレクトリの下の<code>factories.rb</code>という一つのファイルの中に入れるか、あるいは<code>/test/factories</code>か<code>/spec/factories</code>の複数のRubyファイルに入れます。ここでは一つのファイルに入れるアプローチをとり、RSpecを使用しているのでfactoryを<code>/spec/factories.rb</code>の中に作成します。<code>User</code>用のfactoryは以下の通りです。</p>
+
+``` /spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    username "foo"
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+end
+```
+
+<p>factoryを作成するには、<code>FactoryGirl.define</code>を呼び出してブロックを渡します。このブロック内で、<code>factory</code>メソッドでfactoryを定義し、モデル名と別のブロックを渡します。この内側のブロックで、モデルの各属性のデフォルト値を定義しますが、モデルのバリデーションが成功するようにデフォルト値を設定するのはいい方法です。今回の<code>User</code>モデルの場合、正しい<code>username</code>、<code>password</code>、<code>email</code>が必要です。希望すれば他の属性の値に基づいて別の属性を定義することができるので、ここではユーザ名に基づいてメールアドレスを設定しました。</p>
+
+<p>specで、作成したfactoryからユーザを作成するために、<code>FactoryGirl.create</code>を呼び出して、作成したいfactoryの名前と、初期値をオーバーライドさせたいパラメータを渡します。</p>
+
+```/spec/models/user_spec.rb
+it "authenticates with matching username and password" do
+  user = FactoryGirl.create(:user, username: "batman", 
+    password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+
+it "does not authenticate with incorrect password" do
+  user = FactoryGirl.create(:user, username: "batman", 
+    password: "secret")
+  User.authenticate("batman", "incorrect").should be_nil
+end
+```
+
+<p>ここでspecを実行するとどちらも再度成功し、これで外部のfixtureに依存しなくなりました。しかし今回のfactoryには潜在的な問題があります。factoryから作成する各ユーザは、 同じ<code>username</code>と<code>password</code>を持っており、これらのフィールドは<code>validates_uniqueness_of</code>バリデータを持っています。複数のユーザを作成するテストはすべてエラーを投げることになってしまいます。</p>
+
+<p>この問題を解決するためには新規ユーザの作成時に連番を使用して、名前が以下のようにユニークになるようにします。</p>
+
+```/spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    sequence(:username) { |n| "foo#{n}" }
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+end
+```
+
+<p>つまり、これによって作成されるユーザはユニークな名前とメールアドレスを持つことになります。</p>
+
+<h3>クイックチップ</h3>
+
+<p>factoryを作成するたびごとに<code>FactoryGirl</code>を呼び出すのは面倒です。<code>spec_helper</code>ファイルの<code>config</code>ブロック内に次の行を追加することで、この作業を簡略化できます。(Test::Unitを使用している場合、これは<code>test_helper</code>ファイルでも有効です。)</p>
+
+```/spec/spec_helper.rb
+config.include Factory::Syntax::Methods
+```
+
+<p>この行を追加することで、<code>FactoryGirl</code>を削除して、直接<code>create</code>を呼び出すことができます。</p>
+
+``` /spec/factories.rb
+it "authenticates with matching username and password" do
+  user = create(:user, username: "batman", password: "secret")
+  User.authenticate("batman", "secret").should eq(user)
+end
+```
+
+<p>保存することなくモデルを作成したい場合は、<code>build</code>メソッドも存在することに留意してください。</p>
+
+<h3>関連を扱う</h3>
+
+<p>Factory Girlは関連も正しく処理します。アプリケーションには<code>Article</code>モデルがあり、<code>User</code>に対して<code>belongs_to</code>の関係を持っていて、<code>user_id</code>があることを検証します。これによって、作成される記事がすべてユーザに属することが保証されます。</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  belongs_to :user
+  validates_presence_of :name, :user_id
+end
+```
+
+<p>記事のためのfactoryを作成するときに、各記事に関連したユーザを与える必要がありますが、Factory Girlはこの作業を簡単にしてくれます。<code>user</code>を呼び出せば、自動的に<code>User</code> factoryに基づいた新規ユーザを割り当ててくれます。</p>
+
+``` /spec/factories.rb
+FactoryGirl.define do
+  factory :user do
+    sequence(:username) { |n| "foo#{n}" }
+    password "foobar"
+    email { "#{username}@example.com" }
+  end
+  
+  factory :article do
+    name "Foo"
+    user
+  end
+end
+```
+
+<p>この振る舞いをカスタマイズしたければ、<code>association</code>メソッドを使用して関連にどのfactoryを使うかなどのオプションを渡します。最初にリンクを示したGetting Startedページに、これについての詳しい情報があります。この関連の実際の動きを確認するために、それを使用した新しいspecを追加します。</p>
+
+``` /spec/user_spec.rb
+it "can mangage articles he owns" do
+  article = create(:article)
+  user = article.user
+  user.can_manage_article?(article).should be_true
+  user.can_manage_article?(create(:article)).should be_false    
+end
+```
+
+<p>このspecではfactoryから記事を作りますが、自動的にその記事の関連のユーザも作成します。これを用いて、ユーザが自分の記事を編集できて他の人の記事は編集できないことをチェックします。</p> 
+
+<h3>Factoryを他のFactoryをベースにして作成する</h3>
+
+<p><code>User</code>モデルには<code>admin</code>という属性があり初期値は<code>false</code>になっています。サイトのadmin部分をテストするためのtestを書いているときは、adminユーザを作成しますが、 テストのたびにこの初期値をオーバーライドする必要がない方がいいでしょう。Factory Girlを使えば他のfactoryをベースにして新しいfactoryを作ることができるので、user factoryの中にネストされた<code>admin</code> factoryを作成して、変更したい属性をオーバーライドできます。</p>
+
+``` /spec/factories.rb
+factory :user do
+  sequence(:username) { |n| "foo#{n}" }
+  password "foobar"
+  email { "#{username}@example.com" }
+  admin false
+    
+  factory :admin do
+    admin true
+  end
+end
+```
+
+<p><code>admin</code> factoryを作成するごとに新規の<code>User</code>が作成されますが、<code>admin</code>はtrueに設定されます。</p>
+
+``` /spec/factories.rb
+it "can manage any articles as admin" do
+  create(:admin).can_manage_article?(create(:article)).should be_true
+  create(:user).can_manage_article?(create(:article)).should be_false
+end
+```
+
+<p>adminユーザはすべての記事を管理できるべきで、上のspecはこれを正しくテストしています。</p>
+
+<h3>テストスイートをスピードアップする</h3>
+
+<p>モデルオブジェクトを作成するたびに<code>create</code>メソッドを使うのは、データベースにレコードを保存することになるので、あまりいいやり方ではありません。テストがこれを求めない場合もあるので、不必要に速度が遅いテストを作成している可能性があります。そこで、いつもまずは<code>build</code>メソッドを使ってみて機能するかどうか確認するのがいいでしょう。場合によっては、今回の認証テストのようにデータベースからユーザを取得するような場合に、機能しないことがあるでしょう。このような場合には<code>create</code>を使わなくてはいけません。</p>
+
+``` /spec/user_spec.rb
+require 'spec_helper'
+
+describe User do
+
+  it "authenticates with matching username and password" do
+    user = create(:user, username: "batman", password: "secret")
+    User.authenticate("batman", "secret").should eq(user)
+  end
+
+  it "does not authenticate with incorrect password" do
+    user = create(:user, username: "batman", password: "secret")
+    User.authenticate("batman", "incorrect").should be_nil
+  end
+  
+  it "can mangage articles he owns" do
+    article = build(:article)
+    user = article.user
+    user.can_manage_article?(article).should be_true
+    user.can_manage_article?(create(:article)).should be_false    
+  end
+  
+  it "can manage any articles as admin" do
+    build(:admin).can_manage_article?(create(:article)).should be_true
+    build(:user).can_manage_article?(create(:article)).should be_false
+  end
+  
+end
+```
+
+<p>またそもそもfactoryを使わなくても済む場合もあるので、常に意識するようにしてください。例えば、ユーザが自分が作成していない記事を編集できないことをチェックするspecでは、記事の属性がどうかを気にせずに単に新規の<code>Article</code>を作成するばいいだけです。</p>
+
+``` /spec/factories.rb
+it "can mangage articles he owns" do
+  article = build(:article)
+  user = article.user
+  user.can_manage_article?(article).should be_true
+  user.can_manage_article?(Article.new).should be_false    
+end
+```
+
+<p>しかし、新しいモデルオブジェクト以外が必要な場合には、factoryを使うことになります。</p>
+
+<p>Factory Girlの紹介は以上です。ここではすべてをカバーはできませんでしたが、ドキュメントにはすべての機能がよくまとまっています。</p>
+
+<h3>その他の選択肢</h3>
+
+<p>もしFactory Girlの代替を探しているのであれば、<a href="http://fabricationgem.org/">Fabrication</a>をチェックすることをお勧めします。これは、Factory Girlに非常に似たシンタックスと機能セットを持っていますが、いくつか大きな違いがあります。例えば、関連に関しては怠慢な生成(lazy generation)をおこないます。関連を取り扱うことが多く、複雑な関連ツリーを持っていてFactory Girlへの一度の読み込みが多すぎるような場合には、Fabricationのほうがより良いソリューションになるでしょう。</p>
