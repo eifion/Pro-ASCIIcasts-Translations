@@ -1,0 +1,236 @@
+<p>As Rails developers we generally turn to Ruby for our programming problems, including small administrative tasks. Sometimes, though, it&rsquo;s more efficient to write shell scripts in the shell&rsquo;s native language. In this episode we&rsquo;ll show you the story of one such time.</p>
+
+<p>Several years ago Ryan Bates wrote a Ruby script that adds autocompletion to Rake tasks. This script can be found on <a href="https://github.com/ryanb/dotfiles/blob/master/bash/completion_scripts/rake_completion">Github</a> and is quite long for what it does, over fifty lines. The main part of it is a <code>generate_tasks</code> method. This method calls <code>rake --tasks</code>, which lists all of the rake tasks available, and then parses them to get the tasks&rsquo; names. It then caches the output to use by the autocompletion.</p>
+
+``` ruby
+def generate_tasks
+  tasks = `rake --tasks`.split("\n")[1..-1].collect {|line| line.split[1]}
+  File.open(cache_file, 'w') { |f| f.write tasks.join("\n") }
+  tasks
+end
+```
+
+<p>When Ryan decided to rewrite this as a shell script he was amazed at how concise the resulting script was. In this episode we&rsquo;ll show you the steps he took to do this so that you get a feel for shell scripting.</p>
+
+<p>Z Shell comes with Rake autocompletion but it can be terribly slow. If we type <code>rake </code> then press TAB there&rsquo;s a noticeable delay before the results appear. This is because the results aren&rsquo;t cached at all and so zsh has to ask <code>rake</code> for a list of the tasks every time. In this episode we&rsquo;ll build on what we wrote last time where we set up <a href="https://github.com/robbyrussell/oh-my-zsh">oh-my-zsh</a> and built a custom plugin. We&rsquo;ll add our rake autocompletion plugin in the same folder in a new file called <code>_rake</code>, following the convention of starting autocompletion-related plugins with an underscore followed by the name of the command we&rsquo;re adding autocompletion to.</p>
+
+<p>We need to tell zsh that this is an completion command defined for the <code>rake</code> command and we do this by adding a comment as the first line. We can add some completion options manually by using <code>compadd</code> and listing out the options.</p>
+
+``` ~/.oh-my-zsh/custom/plugins/eifion/_rake
+#compdef rake
+compadd spec secret foo bar
+```
+
+<p>If we open a new terminal window now and type <code>rake</code> followed by a space then hit TAB we&rsquo;ll see the autocompletion options listed.</p>
+
+``` terminal
+%rake
+bar     foo     secret  spec 
+```
+
+<p>We need this to be a list of real tasks instead of some hard-coded examples so we have to call <code>rake --tasks</code> at some point to fetch them all. This means that our command will be slow when we first run it but once we&rsquo;ve cached the results it should run far more quickly. The output from <code>rake --tasks</code> looks like this; we&rsquo;ll need to parse it to get each task&rsquo;s name.</p>
+
+``` terminal
+% rake --tasks
+rake about              # List versions of all Rails frameworks and the environment
+rake assets:clean       # Remove compiled assets
+rake assets:precompile  # Compile all the assets named in config.assets.precompile
+rake db:create          # Create the database from config/database.yml for the current Rails.env (use db:create:all to create all dbs in the config)
+rake db:drop            # Drops the database for the current Rails.env (use db:drop:all to drop all databases)
+rake db:fixtures:load   # Load fixtures into the current environment's database.
+# rest of output omitted.
+```
+
+<p>There&rsquo;s a command called <code>cut</code> that we can use to parse this output. It does exactly what we want: cutting out a section of each line of a file. We can pipe the output of <code>rake --tasks</code> to cut and we need to pass it a couple of parameters. The default delimiter is a tab and we can use <code>-d</code> change this to a space. We also need to specify which portion of each line should be cut out (we want the second part). If we run this command now we get the results we want:</p> 
+
+``` terminal
+% rake --tasks | cut -d ' ' -f 2
+about
+assets:clean
+assets:precompile
+db:create
+db:drop
+db:fixtures:load
+db:migrate
+```
+
+<p>We can now replace the placeholders on <code>compadd</code> with the output from this command. For the output to be captured we need wrap the command in <code>$()</code>.</p>
+
+``` ~/.oh-my-zsh/custom/plugins/eifion/_rake
+#compdef rake
+compadd $(rake --tasks | cut -d ' ' -f 2)
+```
+
+<p>Each time we change this script we&rsquo;ll need to open a new terminal window for the changes to take effect. Alternatively we can run this command:</p>
+
+``` terminal
+% unfunction _rake; . ~/.zshrc
+```
+
+<p>If we type <code>rake</code> now and hit TAB we&rsquo;ll see a list of all of the Rake tasks we can run. We can filter the results by entering part of a task name before pressing TAB.</p>
+
+``` terminal
+% rake db:
+db:abort_if_pending_migrations  db:rollback                   
+db:charset                      db:schema:dump                
+db:collation                    db:schema:load                
+db:create                       db:seed                       
+db:create:all                   db:sessions:clear             
+db:drop                         db:sessions:create            
+db:drop:all                     db:setup                      
+db:fixtures:identify            db:structure:dump             
+db:fixtures:load                db:test:clone                 
+db:migrate                      db:test:clone_structure       
+db:migrate:down                 db:test:load                  
+db:migrate:redo                 db:test:prepare               
+db:migrate:reset                db:test:purge                 
+db:migrate:up                   db:version  
+```
+
+<h3>Caching the Output From Rake</h3>
+
+<p>To make this command respond more quickly we can cache the results into a file.</p>
+
+``` ~/.oh-my-zsh/custom/plugins/eifion/_rake
+#compdef rake
+if [[ ! -f .rake_tasks~ ]]; then
+  rake --tasks | cut -d ' ' -f 2 > .rake_tasks~
+fi
+compadd $(cat .rake_tasks~)
+```
+
+<p>We cache the results to a file called <code>.rake_tasks~</code> but we only want to do this if the file doesn&rsquo;t exists so we check for this first. We then tell <code>compadd</code> to get its results from this file instead of from the <code>rake</code> command. We can try this out but we&rsquo;ll need to reload the command first.</p>
+
+``` terminal
+% unfunction _rake; . ~/.zshrc
+```
+
+<p>Now when we type <code>rake </code> and hit TAB the command will take a while to show the autocompletion options the first time but on subsequent times it will run a lot more quickly.</p>
+
+<h3>Expiring The Cache</h3>
+
+<p>It would be nice if the cache automatically expired when update a related Rake file. We can find out what the most recently modified file in a directory is by running <code>ls -t</code>. If we pass various Rake-related files to this command we can then check to see if our cache file is the most recently modified of these. If it isn&rsquo;t then we have to rebuild the cache. To get the first result from <code>ls</code> we can use <code>head</code>.</p>  
+
+``` terminal
+ls -t .rake_tasks\~ Rakefile **/*.rake | head -n 1
+```
+
+<p>We can use this in our shell script to get the most recently-modified file.</p>
+
+``` ~/.oh-my-zsh/custom/plugins/eifion/_rake
+#compdef rake
+local recent=$(ls -t .rake_tasks~ Rakefile **/*.rake | head -n 1)
+if [[ $recent != .rake_tasks~ ]]; then
+  rake --tasks | cut -d ' ' -f 2 > .rake_tasks~
+fi
+compadd $(cat .rake_tasks~)
+```
+
+<p>In our script we now get the most recently modified file and assign the result to a variable. Inside a completion script like this is executed at a global scope so it&rsquo;s a good idea to set it as a local variable. We then check to see that the most recently-modified file is the <code>.rake_tasks~</code> cache file and if it isn&rsquo;t then we run <code>rake --tasks</code> again to update the cache.</p>
+
+<p>Once we&rsquo;ve reloaded this function again we can try this out. The command should be fast the first time we run it (as we already have a <code>.rake_tasks~</code> file) but when we touch the <code>Rakefile</code> and run the command again there will be a delay as the cache is rebuilt.</p>
+
+<h3>Final Modifications</h3>
+
+<p>Our command works well now but if we run it in a directory with no <code>Rakefile</code> we&rsquo;ll get an error. We&rsquo;ll make a final change to our script so that it checks for a <code>Rakefile</code> in the current directory.</p>
+
+``` ~/.oh-my-zsh/custom/plugins/eifion/_rake
+#compdef rake
+if [[ -f Rakefile]]; then
+  local recent=$(ls -t .rake_tasks~ Rakefile **/*.rake | head -n 1)
+  if [[ $recent != .rake_tasks~ ]]; then
+    rake --tasks | cut -d ' ' -f 2 > .rake_tasks~
+  fi
+  compadd $(cat .rake_tasks~)
+fi
+```
+
+<p>That&rsquo;s pretty much it for our script. Its behaviour is similar to the Ruby script we started with but we&rsquo;ve done it in only eight lines of code which gives you an idea of the power of shell scripting. That said the original Ruby script adds a little more functionality to make the completion work in Bash so it&rsquo;s not truly a fair comparison. Both approaches have their pros and cons but you should know your tools and be able to pick the most appropriate one to solve a problem.</p>  
+
+<h3>Some Useful UNIX Commands</h3>
+
+<p>Speaking of knowing your tools we&rsquo;ll finish off by showing you a few useful command-line utilities that work well in shell scripts. The first one is <code>find</code>. This isn&rsquo;t as useful in zsh as it is in Bash because of its advanced wildcard features but it&rsquo;s still worth knowing. The first argument it takes is a path so if we just pass the current path we&rsquo;ll get a list of the files in the current directory and its subdirectories.</p>
+
+``` terminal
+% find .
+.
+./blog
+./blog/.rake_tasks~
+./blog/app
+./blog/app/controllers
+./blog/app/controllers/application_controller.rb
+./blog/app/controllers/articles_controller.rb
+./blog/app/helpers
+./blog/app/helpers/application_helper.rb
+./blog/app/helpers/articles_helper.rb
+./blog/app/models
+# Rest of files omitted.
+```
+<p>We can filter these results by passing in some options such as <code>name</code> which will let us specify a filename filter.</p>
+
+``` terminal
+% find . -name '*.rb'
+./blog/app/controllers/application_controller.rb
+./blog/app/controllers/articles_controller.rb
+./blog/app/helpers/application_helper.rb
+./blog/app/helpers/articles_helper.rb
+./blog/app/models/article.rb
+# Rest of files omitted.
+```
+
+<p>Note that it&rsquo;s important to quote the pattern so that the shell doesn&rsquo;t try to handle it itself. If we want to find files that have been modified in a certain time period we can use <code>mtime</code>. This command will find all of the Ruby files that have been modified in the last three days.</p>
+
+``` terminal
+% find . -name '*.rb' -mtime -3
+````
+
+<p>We can pipe the output from this command into another useful command, <code>grep</code>.</p>
+
+``` terminal
+% find . -name '*.rb' | grep production
+./blog/config/environments/production.rb
+```
+
+<p>The <code>grep</code> command will look through whatever is passed to it, in this case a list of file names and paths, and return any lines that match the pattern that is passed to it. If we want to search through the contents of the files we can use <code>xargs</code>.</p>
+
+``` terminal
+% find . -name '*.rb' | xargs grep production
+./blog/config/environments/production.rb:# The production environment is meant for finished, "live" apps.
+./blog/config/environments/production.rb:# Use a different cache store in production
+```
+
+<p>The <code>xargs</code> command works by taking its input, in this case the list of files and appending them as arguments to the command that we pass to it. In this case <code>grep</code> will search each of the files that passed to it for the word <code>production</code>.</p>
+
+<p>There&rsquo;s an alternative to <code>grep</code> called <code>ack</code>. If you&rsquo;re running OS X this won&rsquo;t be installed by default but if you have Homebrew on your system you can install it by running <code>brew install ack</code>. We use <code>ack</code> in a similar way to <code>grep</code> so we can run our previous command again and replace <code>grep</code> with <code>ack</code>.</p>
+
+``` terminal
+%find . -name '*.rb' | xargs ack production
+blog/config/environments/production.rb
+3:# The production environment is meant for finished, "live" apps.
+18:# Use a different cache store in production
+```
+
+<p>Another useful utility is <code>sed</code>. This is a stream editor and it will modify any input passed to it. If for some reason we wanted to pretend that our Rails project was written in Python we could run this:</p>
+
+```
+%find . -name '*.rb' | sed 's/rb/py/'
+./blog/app/controllers/application_controller.py
+./blog/app/controllers/articles_controller.py
+./blog/app/helpers/application_helper.py
+./blog/app/helpers/articles_helper.py
+./blog/app/models/article.py
+./blog/app/models/comment.py
+./blog/app/models/feed_entry.py
+```
+
+<p>The arguments we pass to <code>sed</code> are both regular expressions so we can so some fairly complicated matching if we want to. As before if we want to change the contents of the files rather than the name we can use <code>xargs</code>.</p>
+
+<p>The files themselves aren&rsquo;t changed when we do this, only the output from the command that shows the files&rsquo; contents. We can do this, though, by using <code>sed</code>&rsquo;s <code>-i</code> option.</p>
+
+``` terminal
+%find . -name '*.rb' | xargs sed -i 's/rb/py/'
+```
+
+<p>Other commands that are worth looking at include <code>sort</code>, <code>tr</code>, <code>comm</code>, <code>cut</code>, <code>paste</code>, <code>diff</code> and <code>patch</code>. To find out how these commands work we can use the most important command of all, <code>man</code>, which gives us documentation about each of these commands.</p>
+
+<p>For more information on learning the shell there&rsquo;s a really useful book called <a href="http://www.amazon.com/Bash-Shell-Conquering-Command-Line/dp/1590593766/ref=sr_1_1?ie=UTF8&qid=1324856180&sr=8-1">&ldquo;From Bash to Z Shell&rdquo;</a>. This contains information on both Bash and Z Shell and is a great resource if you&rsquo;re moving from one to the other.</p>

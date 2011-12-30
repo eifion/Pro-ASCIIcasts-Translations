@@ -1,0 +1,156 @@
+<p>Below is a page from a Rails application that displays a list of products.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/909/original/E017RI01.png" width="800" height="449" alt="The page that shows a list of products."/>
+</div>
+
+<p>A product can belong to a number of categories and there&rsquo;s a many-to-many association between the <code>Product</code> and <code>Category</code> models. The product shown below isn&rsquo;t in any categories and as yet we don&rsquo;t have a way to assign categories to a product through the user interface. In this episode we&rsquo;ll add the ability to assign categories through a list of checkboxes when a user edits the product.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/910/original/E017RI02.png" width="800" height="313" alt="The page for a new product."/>
+</div>
+
+<p>The two models are associated using <code>has_many :through</code>. Here&rsquo;s the code for <code>Product</code>.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  has_many :categorizations
+  has_many :categories, through: :categorizations
+end
+```
+
+<p>A product has many categories through a join model called <code>Categorization</code>.</p>
+
+``` /app/models/categorization.rb
+class Categorization < ActiveRecord::Base
+  belongs_to :category
+  belongs_to :product
+end
+```
+<p>The <code>Category</code> model has a similar <code>has_many :through</code> relationship with <code>Product</code>.</p>
+
+<p>The technique we&rsquo;ll show you will also work for a <code>has_and_belongs_to_many</code> relationship but <code>has_many :through</code> is much more flexible which is why we&rsquo;ve chosen to use it. One advantage is gives us is a method for accessing the <code>category_ids</code> for a product. We can demonstrate this in the console by fetching a product and listing its <code>category_ids</code>.</p>
+
+``` terminal
+> p = Product.first
+> p.category_ids
+ => [] 
+``` 
+<p>We can also set category_ids through this method.</p>
+
+``` terminal
+> p.category_ids = [1,2]
+ => [1, 2] 
+``` 
+<p>This assigns the categories and creates the categorization records too and we can now fetch the categories for our product.</p>
+
+``` terminal
+> p.categories
+ => [#<Category id: 1, name: "Board Games", created_at: "2011-12-26 21:22:48", updated_at: "2011-12-26 21:22:48">, #<Category id: 2, name: "Clothing", created_at: "2011-12-26 21:22:48", updated_at: "2011-12-26 21:22:48">]
+``` 
+ 
+<p>If we look at our product in the browser now we&rsquo;ll see the categories we&rsquo;ve assigned to it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/911/original/E017RI03.png" width="800" height="360" alt="The categories for a product now show on the page."/>
+</div>
+
+<h3>Adding Categories to The Edit Product Form</h3>
+
+<p>We need to modify the edit product form so that we can add and remove categories through it. Here&rsquo;s the form&rsquo;s template.</p>
+
+``` /app/views/products/_form.html.erb
+<%= form_for(@product) do |f| %>
+  <% if @product.errors.any? %>
+    <div class="error_messages">
+      <h2><%= pluralize(@product.errors.count, "error") %> prohibited this product from being saved:</h2>
+
+      <ul>
+      <% @product.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :price %><br />
+    <%= f.text_field :price %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>The form currently has two fields, one for the product&rsquo;s <code>name</code> and one for its <code>price</code>. We want to add another for the categories and this is how we do it:</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <% Category.all.each do |category| %>
+    <%= check_box_tag "product[category_ids][]", category.id %>
+    <%= category.name %><br/>
+  <% end %>
+</div>
+```
+
+<p>In the code above we loop through the categories and display a checkbox for each one. If we were rendering a single checkbox we could use <code>f.check_box :category_ids</code> but this won&rsquo;t work here as <code>category_ids</code> is an array and we need multiple attributes for each attribute. Instead we&rsquo;ve gone for a more manual approach and used <code>check_box_tag</code>. To make this work with multiple checkboxes we need to end the name with a pair of empty square brackets. This tells Rails to bundle up all of the values submitted into an array in the <code>params</code> hash. When we visit the edit form for a product now the checkboxes are shown.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/912/original/E017RI04.png" width="800" height="495" alt="The product form now has checkboxes for the categories."/>
+</div>
+
+<p>If we select some options and submit the form the categories will be added.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/913/original/E017RI05.png" width="800" height="389" alt="The categories have been added successfully."/>
+</div>
+
+<p>When we go back to edit the product again, however, the categories that we selected won&rsquo;t be checked. We can fix this by adding a third argument to the <code>check_box_tag</code> that so that the checkbox is checked if the product&rsquo;s <code>category_id</code>&rsquo;s include that category.</p>
+
+``` /app/views/products/_form.html.erb
+<% Category.all.each do |category| %>
+  <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id) %>
+  <%= category.name %><br/>
+<% end %>
+```
+
+<p>When we edit a product now the correct checkboxes are checked.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/914/original/E017RI06.png" width="800" height="504" alt="The product's current categories are now checked on the edit form."/>
+</div>
+
+<p>There&rsquo;s still a bug with this form, though. If we uncheck the selected checkboxes and submit the form the previously selected categories aren&rsquo;t removed. This is because unchecked checkboxes don&rsquo;t have their values submitted back to the server. To get around this problem we can go modify to our form to add a hidden field with the same name as the checkboxes and with a value of <code>nil</code>.</p> 
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= hidden_field_tag "product[category_ids][]", nil%>
+    <% Category.all.each do |category| %>
+    <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id) %>
+    <%= category.name %><br/>
+  <% end %>
+</div>
+```
+
+<p>Now if none of the checkboxes are checked when the form&rsquo;s submitted the hidden field is included in the fields posted back to the server and the product has its categories removed.</p>
+
+<h3>Clickable Checkbox Labels</h3>
+
+<p>There&rsquo;s one more issue in the edit form that we should resolve. Clicking the label next to a checkbox should act as if we&rsquo;d clicked that checkbox. It&rsquo;s easy to wrap the name in a <code>label</code> tag, but we have to associate the label with a checkbox via its <code>id</code> and currently each checkbox has the same <code>id</code>. This is bad practice anyway so first we&rsquo;ll modify the view template to assign each checkbox a unique id.</p>
+
+``` /app/views/products/_form.html.erb
+<% Category.all.each do |category| %>
+  <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id), id: dom_id(category) %>
+  <%= label_tag dom_id(category), category.name %><br/>
+<% end %>
+```
+
+<p>To make each checkbox&rsquo;s <code>id</code> unique we use the <code>dom_id</code> method that Rails provides and pass it the category. This will generate an <code>id</code> of <code>category_n</code> where <code>n</code> is the category&rsquo;s <code>id</code>. We can then use a <code>label_tag</code> to display the category&rsquo;s name and we can use <code>dom_id</code> here too to associate the label with the checkbox. Now, when we reload the page, we can click the labels to toggle the checkboxes.</p>
+
+
+<p>The code we have now works well but it&rsquo;s a little complicated, especially in the view. We could extract this out into a form builder but this is out of the scope of this episode. Alternatively we could use a gem such as <a href="https://github.com/plataformatec/simple_form">SimpleForm</a> or <a href="https://github.com/justinfrench/formtastic">Formtastic</a>. SimpleForm provides a collection_check_boxes method which lets us do what we&rsquo;ve done here but in a much more concise method. Formtastic has a similar check_boxes method.</p>
