@@ -1,0 +1,165 @@
+<p>Cron is one of the most common ways to handle scheduled, recurring jobs but its syntax can be quite cryptic. Here&rsquo;s an example from the Wikipedia page on <a href="http://en.wikipedia.org/wiki/Cron">cron</a>.</p>
+
+``` cron
+1 0 * * *  printf > /www/apache/logs/error_log
+```
+
+<p>It&rsquo;s not obvious how often this command runs. Is it every minute, on the first minute of every hour or something else? It will actually run on the first minute of each day. What about this one?</p>
+
+``` cron
+0 */2 * * *  /home/username/test.pl
+```
+
+<p>This one runs every two hours but understanding this and getting the syntax right in your own cron jobs can be tricky. Cron jobs are often specific to a single application so it would be nice to manage them within an application instead of directly on the server.  This is where the <a href="https://github.com/javan/whenever">Whenever</a> gem comes in. This gives us a convenient way to manage an application&rsquo;s cron tasks directly in Ruby. It gives us a nice syntax for defining how often a given task should run and some convenient commands for running different types of task.</p>
+
+<h3>Creating Scheduled Tasks With Whenever</h3>
+
+<p>To add Whenever to an application we need to add it to the gemfile and then run bundle to install it.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.5'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'whenever', require: false
+```
+
+<p>Note that we&rsquo;ve used the <code>require</code> option and set it to <code>false</code> because we don&rsquo;t want to use Whenever in the Rails application. We set up Whenever in our application by running the <code>whenverize</code> command, though we should run it with <code>bundle exec</code>.</p>
+
+``` terminal
+$ bundle exec wheneverize
+[add] writing `./config/schedule.rb'
+[done] wheneverized!
+```
+
+<p>This command creates a <code>schedule.rb</code> file in the <code>/config</code> directory with some documentation in it. We&rsquo;ll replace this with our own tasks. Let&rsquo;s say that we want to remove a cache file every fifteen minutes. We write that task like this:</p>
+
+``` /config/schedule.rb
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+end
+```
+
+<p>The <code>command</code> method runs a terminal command and the we can use the <code>path</code> variable to give us access to our application&rsquo;s path. We can see the equivalent cron code at any time by running whenever, again through <code>bundle exec</code>.</p>
+
+``` terminal
+$ bundle exec whenever
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'''
+```
+
+<p>The output from this command shows the cron equivalent for our task.</p>
+
+<p>There&rsquo;s a variety of other ways to specify schedules with Whenever. For example if we want to run some Ruby code rather than a terminal command we can do so. Let&rsquo;s say that we have an e-commerce application and we want to clear out any abandoned carts once a week, early on a Sunday morning. We have a class method on our <code>Cart</code> model for doing this and we can call <code>runner</code> to run it.</p>
+
+``` /config/schedule.rb
+every :sunday, at: "4:28 AM" do
+  runner "Cart.clear_abandoned"
+end
+```
+
+<p>This command will load up the Rails environment and run the Ruby code we&rsquo;ve passed to it. We can also run Rake tasks this way. If our application has a Thinking Sphinx server we&rsquo;ll want to be sure that it&rsquo;s started up each time the server is rebooted. We can do that by adding this task:</p>
+
+``` /config/schedule.rb
+every :reboot do
+  rake "ts:start"
+end
+```
+
+<p>If we run <code>whenever</code> now we&rsquo;ll see each of these tasks translated to the equivalent cron syntax.</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'''
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'''
+```
+
+<p>Whenever automatically handles running Ruby code through <code>rails runner</code> and running the Rake tasks correctly so we don&rsquo;t need to worry about any of this.</p>
+
+<p>It&rsquo;s a good idea to keep a log of the output from these commands and we can do this with the set command, using the output option and specifying a path.</p>
+
+``` /config/schedule.rb
+set :output, "#{path}/log/cron.log"
+
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+end
+
+every :sunday, at: "4:28 AM" do
+  runner "Cart.clear_abandoned"
+end
+
+every :reboot do
+  rake "ts:start"
+end
+```
+
+<p>This will log output to a <code>cron.log</code> file in the application&rsquo;s <code>log</code> directory and if we run whenever again we&rsquo;ll see that the commands now pipe their output to that log file.</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+```
+
+<h3>Creating Our Own Job Types</h3>
+
+<p>We can even create our own job types. Whenever comes with three: <code>command</code>, <code>runner</code> and <code>rake</code> but if we run something else frequently we can make our own job type. If, for example, we have a lot of scripts in our application&rsquo;s <code>script</code> directory that we run through cron we can make a new job type to run them.</p>
+
+``` /config/schedule.rb
+set :output, "#{path}/log/cron.log"
+job_type :script, "'#{path}/script/:task :output"
+
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+  script "generate_report"
+end
+```
+
+<p>We use <code>job_type</code> to create a new job type and give it a name and a path. For our job this the path is application&rsquo;s <code>script</code> directory and <code>:task</code> indicates that it should run whatever task we pass in. We&rsquo;ll also use <code>:output</code> so that any output the script returns is passed to the log file. With this in place we can non define <code>script</code> jobs just like any other type of job and when we run whenever again we&rsquo;ll see our custom job in its output.</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c ''\''/Users/eifion/schedules/script/generate_report >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+```
+
+<h3>Deploying Tasks</h3>
+
+<p>We now have our schedules set up the way we want  but how do we deploy them to the server? If we&rsquo;re using Capistrano this is easy, all we need to do is add two lines to the <code>deploy.rb</code> file.</p>
+
+``` /config/deploy.rb
+require "bundler/capistrano"
+
+set :whenever_command, "bundle exec whenever"
+require 'whenever/capistrano'
+```
+
+<p>The middle line above tells Capistrano to execute the <code>whenever</code> command through Bundler and the line below adds a Capistrano task to write to the crontab every time the application is deployed. That&rsquo;s all we need to do. The next time we deploy the application everything will be set up automatically for us.</p>
+
+<h3>Alternatives</h3>
+
+<p>Whenever is a great way to manage cron jobs from inside a Rails application, but cron isn&rsquo;t the best solution for every kind of scheduled job. If a job needs to run very frequently or for long running tasks then it&rsquo;s worth considering some alternatives.</p>
+
+<p>If you&rsquo;re using Redis and Resque to manage a job queue (these were covered in <a href="http://railscasts.com/episodes/271-resque">episode 271</a>) take a look at <a href="https://github.com/bvandenbos/resque-scheduler">Resque Scheduler</a>. This is a persistent process that handles jobs on a schedule using Redis and Resque. A nice advantage of this is that we can see the status of our jobs through the Web UI that Resque provides. Resque Scheduler is built on top of a gem called <a href="https://github.com/jmettraux/rufus-scheduler">Rufus Scheduler</a>. If you&rsquo;re not using Resque and you need a more generic solution then this may provide a better solution. Another gem worth look at is <a href="https://github.com/adamwiggins/clockwork">Clockwork</a>. This works with a variety of queuing engines and provides a nice syntax similar to Whenever&rsquo;s.</p>

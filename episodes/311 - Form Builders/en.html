@@ -1,0 +1,377 @@
+<p>Rails applications often include a large number of forms. These generally follow a similar pattern which can lead to a lot of repetition in the view code. Gems such as 
+<a href="https://github.com/plataformatec/simple_form">SimpleForm</a>, which was covered back in <a href="http://railscasts.com/episodes/234-simple-form">episode 234</a> and <a href="https://github.com/justinfrench/formtastic">Formtastic</a>, covered in episodes <a href="http://railscasts.com/episodes/184-formtastic-part-1">184</a> and <a href="http://railscasts.com/episodes/185-formtastic-part-2">185</a>, are available to help with this but in this episode we&rsquo;ll show you how you can remove duplication from the view code by writing your own form builder from scratch.</p> 
+
+<p>The page we&rsquo;ll be working with is the form for editing a <code>Product</code> record.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/915/original/E311I01.png" width="800" height="617" alt="The form for modifying a product."/>
+</div>
+
+<p>There are a variety of fields on this form. Let&rsquo;s dive in to the source code and see how we can clean its code up using a custom form builder. There&rsquo;s a quite a bit to the template but for now we&rsquo;ll concentrate on the section below that generates form fields for some of the model&rsquo;s attributes.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :name %><br>
+  <%= f.text_field :name %>
+</div>
+<div class="field">
+  <%= f.label :price %><br>
+  <%= f.text_field :price %>
+</div>
+<div class="field">
+  <%= f.label :description %><br>
+  <%= f.text_area :description, rows: 5 %>
+</div>
+<div class="field">
+  <%= f.check_box :discontinued %>
+  <%= f.label :discontinued %>
+</div>
+```
+
+<p>There&rsquo;s a pattern to this code. Each field is has a <code>div</code> with a <code>class</code> of <code>field</code> followed by a label and the form field itself. We can make this code more concise by using a form builder and we&rsquo;ll write one to extend <code>text_field</code> so that it outputs the label and the wrapper <code>div</code> as well. The first step is to create a form builder. We&rsquo;ll call it <code>labelled_form_builder</code> and put it in a new <code>form_builders</code> directory under <code>/app</code>.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+class LabelledFormBuilder < ActionView::Helpers::FormBuilder  
+  def text_field(name, *args)
+    @template.content_tag :div, class: "field" do
+      label(name) + @template.tag(:br) + super
+    end
+  end
+end
+```
+
+<p>This class must inherit from <code>ActionView::Helpers::FormBuilder</code>. We can override any of this class&rsquo;s methods here and we&rsquo;ve overridden <code>text_field</code>. This method needs to take a name attribute and any other arguments that might be passed in. In the method we use <code>content_tag</code> to  generate the wrapper <code>div</code>. We can&rsquo;t call helper methods like this directly but as we have access to a <code>@template</code> instance variable we can call them through it. In the <code>div</code> we call label to generate the label and here we can call the method directly. In the view we&rsquo;d use <code>f.label</code> but here <code>f</code> is the form builder we&rsquo;re already in so we don&rsquo;t need it. Finally we use <code>content_tag</code> to generate a <code>br</code> element then call super to call the same method in the class&rsquo;s superclass to generate the text field.</p>
+
+<p>Whenever we call <code>text_field</code> in the view now it will generate the wrapper div and the label too so we can remove these and just call <code>text_field</code>.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.text_field :name %>
+<%= f.text_field :price %>
+<div class="field">
+  <%= f.label :description %><br>
+  <%= f.text_area :description, rows: 5 %>
+</div>
+<div class="field">
+  <%= f.check_box :discontinued %>
+  <%= f.label :discontinued %>
+</div>
+```
+<p>For this to work we need to tell the form to use our custom form builder. We do this by using <code>form_for</code>&rsquo;s builder option.</p>
+
+``` /app/views/products/_form.html.erb
+<%= form_for @product, builder: LabelledFormBuilder do |f| %>
+  # Form omitted
+<% end %>
+```
+
+<p>By doing this the <code>f</code> variable that&rsquo;s passed to the block will be an instance of <code>LabelledFormBuilder</code>. Once we&rsquo;ve restarted the server so that the <code>form_builders</code> directory is picked up we can reload the form and looks just like it did before.</p>
+
+<h3>Extracting Other Field Types</h3>
+
+<p>We can apply this technique now to other fields in the form such as the <code>description</code> text area. We could copy the <code>text_field</code> method that we wrote and rename it <code>text_area</code> but if we want to use this technique for every time of input control the code would soon become repetitive. Instead we can use a little meta-programming to eliminate this repetition.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+class LabelledFormBuilder < ActionView::Helpers::FormBuilder  
+  %w[text_field text_area password_field collection_select].each do |method_name|
+    define_method(method_name) do |name, *args|
+      @template.content_tag :div, class: "field" do
+        label(name) + @template.tag(:br) + super(name, *args)
+      end
+    end
+  end  
+end
+```
+
+<p>In the code above we take each of the method names we want to override and list them in an array. Then we loop through each name and pass it to <code>define_method</code> to define an instance method with that name. We have to pass the same arguments to this method&rsquo;s block that we passed to our <code>text_field</code> method and inside the block is the same code we had in <code>text_field</code> with one difference. The arguments passed in to the block can be implicit or explicit and so we specify these same argument in the call to <code>super</code>.</p>
+
+<p>There are some fields where we don&rsquo;t want this behaviour such as checkboxes where we display the label after the input field and there&rsquo;s no line break. For controls like these we will need to define a separate method.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+class LabelledFormBuilder < ActionView::Helpers::FormBuilder  
+  %w[text_field text_area password_field collection_select].each do |method_name|
+    define_method(method_name) do |name, *args|
+      @template.content_tag :div, class: "field" do
+        label(name) + @template.tag(:br) + super(name, *args)
+      end
+    end
+  end 
+  
+  def check_box(name, *args)
+    @template.content_tag :div, class: "field" do
+      super + label(name)
+    end    
+  end
+end
+```
+
+<p>We can now clean up this part of the view in the same way as we did the textboxes.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.text_field :name %>
+<%= f.text_field :price %>
+<%= f.text_area :description, rows: 5 %>
+<%= f.check_box :discontinued %>
+```
+
+<p>When we reload the page now it still looks the same as before, but now our view is much cleaner.</p> 
+
+<h3>Adding Custom Labels</h3>
+
+<p>What if we need to customize this behaviour even more? For example, what if we want to change the label on the <code>price</code> field so that it says &ldquo;Unit Price&rdquo; instead of &ldquo;Price&rdquo;? It would be good if we could add a <code>label</code> option to our customized form fields so that we can change the label&rsquo;s text. Rails provides a handy method that we can pass to an array of arguments called <code>extract_options</code>. This method returns an <code>options</code> hash at the end of the arguments or a generated new empty hash if no options have been passed in. We can pass this to the <code>label</code> and it will customize the text. We&rsquo;ll need to do this for each type of form field and so we&rsquo;ll write a new method in the class to do this and use it in each overridden method.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+class LabelledFormBuilder < ActionView::Helpers::FormBuilder  
+  %w[text_field text_area password_field collection_select].each do |method_name|
+    define_method(method_name) do |name, *args|
+      @template.content_tag :div, class: "field" do
+        field_label(name, *args) + @template.tag(:br) + super(name, *args)
+      end
+    end
+  end 
+  
+  def check_box(name, *args)
+    options = args.extract_options!
+    @template.content_tag :div, class: "field" do
+      super + " " +  field_label(name, *args)
+    end    
+  end
+  
+  private
+  def field_label(name, *args)
+    options = args.extract_options!
+    label(name, options[:label])
+  end
+end
+```
+
+<p>We can now use the <code>label</code> option in our price field.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.text_field :name %>
+<%= f.text_field :price, :label => "Unit Price" %>
+<%= f.text_area :description, rows: 5 %>
+<%= f.check_box :discontinued %>
+```
+
+<p>When we reload the page now the <code>price</code> field&rsquo;s label has changed.</p>
+
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/916/original/E311I02.png" width="800" height="420" alt="The price field's label has now changed."/>
+</div>
+
+<p>There&rsquo;s a problem with this, though. The options we pass in fall through to the text field and are rendered as attributes so our <code>price</code> textfield now has a <code>label</code> attribute.</p>
+
+``` html
+<div class="field">
+  <label for="product_price">Unit Price</label>
+  <br />
+  <input id="product_price" label="Unit Price" name="product[price]" size="30" type="text" value="29.95" />
+</div>
+```
+
+<p>To fix this we override the <code>objectify_options</code> method in our form builder. All this method needs to do is pass on the options to the same method in the superclass having first removed the <code>label</code> option.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+def objectify_options(options)
+  super.except(:label)
+end
+```
+
+<p>The next time we reload the page the <code>label</code> attribute will have gone.</p>
+
+<h3>Indicating Required Fields</h3>
+
+<p>Another useful thing we can do with a form builder is read a model&rsquo;s validations and alter the form fields to display information about required fields. For example  in the <code>Product</code> model the <code>name</code> and <code>price</code> fields are required and it would be useful if we could let the user know this automatically.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  has_many :categorizations
+  has_many :categories, through: :categorizations
+  validates_presence_of :name, :price
+end
+```
+
+<p>In our form builder we can determine the required fields by reflecting on the validations. We&rsquo;ll add a <code>required</code> CSS class to each required field&rsquo;s label.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+def field_label(name, *args)
+  options = args.extract_options!
+  required = object.class.validators_on(name).any? { |v| v.kind_of? ActiveModel::Validations::PresenceValidator }
+  label(name, options[:label], class: ("required" if required))
+end
+```
+
+<p>To determine if a field is required we fetch the <code>object</code> that the form is for and then get its <code>class</code>. We can then call <code>validators_on</code> on that and pass in the name of the current attribute. This returns an array of validators for that attribute and we use <code>any?</code> to see if any of these are a required field validator by checking each validator&rsquo;s class. If there is a matching validator we add the <code>required</code> class to the label.</p>
+
+<p>When we reload the page now the <code>name</code> and <code>price</code> fields&rsquo; labels are displayed in bold as we&rsquo;ve already added some CSS for the <code>required</code> class.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/917/original/E311I03.png" width="800" height="418" alt="The required fields are now shown in bold."/>
+</div>
+
+<h3>Error Messages</h3>
+
+<p>The four fields shown above are now look great in the view template but there are still other areas of the form that we can clean up. One such area is the area of the code that displays the error messages. We want to display error messages in the same way on each form so we can move the code that displays the error messages into a form builder.</p>
+
+``` /app/views/products/_form.html.erb
+<% if @product.errors.any? %>
+  <div class="error_messages">
+    <h2><%= pluralize(@product.errors.count, "error") %> prohibited this product from being saved:</h2>
+    <ul>
+    <% @product.errors.full_messages.each do |msg| %>
+      <li><%= msg %></li>
+    <% end %>
+    </ul>
+  </div>
+<% end %>
+```
+
+<p>We&rsquo;ll replace this with an <code>error_messages</code> method similar to that which was available in earlier versions of Rails.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.error_messages %>
+```
+
+<p>There&rsquo;s quite a lot of code in this method but it&rsquo;s fairly simple. Most of it adds tags, duplicating what we had in the view code.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+def error_messages
+  if object.errors.full_messages.any?
+    @template.content_tag(:div, :class => 'error_messages') do
+      @template.content_tag(:h2, "Invalid Fields") +
+      @template.content_tag(:ul) do
+        object.errors.full_messages.map do |msg|
+          @template.content_tag(:li, msg)
+        end.join.html_safe
+      end
+    end
+  end
+end
+```
+
+<p>We&rsquo;re using <code>content_tag</code> a lot in our form builder and we have to go through the <code>@template</code> instance variable each time we call it. We can use a delegation to tidy this up a little so that calls to <code>content_tag</code> and <code>tag</code> are automatically delegated to <code>@template</code> meaning that we can remove all the references to @template.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+class LabelledFormBuilder < ActionView::Helpers::FormBuilder  
+  delegate :content_tag, :tag, to: :@template
+
+  %w[text_field text_area password_field collection_select].each do |method_name|
+    define_method(method_name) do |name, *args|
+      content_tag :div, class: "field" do
+        field_label(name, *args) + tag(:br) + super(name, *args)
+      end
+    end
+  end 
+  
+  def check_box(name, *args)
+    options = args.extract_options!
+    content_tag :div, class: "field" do
+      super + " " +  field_label(name, *args)
+    end    
+  end
+  
+  def error_messages
+    if object.errors.full_messages.any?
+      content_tag(:div, :class => 'error_messages') do
+        content_tag(:h2, "Invalid Fields") +
+        content_tag(:ul) do
+          object.errors.full_messages.map do |msg|
+            content_tag(:li, msg)
+          end.join.html_safe
+        end
+      end
+    end
+  end
+ 
+  # Private methods omitted. 
+end
+```
+
+<h3>The Final Parts</h3>
+
+<p>We&rsquo;ve almost finished cleaning up our form template now. There are just a couple of things left to do. The first is to add a <code>submit</code> form builder which includes the wrapper <code>div</code> we have in the template.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="actions">
+  <%= f.submit %>
+</div>
+```
+
+<p>We can do this in a similar way to our other methods by writing a <code>submit</code> method.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+def submit(*args)
+  content_tag :div, class: "actions" do
+    super
+  end
+end
+```
+
+<p>This leaves us with one more thing to clean up in the template, this section of code that displays the product&rsquo;s categories.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= hidden_field_tag "product[category_ids][]", nil %>
+  <% Category.all.each do |category| %>
+    <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id), id: dom_id(category) %>
+    <%= label_tag dom_id(category), category.name %><br>
+  <% end %>
+</div>
+```
+
+<p>This code creates a list of checkboxes for a many-to-many relationship and we created this in the revised version of <a href="http://railscasts.com/episodes/311-form-builders">episode 17</a>. If you want to see exactly how this is done then take a look at that episode. This code is a good candidate for moving into a form builder as it&rsquo;s quite complex and we can refactor it better there.</p>
+
+<p>We want this method to behave just like <code>collection_select</code> because it has a similar function, i.e. listing associated records. We&rsquo;ll replace this code with a <code>collection_check_boxes</code> method that will take a name, a collection of items and <code>id</code> and <code>name</code> attributes to use to uniquely define each item.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.collection_check_boxes :category_ids, Category.all, :id, :name %>
+```
+
+<p>The code necessary to do this is rather complicated. We&rsquo;ll just put it in one method but if this code was going to be used in a production application we&rsquo;d probably refactor parts of it out into separate methods.</p>
+
+``` /app/form_builders_labelled_form_builder.rb
+def collection_check_boxes(attribute, records, record_id, record_name)
+  content_tag :div, class: "field" do
+    @template.hidden_field_tag("#{object_name}[#{attribute}][]") +
+    records.map do |record|
+      element_id = "#{object_name}_#{attribute}_#{record.send(record_id)}"
+      checkbox = @template.check_box_tag("#{object_name}[#{attribute}][]", record.send(record_id),  object.send(attribute).include?(record.send(record_id)), id: element_id)
+      checkbox + " " + @template.label_tag(element_id, record.send(record_name))
+    end.join(tag(:br)).html_safe
+  end
+end
+```
+
+<p>This does the same thing that the equivalent view code did, looping through all the records and generating a checkbox and a label for each one. When we reload the page now the form looks just as it did before and we can still assign and remove categories to a product.</p> 
+
+<p>Our form looks a lot cleaner now and if we need to use many-to-many checkboxes in another part of our application it&rsquo;s easy to use our form builder method again. We need to use the <code>builder</code> option to specify the builder at the top of each form in which we use our custom form builder methods, however, and this isn&rsquo;t very pretty. To help with this we can write our own custom <code>form_for</code> helper method and use this instead. We&rsquo;ll call ours <code>labelled_form_for</code>.</p>
+
+``` /app/views/products/_form.html.erb
+<%= labelled_form_for @product do |f| %>
+  <%= f.error_messages %>
+  <%= f.text_field :name %>
+  <%= f.text_field :price, :label => "Unit Price" %>
+  <%= f.text_area :description, rows: 5 %>
+  <%= f.check_box :discontinued %>
+  
+  <h2>Categories</h2>
+  <%= f.collection_check_boxes :category_ids, Category.all, :id, :name %>
+  <%= f.submit %>
+<% end %>
+```
+
+<p>We&rsquo;ll write our helper method in the <code>ApplicationHelper</code>.</p>
+
+``` /app/helpers/application_helper.rb
+module ApplicationHelper
+  def labelled_form_for(object, options = {}, &block)
+    options[:builder] = LabelledFormBuilder
+    form_for(object, options, &block)
+  end
+end
+```
+
+<p>This method adds the <code>LabelledFormBuilder</code> option to <code>form_for</code> so that we don&rsquo;t need to include it each time.</p>
+
+<p>That&rsquo;s it for this episode. We now have a fully-working form that hasn&rsquo;t changed much in appearance but which now has a much cleaner template thanks to our custom form builder. Before writing your own custom form builder don&rsquo;t forget to take a look at SimpleForm and Formtastic. These both help you to do something similar to what we&rsquo;ve done here and may well save you the trouble of having to write your own form builder.</p>
