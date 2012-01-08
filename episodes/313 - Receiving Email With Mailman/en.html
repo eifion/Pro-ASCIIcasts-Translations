@@ -1,0 +1,327 @@
+<p>Below is a page from a Rails application that manages support tickets. In this app tickets can only be raised through the Web interface but we&rsquo;d like to add some functionality so that tickets can be created based on incoming email.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/919/original/E313I01.png" width="800" height="280" alt="Our ticketing application."/>
+</div>
+
+<p>To do this we need a way for the application to be able to receive email and to perform tasks based on the subject or contents of the email. Handling incoming email can be quite challenging and there are many different solutions available but the <a href="https://github.com/titanous/mailman">Mailman</a> gem makes it quite a lot easier. This gem runs in a separate process and it can handle receiving email in a number of ways. What happens when an email is received is up to us and can be determined by writing a custom script.  Most of the Mailman&rsquo;s documentation is in its <a href="http://rubydoc.info/github/titanous/mailman/master/file/USER_GUIDE.md">user guide</a> so its worth reading through it if you&rsquo;re planning on using Mailman in an application.</p>
+
+<h3>Our First Mailman Script</h3>
+
+<p>We&rsquo;ll get started by adding Mailman to our application. We install it much like any other gem, but as we don&rsquo;t want it within the application itself we&rsquo;ll use the <code>require: false</code> option. As ever we&rsquo;ll need to run <code>bundle</code> to install this gem.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.5'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'mailman', require: false
+```
+
+<p>Mailman will run in its own process so we&rsquo;ll need to write a script to run it in the application&rsquo;s script directory. We&rsquo;ll call it <code>mailman_server</code>.</p>
+
+``` /script/mailmain_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+
+puts "Hello world!"
+```
+
+<p>This file needs to be executable so we&rsquo;ve added the shebang at the top. We then require <code>rubygems</code> and <code>bundler/setup</code> so that the script uses the same version of Mailman that we loaded through Bundler. We can then require that gem. For now we&rsquo;ll have our script output &ldquo;Hello world!&rdquo;. The script needs to be executable and we can make it so with <code>chmod</code>. Then we can run it from the command line.</p>
+
+``` terminal
+$ chmod +x script/mailman_server 
+$ script/mailman_server 
+Hello world!
+```
+
+<p>You might see some warnings related to the <code>rb-fsevent</code> gem when you run this command. For the most part you can ignore them but if you want you can install this gem to make these errors go away. Now that we know that our script is running we can replace our test output with our Mailman server.</p> 
+
+``` /script/mailmain_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman::Application.run do
+  default do
+    puts "Received: #{message.subject}" 
+  end
+end
+```
+
+<p>We start the server by calling <code>Mailman::Application.run</code> and we pass it a block. In this block we define what Mailman calls routes. These determine how the incoming mail is handled. We&rsquo;ve used a <code>default</code> route which will be called for every email that&rsquo;s sent. In the routes block we have access to a <code>message</code> object, which is an instance of <code>Mail::Message</code>, and we can find out what we can do with this object in the <a href="https://github.com/mikel/mail/">documentation</a>.</p>
+
+<p>Mailman can receive mail in three different ways. Standard input is great for testing as with it we can pass an email message in a file directly to the server. POP3 is the option we&rsquo;ll be using as it&rsquo;s easy to set up, especially through a Gmail account. The third option is Maildir which we&rsquo;ll explain a little later on.</p>
+
+<p>Before we set up POP3 we&rsquo;ll test our script by using the Standard input method. We have a test email file to hand that we can use that looks like this:</p>
+
+``` mailman_test.eml
+Date: Fri, 30 Dec 2011 14:00:00 -0800
+From: foo@example.com
+Subject: Mailman Test
+To: support@example.com
+
+This is a test email for use with Mailman.
+
+Does this work?
+```
+
+<p>Let&rsquo;s try piping this into our Mailman script.</p>
+
+``` terminal
+$ cat mailman_test.eml | script/mailman_server 
+I, [2012-01-06T21:41:13.019588 #6977]  INFO -- : Mailman v0.4.0 started
+I, [2012-01-06T21:41:13.019900 #6977]  INFO -- : Rails root found in ., requiring environment...
+D, [2012-01-06T21:41:17.118213 #6977] DEBUG -- : Processing message from STDIN.
+I, [2012-01-06T21:41:17.282829 #6977]  INFO -- : Got new message from 'foo@example.com' with subject 'Mailman Test'.
+Received: Mailman Test
+```
+
+<p>Mailman starts up and we see the message &ldquo;Received: Mailman Test&rdquo; so our server looks to be working.</p>
+
+<h3>Adding Tickets Through Email</h3>
+
+<p>Mailman will detect that it&rsquo;s being run from within a Rails application and automatically start up the environment so we have access to our app&rsquo;s models in our script. This means that we can create a new <code>Ticket</code> whenever our application receives an email.</p> 
+
+``` /script/mailmain_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman::Application.run do
+  default do
+    Ticket.create! subject: message.subject, body: message.body.decoded, from: message.from.first
+  end
+end
+```
+
+<p>We set the next <code>Ticket</code>&rsquo;s <code>subject</code> to the message&rsquo;s subject, the <code>body</code> to the message&rsquo;s body and the <code>from</code> attribute to the first address that the email is from. When we run our script again it should create a ticket so let&rsquo;s try it.</p>
+
+``` terminal
+$ cat mailman_test.eml | script/mailman_server 
+I, [2012-01-06T22:02:33.160706 #7032]  INFO -- : Mailman v0.4.0 started
+I, [2012-01-06T22:02:33.179205 #7032]  INFO -- : Rails root found in ., requiring environment...
+D, [2012-01-06T22:02:37.007863 #7032] DEBUG -- : Processing message from STDIN.
+I, [2012-01-06T22:02:37.163001 #7032]  INFO -- : Got new message from 'foo@example.com' with subject 'Mailman Test'.
+```
+
+<p>If we reload the tickets page now we&rsquo;ll see the ticket listed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/920/original/E313I02.png" width="800" height="387" alt="Our test email has been received."/>
+</div>
+
+<h3>Using Routes to Add Different Behaviour</h3>
+
+<p>Next we&rsquo;ll see how we can use routes to process the message in different ways. There are a variety of routing methods that are supported. We can treat emails differently by setting a filter on the address the email comes from or is sent to or on the subject. We can also pass variables in to a route&rsquo;s block which have their values set based on matches in the from, to or subject.</p>
+
+<p>We can apply this to our ticketing system and modify it so that it updates tickets rather than a creating a new one if the subject contains the word &ldquo;Update&rdquo; and a ticket id.</p>
+
+``` /script/mailmain_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman::Application.run do
+  subject(/Update (\d+)/) do |ticket_id|
+    Ticket.update(ticket_id, body:message.body.decoded)
+  end
+  
+  default do
+    Ticket.create! subject: message.subject, body: message.body.decoded, from: message.from.first
+  end
+end
+```
+
+<p>Emails with a subject like &ldquo;Update 1&rdquo; will now update that ticket rather than creating a new one. We&rsquo;ll modify our email now so that it will update our one existing ticket.</p>
+
+``` mailman_test.eml
+Date: Fri, 30 Dec 2011 14:00:00 -0800
+From: foo@example.com
+Subject: Update 1
+To: support@example.com
+
+This is a test email for use with Mailman.
+
+Does this work?
+
+UPDATED!
+```
+
+<p>Let&rsquo;s try this out by running the command to pass this email to the server again.</p>
+
+``` terminal
+$ cat mailman_test.eml | script/mailman_server
+```
+
+<p>When we reload the tickets page now instead of a new ticket having been created our existing one will have been updated.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/921/original/E313I03.png" width="800" height="416" alt="The ticket has been updated."/>
+</div>
+
+<h3>An Alternative to Routing</h3>
+
+<p>The routing feature is useful but its should be used sparingly. Routing logic can easily become complex and this makes the code harder to test. Instead of defining routes to handle different types of email it&rsquo;s better to move the logic into a class method. We&rsquo;ll return to just our default route and write a <code>receive_mail</code> method in the <code>Ticket</code> class to handle each type of email.</p>
+
+``` /script/mailmain_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman::Application.run do
+  default do
+    Ticket.receive_mail(message)
+  end
+end
+```
+
+<p>In the class we&rsquo;ll write that method and replicate the logic we had in the routes.</p>
+
+``` /app/models/ticket.rb
+class Ticket < ActiveRecord::Base
+  def self.receive_mail(message)
+    ticket_id = message.subject[/^Update (\d+)$/, 1]
+    if ticket_id.present?
+      Ticket.update(ticket_id, body: message.body.decoded)
+    else
+      Ticket.create! subject: message.subject, body: message.body.decoded, from: message.from.first
+    end
+  end
+end
+```
+
+<p>In <code>receive_email</code> we try to find a ticket id by parsing the email&rsquo;s subject. If we find one we update that ticket&rsquo;s body with the body of the email; if not we create a new ticket based on the contents of that email. Testing this behaviour is now easy. We can pass in a mail message to the method and check that the behaviour is what we expect.</p>
+
+<h3>Using a Real Email Account</h3>
+
+<p>Now that we have the main functionality working we&rsquo;ll move on to setting up a real receiver for our emails. As we mentioned earlier we can use either POP3 or Maildir and we&rsquo;re going to use POP3. We already have a Gmail account set up for this and it&rsquo;s easy to configure Mailman to use it. One configuration option we won&rsquo;t set is <code>Mailman.config.poll_interval</code>, which defines how often the server is polled. We&rsquo;ll leave this at the default of 60 seconds.</p>
+
+```/script/mailman_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman.config.pop3 = {
+  server: 'pop.gmail.com', port: 995, ssl: true,
+  username: ENV['GMAIL_USERNAME'],
+  password: ENV['GMAIL_PASSWORD']
+}
+
+Mailman::Application.run do
+  default do
+    Ticket.receive_mail(message)
+  end
+end
+```
+
+<p>We&rsquo;ve used environment variables for the username and password so that you can&rsquo;t see what they are but you can enter them directly if you prefer or use an external configuration file. We can now run our Mailman script directly. It will start up and poll the server for new mail in the POP3 account we&rsquo;ve configured.</p> 
+
+``` $ script/mailman_server 
+I, [2012-01-07T00:01:33.066079 #7322]  INFO -- : Mailman v0.4.0 started
+I, [2012-01-07T00:01:33.066286 #7322]  INFO -- : Rails root found in ., requiring environment...
+I, [2012-01-07T00:01:36.280029 #7322]  INFO -- : POP3 receiver enabled (mistertest@asciicasts.com@pop.gmail.com).
+I, [2012-01-07T00:01:36.280130 #7322]  INFO -- : Polling enabled. Checking every 60 seconds.
+D, [2012-01-07T00:01:36.345745 #7322] DEBUG -- : Checking POP3 server for messages...If we send an email to the account that we configured we should see it in the script’s output after the script next polls the account.
+D, [2012-01-07T00:03:39.411606 #7322] DEBUG -- : Checking POP3 server for messages...
+I, [2012-01-07T00:03:41.029299 #7322]  INFO -- : Got new message from 'eifion@asciicasts.com' with subject 'Hello World!'.
+```
+
+<p>When we reload our tickets page now we&rsquo;ll see the ticket created from the email that was sent.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/922/original/E313I04.png" width="800" height="521" alt="The email from a POP3 account has been successfully processed."/>
+</div>
+
+<h3>Handling Exceptions</h3>
+
+<p>Mailman doesn&rsquo;t handle exceptions well. If we try sending an email with the subject &ldquo;Update 999&rdquo; to update a ticket that doesn&rsquo;t exist an exception will be raised and the Mailman server will stop. When we start it up again it will try to process the same message and stop again. To fix this it&rsquo;s a good idea to avoid raising any exceptions that might be raised based on user input. In our <code>Ticket</code> model we&rsquo;ll add a check so that when an update email is received we check that a ticket with the given <code>id</code> exists. We&rsquo;ll also remove the exclamation mark from <code>create!</code> when we create a new message so that if any validations are fired and fail  no exception is raised.</p>
+
+``` /app/models/ticket.rb
+class Ticket < ActiveRecord::Base
+  def self.receive_mail(message)
+    ticket_id = message.subject[/^Update (\d+)$/, 1]
+    if ticket_id.present? && Ticket.exists?(ticket_id)
+      Ticket.update(ticket_id, body: message.body.decoded)
+    else
+      Ticket.create subject: message.subject, body: message.body.decoded, from: message.from.first
+    end
+  end
+end
+```
+
+<p>We could make this code a little smarter and provide some user feedback by sending an email back if there&rsquo;s a validation error but we won&rsquo;t do that here.</p>
+
+<p>Even with all this precaution there&rsquo;s still a chance that an exception might get through and we don&rsquo;t want our Mailman server crashing when this happens. We can add a rescue clause to the server&rsquo;s code.</p>
+
+``` /script/mailman_server ruby
+#!/usr/bin/env ruby
+require "rubygems"
+require "bundler/setup"
+require "mailman"
+
+Mailman.config.pop3 = {
+  server: 'pop.gmail.com', port: 995, ssl: true,
+  username: ENV['GMAIL_USERNAME'],
+  password: ENV['GMAIL_PASSWORD']
+}
+
+Mailman::Application.run do
+  default do
+    begin
+      Ticket.receive_mail(message)
+    rescue
+      Mailman.logger.error "Exception occurred while receiving message:\n#{message}"
+      Mailman.logger.error [e, *e.backtrace].join("\n")
+    end
+  end
+end
+```
+
+<p>Now if an exception is thrown when an incoming email is processed the email will be logged along with the full exception. When we start our server up again the email that tried to update the non-existent ticket will be processed again but this time the server won&rsquo;t throw an exception and quit. If an email is received that does throw an exception it will be handled now and the information saved to the log and the server will carry on running. Before using this in production it&rsquo;s a good idea to specify a logger which we can do by setting the relevant configuration property.</p>
+
+``` /script/mailman_server ruby
+Mailman.config.logger = Logger.new("log/mailman.log")
+```
+
+<p>Now the error messages will be logged to that file rather than to STDOUT.</p>
+
+<p>By the way it&rsquo;s important that this script is run from inside the Rails application&rsquo;s directory as it uses some relative paths. There are some changes we could make to make this work from any directory but normally this isn&rsquo;t an issue.</p> 
+
+<h3>Maildir</h3>
+
+<p>There may be reasons why you don&rsquo;t want to use the POP3 receiver, for example the polling delay may be unacceptable. If so the Maildir option is a great alternative, especially if you&rsquo;re running your own mail server. We can use the <code>Mailman.config.maildir</code> option to point Mailman to a <code>maildir</code> directory and the rest will be done automatically. If we want to use IMAP we can use <code>getmail</code> in combination with Maildir.</p> 
+
+<p>Bear in mind that the Mailman script will load the Rails application which may run  into memory problems if we have a large app or a small server. This is convenient as we can access our application&rsquo;s model directly from the script but we may want to look for alternatives if we don&rsquo;t want that memory taken up. We can stop the Rails application from being loaded by setting the <code>Mailman.config.rails_root</code> option to an empty string. If we do this we&rsquo;ll can use <code>Net:HTTP</code> to submit a POST request with the message data inside it so that Rails can process it.</p>
+
+<p>If memory is a real issue we could bypass Mailman entirely and use the Mail gem directly. This has some features for receiving email over POP. We can pass in some options like shown below and then fetch all the mail from server inside a loop.</p>
+
+``` ruby
+Mail.defaults do
+  retriever_method :pop3, :address    => "pop.gmail.com",
+                          :port       => 995,
+                          :user_name  => '<username>',
+                          :password   => '<password>',
+                          :enable_ssl => true
+end
+```
