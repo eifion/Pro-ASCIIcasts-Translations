@@ -1,0 +1,208 @@
+<p>Below is a page from a Rails application that handles the delivery of newsletters to subscribers. The page shows a list of the available newsletters and to send one out we just click its &ldquo;Deliver&rdquo; link.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/923/original/E171RI01.png" width="800" height="474" alt="Our newsletter application."/>
+</div>
+
+<p>When we click one of the &ldquo;Deliver&rdquo; links the request takes a long time to process. This is bad because while the Rails instance is processing the request it can&rsquo;t accept any other requests. When we&rsquo;re faced with a long-running request we should consider moving it into a background process. If we do this the request can respond almost instantly and the long-running task will be processed in the background.</p>
+
+<p>There are many ways to handle background tasks in Rails. One of the easiest to set up and use is <a href="https://github.com/collectiveidea/delayed_job">Delayed Job</a> as it allows us to use the same backend database our application uses and saves us from having to set up anything extra. It offers a simple interface that lets us call any method through a <code>delay</code> method to move it into the background. We&rsquo;ll use Delayed Job in our application to move the delivery of the newsletters out into a background tasks.</p>
+
+<h3>Setting Up Delayed Job</h3>
+
+<p>There are a few different Delayed Job gems. As we&rsquo;re using ActiveRecord in our application we need to add the <code>delayed_job_active_record</code> gem to the application&rsquo;s gemfile and then run bundle to install it.</p> 
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.5'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'delayed_job_active_record'
+```
+
+<p>Delayed Job supports other backends such as DataMapper and Mongoid so if your application uses one of those take a look at the project&rsquo;s README file for information on using it with these.</p>
+
+<p>To finish setting up Delayed Job we need to run a generator. This will create a migration for generating a table to handle the job queue so we&rsquo;ll need to run <code>rake db:migrate</code> to create the table afterwards.</p>
+
+``` terminal
+$ rails g delayed_job:active_record
+      create  script/delayed_job
+       chmod  script/delayed_job
+      create  db/migrate/20120109185353_create_delayed_jobs.rb
+```	  
+	  
+<p>Now that we have Delayed Job set up we can start it up and there&rsquo;s a Rake task called <code>jobs:work</code> that will do this.</p>
+
+``` terminal
+$ rake jobs:work
+[Worker(host:noonoo.home pid:3031)] Starting job worker
+```
+
+<h3>Using Delayed Job in Our Application</h3>
+
+<p>Now that we have Delayed Job set up we can modify our Rails application so that clicking a &ldquo;Deliver&rdquo; link will execute the long-running process in the background. Clicking the link it triggers the <code>NewslettersController</code>&rsquo;s <code>deliver</code> action and this action simulates the time taken to deliver the emails by sleeping for ten seconds.</p>
+
+``` /app/controllers/newsletters_controller.rb
+def deliver
+  @newsletter = Newsletter.find(params[:id])
+  sleep 10 # simulate long newsletter delivery
+  @newsletter.update_attribute(:delivered_at, Time.zone.now)
+  redirect_to newsletters_url, notice: "Delivered newsletter."
+end
+```
+
+<p>First we need to move the code that&rsquo;s taking a long time to run out into a separate method and it generally a good idea to move this code into the relevant model. We&rsquo;ll move the slow code in the controller into a new <code>deliver</code> method in <code>Newsletter</code>.</p>
+
+``` /app/controllers/newsletters_controller.rb
+def deliver
+  @newsletter = Newsletter.find(params[:id])
+  @newsletter.deliver
+  redirect_to newsletters_url, notice: "Delivered newsletter."
+end
+```
+
+<p>We&rsquo;ll create that <code>deliver</code> method now and paste the code that we&rsquo;ve taken from the controller into it. We&rsquo;ll need to modify it slightly to remove the <code>@newsletter</code> instance variable so that <code>update_attribute</code> is called on the current instance.</p>
+
+``` /app/models/newsletter.rb
+class Newsletter < ActiveRecord::Base
+  def deliver
+    sleep 10 # simulate long newsletter delivery
+    update_attribute(:delivered_at, Time.zone.now)
+  end
+end
+```
+
+<p>Now that we&rsquo;ve moved the long-running task into its own method it&rsquo;s easy to pass it off to a background process by calling <code>deliver</code> through <code>delay</code> in the controller.</p>
+
+``` /app/controllers/newsletters_controller.rb
+def deliver
+  @newsletter = Newsletter.find(params[:id])
+  @newsletter.delay.deliver
+  redirect_to newsletters_url, notice: "Delivering newsletter."
+end
+```
+
+<p>This code will add a new record to the <code>delayed_jobs</code> table in the database and this will tell Delayed Job to call the <code>deliver</code> method on the newsletter instance. Note that we&rsquo;ve also changed the flash notice so that it better reflects what&rsquo;s actually happening. When we click a &ldquo;Deliver&rdquo; link now the page is updated almost instantly but the newsletter we&rsquo;ve delivered isn&rsquo;t shown as delivered.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/924/original/E171RI02.png" width="800" height="472" alt="Our newsletter is now delivered in the background."/>
+</div>
+
+<p>If we reload the page after waiting ten seconds or so the newsletter should be marked as having been delivered so the background process has picked up the task and has processed it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/925/original/E171RI03.png" width="800" height="507" alt="When we refresh the page later the newsletter is shown as delivered."/>
+</div>
+
+<h3>Storing Simpler Objects</h3>
+
+<p>Delayed Job works by storing objects in the database. Any object that we call <code>delay</code> on as well as any arguments that we use in the method call will be serialized into YAML format in the database for Delayed Job to use in the background. Generally this isn&rsquo;t an issue but as a rule of thumb it&rsquo;s better to stick to simpler objects when you&rsquo;re working with Delayed Job. For example instead of using a full newsletter instance we can use the <code>Newsletter</code> class and pass the <code>id</code> to it directly like this.</p>
+
+``` /app/controllers/newsletters_controller.rb
+def deliver
+  Newsletter.delay.deliver(params[:id])
+  redirect_to newsletters_url, notice: "Delivering newsletter."
+end
+```
+
+<p>Now we&rsquo;re calling <code>delay</code> on a class instead of an instance and passing a simple <code>id</code> to it. Next we&rsquo;ll write a <code>deliver</code> class method in the <code>Newsletter</code> model that will find the newsletter with that <code>id</code> and call the <code>deliver</code> instance method on it.</p>
+
+``` /app/models/newsletter.rb
+class Newsletter < ActiveRecord::Base
+  def self.deliver(id)
+    find(id).deliver
+  end
+  
+  def deliver
+    sleep 10 # simulate long newsletter delivery
+    update_attribute(:delivered_at, Time.zone.now)
+  end
+end
+```
+
+<p>This isn&rsquo;t a lot of code to add but it will make the job queue much simpler.</p>
+
+<h3>Passing Options to The Delay Method</h3>
+
+<p>Delayed Job supports a number of useful options on the <code>delay</code> method. One is queue which we can use to specify a named queue. This enables us to have different workers working on different queues.</p>
+
+``` ruby
+Newsletter.delay(queue: &quot;newsletter&quot;).deliver(params[:id])
+```
+
+<p>Another useful option is <code>priority</code>. This defaults to <code>0</code> but if we set a higher value that job will be processed earlier. Similarly if we set it to a lower value the job will be processed later. We can also specify at <code>run_at</code> option to specify when we want this job to run at some point in the future.</p> 
+
+``` ruby
+Newsletter.delay(queue: &quot;newsletter&quot;, priority: 28, run_at: 5.minutes.from_now).deliver(params[:id])
+```
+
+<p>Delayed Job supports a number of different ways to add jobs to a queue. The <code>delay</code> method we&rsquo;ve used so far is the preferred approach and should work for most situations. If we want a method in a class to always be called asynchronously we can use <code>handle_asynchronously</code> in a class and pass it a method name as a symbol. Delayed Job will then be used every time that method is called. Another approach is a custom job and to do this we create our own custom class for a job with a <code>perform</code> method. We can then add jobs manually to the queue by calling <code>enqueue</code>, like this:</p>
+
+``` ruby
+class NewsletterJob < Struct.new(:text, :emails)
+  def perform
+    emails.each { |e| NewsletterMailer.deliver_text_to_email(text, e) }
+  end
+end
+
+Delayed::Job.enqueue NewsletterJob.new('lorem ipsum...', Customers.find(:all).collect(&:email))
+```
+
+<p>This option gives us a little more control but it&rsquo;s usually not necessary.</p>
+
+<h3>Handling Failed Jobs</h3>
+
+<p>Delayed Job also has support for failure. Let&rsquo;s say that an exception is raised while a job is being processed. In this case the job will be tried again at a later time. We have to be careful, though, as in certain situations this may cause issues. For our job if delivery fails part way through it could lead to the newsletter being delivered again to the same recipients so we should always ask ourselves what the side-effects of our asynchronous method being called more than once might be. In our case we&rsquo;d need to keep a list of the recipients who have already received a given newsletter.</p> 
+
+<p>This behaviour can be configured by creating an initializer and putting some settings in it.</p>
+
+``` /config/initializers/delayed_job_config.rb
+Delayed::Worker.max_attempts = 5
+Delayed::Worker.delay_jobs = !Rails.env.test?
+```
+
+<p>In this file we set options for the <code>Delayed::Worker</code>. We&rsquo;ve set the maximum number of times that a job will be tried if it fails and also an option that will stop tasks being processed in the background if the current environment is <code>test</code>.</p>
+
+<h3>Using Delayed Job in Production</h3>
+
+<p>So far we&rsquo;ve been starting Delayed Job by running <code>rake jobs:work</code> but in production we should use the <code>delayed_job</code> script provided in the <code>script</code> folder. We can start this up by running</p>
+
+``` terminal 
+$ script/delayed_job start
+```
+
+<p>If we try this in our development environment we may see an exception as we need to add the <code>daemons</code> gem to our gemfile and run <code>bundle</code> again.</p>
+
+``` /Gemfile
+gem 'daemons'
+```
+
+<p>Once this has finished we can run the script again and it should work.</p>
+
+``` terminal
+$ script/delayed_job start
+delayed_job: process with pid 1672 started.
+```
+
+<p>We can stop the script by passing <code>stop</code>.</p>
+
+``` terminal
+$ script/delayed_job stop
+```
+
+<p>To get Delayed Job working with Capistrano you should read the <a href="https://github.com/collectiveidea/delayed_job/wiki/Rails-3-and-Capistrano">wiki page on this topic</a>. There are also some recipes provided; we can require <code>&quot;delayed/recipes&quot;</code> and then add various tasks to our deployment scripts for starting and stopping Delayed Job.</p> 
+
+<p>If you want a way to monitor the job queue through a Web interface take a look at the <a href="https://github.com/ejschmitt/delayed_job_web">Delayed Job Web gem</a>.  This is simple to install and use and will give us a nice interface for managing the job queue.</p>
+
+<p>Delayed job isn&rsquo;t a perfect fit for every situation so you should consider the alternatives such as Resque and Beanstalkd. There are episodes available on both of these.</p>
