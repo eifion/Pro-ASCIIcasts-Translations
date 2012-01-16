@@ -1,0 +1,387 @@
+<p>In this episode we&rsquo;ll show you how to roll out a new feature to a subset of users so that they can try it before it goes out live to everyone. The application we&rsquo;ll be using for this is shown below. It&rsquo;s a simple to-do list app that shows a list of tasks and which has a text box for adding a new task.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/930/original/E315I01.png" width="800" height="367" alt="Our todo application."/>
+</div>
+
+<p>This application also has some basic authentication so that we can log in or switch users. Currently that&rsquo;s all there is to the app but we do have a new feature waiting in a new Git branch. We&rsquo;re currently in the master branch but we can checkout the branch with the new feature in it, which is called phone, by running <code>git checkout</code>.</p> 
+
+``` terminal
+$ git checkout phone
+Switched to branch 'phone'
+```
+
+<p>When we reload the page now it has a &ldquo;Send to Phone&rdquo; link at the bottom. If we click this link we&rsquo;re taken to a new page where we can enter a phone number.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/931/original/E315I02.png" width="800" height="308" alt="The Send to Phone page."/>
+</div>
+
+<p>Entering a phone number on this page and clicking the button would theoretically send our list to a phone number as a text message.</p> 
+
+<h3>Rolling Out Features With Rollout</h3>
+
+<p>This feature is difficult to test fully in development so we&rsquo;re going to roll it out slowly to production starting with a subset of users. There&rsquo;s a Ruby gem called <a href="https://github.com/jamesgolick/rollout">Rollout</a> that can help us to do this. This uses a <a href="http://redis.io/">Redis</a> backend to manage the users that can see each feature so the first thing we&rsquo;ll need to do it install that. If you&rsquo;re using OS X the easiest way to do this is with Homebrew.</p> 
+
+``` terminal
+$ brew install redis
+``` terminal
+
+<p>Next we&rsquo;ll need to add the Redis and Rollout gems to our application and run <code>bundle</code> to install them.</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.5'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+
+gem 'bcrypt-ruby'
+gem 'redis'
+gem 'rollout'
+```
+
+<p>We set up Rollout in a new initializer file.</p> 
+
+``` /config/initializers/rollout_setup.rb
+$redis = Redis.new
+$rollout = Rollout.new($redis)
+$rollout.define_group(:admin) do |user|
+  user.admin?
+end
+```
+
+<p>The documentation recommends using global variables and we&rsquo;ve used them here to set up a new instance of Redis and a new Rollout instance which uses that Redis instance. We can configure Rollout in this file, too and we&rsquo;ve defined a group called <code>admin</code>. The <code>define_group</code> method takes a block that accepts a user object and which should return a boolean value based on whether that user is a member of that group. For our <code>admin</code> group we check that the <code>admin</code> boolean column is true for that user.</p>
+
+<p>Now that we have Rollout set up we can use it to define the portions of the application that we want to roll our slowly. For example we want only a select group to see the &ldquo;Send to Phone&rdquo; link. We can do this by wrapping the link in a <code>if</code> clause so that it&rsquo;s only displayed if we have it specified in Rollout.</p> 
+
+``` /app/views/tasks/index.html.erb
+<% if $rollout.active? :phone, current_user %>
+  <p><%= link_to "Send to Phone", new_phone_request_path %></p>
+<% end %>
+```
+
+<p>We do this by calling <code>$rollout.active?</code>, passing it a the name of a feature and the current user. The link will now only be displayed if we&rsquo;ve selected to show that feature to that user. Before we reload the page we&rsquo;ll need to restart the server and ensure that Redis is running. To start Redis we run:</p>
+
+``` terminal
+$ redis-server /usr/local/etc/redis.conf
+```
+
+<p>Now when we reload the page the link has gone as by default all features are off.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/932/original/E315I03.png" width="800" height="366" alt="The &ldquo;Send to Phone&rdquo; link is now hidden."/>
+</div>
+
+<p>Next we need to tell Rollout to activate this feature for a given subset of users. We&rsquo;ll do this through the console but we could do it through a Rake task or even a Web user interface.</p> 
+
+``` terminal
+1.9.2p290 :001 > $rollout.activate_group(:phone, :admin)
+ => true 
+```
+
+<p>To activate a feature we call <code>activate_group</code> on the <code>$rollout</code> variable we defined  in the initializer and pass it the name of the feature we want to activate and the group we want to activate it for. If we reload the page now the link has gone again but it we login as an admin user we&rsquo;ll see it again.</p>
+
+<p>If we want to activate a feature for every user we can use the group <code>:all</code> as this group is set up by default to include all users.</p>
+
+``` terminal
+1.9.2p290 :001 > $rollout.activate_group(:phone, :all)
+```
+
+<p>If we want to activate a feature for an individual user we can use 
+<code>activate_user</code>.</p>
+
+``` terminal
+1.9.2p290 :002 > $rollout.activate_user(:phone, User.find_by_name('eifion'))
+```
+
+<p>As we&rsquo;re currently logged in as that user we can see the &ldquo;Send to Phone&rdquo; link now if we refresh the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/933/original/E315I04.png" width="800" height="403" alt="The &ldquo;Send to Phone&rdquo; link is now visible again."/>
+</div>
+
+<p>We can activate a percentage of users by calling activate_percentage and passing in a feature and a number.</p>
+
+``` terminal
+1.9.2p290 :003 > $rollout.activate_percentage(:phone, 20)
+```
+
+<p>This will activate our feature for 20% of users.</p>
+
+<p>Each of these methods has an equivalent deactivate method for removing that activation. If we want to deactivate a feature completely we can use <code>deactivate_all</code>.</p>
+
+``` terminal
+1.9.2p290 :003 > $rollout.deactivate_all(:phone)
+ => 0 
+```
+
+<h3>Restricting Access To Actions</h3>
+
+<p>We&rsquo;re back where we started now and we don&rsquo;t have access to the &ldquo;Send to Phone&rdquo;  link. If we know the URL, though, we can access the page directly. We can disable this in the controller.</p> 
+
+```/app/controllers/phone_requests_controller.rb
+class PhoneRequestsController < ApplicationController
+  before_filter :authenticate
+
+  def new
+  end
+
+  def create
+    # Send to do list to phone number here
+    redirect_to tasks_url, notice: "Sent list to #{params[:phone_number]}"
+  end
+end
+```
+
+<p>The controller already has a <code>before_filter</code> for managing authentication; we&rsquo;ll add another one handling the rollout so that only users who have access to this feature can view these action.</p>
+
+``` /app/controllers/phone_requests_controler.rb
+class PhoneRequestsController < ApplicationController
+  before_filter :authenticate
+  before_filter :rollout
+
+  def new
+  end
+
+  def create
+    # Send to do list to phone number here
+    redirect_to tasks_url, notice: "Sent list to #{params[:phone_number]}"
+  end
+  
+  private
+  def rollout
+    unless $rollout.active? :phone, current_user
+      redirect_to root_url, alert: "Access denied"
+    end
+  end
+end
+```
+
+<p>The code in the new <code>rollout</code> method is essentially the same that we have in the view where we check that the current user can access the phone feature. If they aren&rsquo;t we&rsquo;ll redirect them back to the home page. If we visit <a href="http://localhost:3000/phone_requests/new"><code>http://localhost:3000/phone_requests/new</code></a> now we&rsquo;ll be redirected as currently no-one has access to the phone feature.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/934/original/E315I05.png" width="800" height="403" alt="Trying to access the &ldquo;Send to Phone&rdquo; page directly is now forbidden by the before filter."/>
+</div>
+
+<h3>Tidying Up</h3>
+
+<p>We&rsquo;ll be calling <code>$rollout.active</code> a lot as we develop our application so it&rsquo;s a good idea to move it into a new <code>rollout?</code> method in our <code>ApplicationController</code>. We can then call this method elsewhere by just calling <code>rollout?</code>.</p>
+
+``` /app/controllers/application_controller.rb
+def rollout?(name)
+  $rollout.active? name, current_user
+end
+helper_method :rollout?
+```
+
+<p>We can now modify the code in the <code>PhoneRequestsController</code> so that it uses our new method.</p>
+
+``` /app/controllers/phone_requests_controller.rb
+def rollout
+  unless rollout? :phone
+    redirect_to root_url, alert: "Access denied"
+  end
+end
+```
+
+<p>As we&rsquo;ve made rollout? a helper method we can modify the view code, too.</p>
+
+``` /app/views/tasks/index.html.erb
+<% if rollout? :phone %>
+  <p><%= link_to "Send to Phone", new_phone_request_path %></p>
+<% end %>
+```
+
+<p>Sometimes it can be difficult to find all of the changes we&rsquo;ve made to a codebase for a given feature so that it can be wrapped in a <code>rollout</code> condition. This is where Git branches come in handy. If we keep a separate branch for each feature we can call <code>git diff master</code> to find the differences in the codebase between a given branch and the master branch. We can then wrap these differences in a <code>rollout</code> condition so that they only appear if the user has access to them.</p>
+
+<h3>Degrade</h3>
+
+<p>That wraps up how to use the Rollout gem to enable features for a specific subset of users. There&rsquo;s another gem that goes hand-in-hand with it called <a href="https://github.com/jamesgolick/degrade">Degrade</a>, also written by James Golick. This gem allows us to automatically disable features when exceptions occur.</p>
+
+<p>For example, let&rsquo;s say that while our new Send to Phone feature is sending the list it throws an exception. Maybe too many people are using the feature at once and the SMS gateway is beginning to creak under the strain. It would be nice if we could automatically disable this feature and fall back to the old behaviour in these circumstances. The Degrade gem helps us to do this.</p>
+
+<p>As with Rollout, the first step to adding Degrade to an application is to add it to the gemfile and run <code>bundle</code>.</p>
+
+``` /Gemfile
+gem 'degrade'
+```
+
+<p>In the initializer we created for Rollout we can set up Degrade.</p>
+
+``` /config/initializers/rollout_setup.rb
+$degrade_phone = Degrade.new($redis,
+	name: :phone,
+	minimum: 1,
+	failure_strategy: lambda { $rollout.deactivate_all(:phone)}
+)
+```
+
+<p>We&rsquo;ve created a global <code>degrade_phone</code> variable here and assigned it to a new instance of <code>Degrade</code>. As well as passing in our Redis instance we&rsquo;ve specified some other options such as the name of the feature. We&rsquo;ve set the <code>minimum</code> option to <code>1</code> so that we can test this, as it defaults to <code>100</code>. This is the number of times that the code should be run before the failure rate is checked. The <code>failure_strategy</code> option is a <code>lambda</code> which is triggered when the failure rate is exceeded. In it we disable the &ldquo;Send to Phone&rdquo; feature.</p>
+
+<p>Now we have this set up we can call <code>perform</code> on this Degrade instance and pass it a block and put our feature in there. If an exception is raised inside the block it will go through that instance. In our case the feature is handled inside two controller actions and we can use an around filter to handle them.</p>
+
+``` /app/controllers/phone_requests_controller.rb
+class PhoneRequestsController < ApplicationController
+  before_filter :authenticate
+  before_filter :rollout
+  around_filter :degrade
+
+  def new
+  end
+
+  def create
+    # Send to do list to phone number here
+    redirect_to tasks_url, notice: "Sent list to #{params[:phone_number]}"
+  end
+  
+  private
+  def rollout
+    unless rollout? :phone
+      redirect_to root_url, alert: "Access denied"
+    end
+  end
+
+  def degrade
+    $degrade_phone.perform { yield }
+  end
+end
+```
+
+<p>The around filter is called before an action is triggered and will then yield to that action so in the degrade method we get the <code>$degrade_phone</code> variable that we created in the initializer, call <code>perform</code> on it and pass it <code>yield</code>. This will yield to the action so that it&rsquo;s executed inside the <code>perform</code> block and any exceptions raised are handled through it. To test this out we&rsquo;ll raise an exception in the <code>PhoneRequestsController</code>&rsquo;s <code>create</code> action.</p>
+
+``` /app/controllers/phone_requests_controller.rb
+def create
+  # Send to do list to phone number here
+  raise "foo"
+  redirect_to tasks_url, notice: "Sent list to #{params[:phone_number]}"
+end
+```
+
+<p>We can try this feature out in the browser now. As we&rsquo;ve modified an initializer we&rsquo;ll need to restart the server and we&rsquo;ll need to re-enable the feature, too. Once we have we can visit the Send to Phone page, enter a phone number and press the button. When we do we see the exception.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/935/original/E315I06.png" width="800" height="403" alt="An exception is thrown when we try to send our list to a phone."/>
+</div>
+
+<p>If we reload the page now we&rsquo;ll see the &ldquo;Access Denied&rdquo; message as Degrade will have disabled the feature. Note that the link has now gone from the page too as this is part of the feature.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/936/original/E315I07.png" width="800" height="403" alt="Degrade has now disabled the feature."/>
+</div>
+
+<p>We should improve this error message so that its more user-friendly but the feature does now work.</p>
+
+<h3>A Custom Solution</h3>
+
+<p>Both of the Rollout and Degrade gems work really well but what should we do if we want a more customized solution? Maybe we don&rsquo;t want to use a Redis backend or our application doesn&rsquo;t have a <code>User</code> model. In these cases we can create similar functionality from scratch and it&rsquo;s not too difficult to do so. The Rollout gem itself is less than 100 lines of code.  Below is some Ruby code that recreates the Rollout feature from scratch so that we can get an idea as to what is involved.</p> 
+
+``` /app/models/rollout.rb
+# Generated with:
+# rails g model rollout name:string group:string user_id:integer percentage:integer failure_count:integer
+class Rollout < ActiveRecord::Base
+  def match?(user)
+    enabled? && match_group?(user) && match_user?(user) && match_percentage?(user)
+  end
+
+  def enabled?
+    failure_count.to_i < 1
+  end
+
+  def match_group?(user)
+    case group
+    when "admin" then user.admin?
+    else true
+    end
+  end
+
+  def match_user?(user)
+    user_id ? user_id == user.id : true
+  end
+
+  def match_percentage?(user)
+    percentage ? user.id % 100 < percentage : true
+  end
+end
+```
+
+<p>We&rsquo;ve removed the Rollout gem from our application now and generated a new model called <code>Rollout</code> using the generator you can see in the comments at the top of the file. We&rsquo;re using an ActiveRecord database but if performance is an issue we can easily swap this out for a different backend. Most of the logic in this file is for determining whether a rollout should apply to a given user based on a group, a specific user or a percentage just like the Rollout gem does. We can also specify a failure rate based off a failure count so that if part of our application fails a certain number of times the rollout is disabled.</p>
+
+<p>We&rsquo;ve also added two new methods to the <code>ApplicationController</code>. The first of these, <code>rollout?</code>, behaves like method we wrote to wrap the <code>$rollout.active?</code> functionality earlier. It finds all of the rollouts that match a given name and, if so, sees if those rollouts match the current user. The second, <code>degrade_feature</code>,  which will yield to the block and if an exception is raised will increment the failure count for the matching rollouts.</p>
+
+``` /app/controllers/application_controller.rb
+def rollout?(name)
+  Rollout.where(name: name).any? do |rollout|
+    rollout.match?(current_user)
+  end
+end
+helper_method :rollout?
+
+def degrade_feature(name)
+  yield
+rescue StandardError => e
+  Rollout.where(name: name).each do |rollout|
+    rollout.increment!(:failure_count)
+  end
+  raise e
+end
+```
+
+<p>Our view code is the same as it was when we were using the Rollout gem so that the &ldquo;Send to Phone&rdquo; link is only shown if the phone feature is currently rolled-out.</p>
+
+``` /app/views/tasks/index.html.erb
+<% if rollout? :phone %>
+  <p><%= link_to "Send to Phone", new_phone_request_path %></p>
+<% end %>
+```
+
+<p>There <code>PhoneRequestsController</code> hasn&rsquo;t changed much either.</p> 
+
+``` /app/controllers/phone_requests_controller.rb
+class PhoneRequestsController < ApplicationController
+  before_filter :authenticate
+  before_filter :rollout
+  around_filter :degrade
+
+  def new
+  end
+
+  def create
+    # Send to do list to phone number here
+    raise "foo"
+    redirect_to tasks_url, notice: "Sent list to #{params[:phone_number]}"
+  end
+  
+  private
+  def rollout
+      redirect_to root_url, alert: "Feature unavailable" unless rollout? :phone
+    end
+  end
+
+  def degrade
+    degrade_feature(:phone) { yield }
+  end
+end
+```
+
+<p>We still have a <code>rollout</code> before filter and a <code>degrade</code> around filter. The <code>rollout</code> method is much as it was before, redirecting if a feature is unavailable, while degrade now calls the <code>ApplicationController</code>&rsquo;s degrade_feature method and passes it through the block so that it wraps around the action.</p> 
+
+<p>Our application now works much as it did before. By default the &ldquo;Send to Phone&rdquo; link will be disabled so we won&rsquo;t see it but we can enable it in the console by creating a new <code>Rollout</code> record.</p>
+
+``` terminal
+1.9.2p290 :001 > Rollout.create! name: >phone", group: "admin"
+```
+
+<p>Now, if we&rsquo;re logged in as an admin we&rsquo;ll see the link again. If we click it and fill in a telephone number on the form and submit it we&rsquo;ll see the exception that we deliberately left in the <code>create</code> action to test the degrade functionality. If we reload the page again we&rsquo;ll be redirected to the home page and told that the feature is unavailable as the failure threshold will have been passed.</p>
+
