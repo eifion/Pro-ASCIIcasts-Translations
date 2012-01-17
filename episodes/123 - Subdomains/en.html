@@ -1,0 +1,155 @@
+<p>Below is a page from a blogging application. Unlike most Rails blogging apps this one supports multiple blogs and its home page shows a list of them.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/937/original/E123RI01.png" width="800" height="422" alt="The home page of our blogging application."/>
+</div>
+
+<p>Our application has three blogs, one each for Pirates, Ninjas and Robots. If we click one of the links we&rsquo;ll see a list of that blog&rsquo;s articles.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/938/original/E123RI02.png" width="800" height="422" alt="The home page for one of the blogs."/>
+</div>
+
+<p>Each blog&rsquo;s URL has a path in the form <code>/blogs/n</code>, where <code>n</code> is the internal <code>id</code>. We&rsquo;d like to clean up these URLs so that instead of using a path to reference a blog we use a subdomain. The <code>Blog</code> model already has a subdomain field so we already have a name we can use for each blog&rsquo;s subdomain.</p>
+
+<p>There are a couple of problems with trying this while our application is in development, the most prominent being that if we add a subdomain to <code>localhost</code> it won&rsquo;t point to our Rails application, so we can&rsquo;t use, say, <code>http://pirates.localhost:3000/</code> while our application is in development. One quick solution is to use an external domain that points to <code>127.0.0.1</code> such as <code>lvh.me</code>. We can access our application at <code>http://lvh.me:3000</code> and subdomains will work too so we can also use, say, <code>http://pirates.lvh.me:3000</code>.</p>
+
+<p>As we&rsquo;re running OS X another solution is to use the <a href="http://pow.cx/">Pow</a> server. This only takes a few commands to set up and once it is we can browse our application at <code>http://blogs.dev</code>. Subdomains work with Pow too so we can also use <code>http://pirates.blogs.dev </code>.</p>
+
+<h3>Routing Subdomains Point to the Right Page</h3>
+
+<p>If we visit <code>http://pirates.blogs.dev</code> now we&rsquo;ll see the same page we get if we visit the root URL but we can change this by modifying our application&rsquo;s routes. We need to add a route that points to the <code>BlogsController</code>&rsquo;s <code>show</code> action when we visit the root URL of a subdomain.</p>
+
+``` /config/routes.rb
+Blogs::Application.routes.draw do
+  resources :blogs
+  resources :articles
+  match '', to: 'blogs#show', constraints: {subdomain: /.+/}
+  root to: 'blogs#index'
+end
+```
+
+<p>We do that by matching a blank URL, which will be a root URL, and pointing it to the <code>blogs#show</code> action but only if a subdomain is present. We do that by adding a constraint and specifying the <code>subdomain</code> option, setting it to a regular expression that checks that the subdomain is one or more characters long. It&rsquo;s important that this route is placed above the root route in the file; if it isn&rsquo;t the root route will take precedence and always be triggered. More specific routes should always appear higher up in the routes file.</p>
+
+<p>We can try this out now and see if it works. Visiting the root URL still works but if we visit a subdomain while we&rsquo;re taken to the correct action we get an exception as the show action expects an id parameter to fetch the blog by.</p> 
+
+``` /app/controllers/blogs_controller.rb
+def show
+  @blog = Blog.find(params[:id])
+end
+```
+
+<p>We should instead fetch a blog by its <code>subdomain</code>.</p> 
+
+``` /app/controllers/blogs_controller.rb
+def show
+  @blog = Blog.find_by_subdomain!(request.subdomain)
+end
+```
+
+<p>If we try visiting a subdomain now it will work and we&rsquo;re taken to the correct blog.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/939/original/E123RI03.png" width="800" height="422" alt="The subdomains now work."/>
+</div>
+
+<p>If we don&rsquo;t use a subdomain we&rsquo;ll still be taken to the list of blogs so it looks like our code is working correctly.</p> 
+
+<h3>Fixing The Links</h3>
+
+<p>The next thing we have to do is fix the links on the home page so that they point to the appropriate subdomain. If we click on of the links now we&rsquo;ll be taken to, say, e.g. <code>http://blogs.dev/blogs/1</code> instead of the correct subdomain. To fix this we need to change the link in the index view template. Currently we pass in the blog model directly to <code>link_to</code>.</p>
+
+``` /app/views/blogs/index.html.erb
+<%= link_to blog.name, blog %>
+```
+
+<p>We&rsquo;ll replace this with a <code>root_url</code> with the <code>subdomain</code> option set.</p>
+
+``` /app/views/blogs/index.html.erb
+<%= link_to blog.name, root_url(subdomain: blog.subdomain) %>
+```
+
+<p>This <code>subdomain</code> option is new to Rails 3.1. If you&rsquo;re using an earlier version of Rails then you should take a look at <a href="http://railscasts.com/episodes/221-subdomains-in-rails-3">episode 221</a> to see how to do this. If we reload the home page now and click one of the links we&rsquo;ll be taken to the correct subdomain.</p>
+
+<h3>Scoping Resources</h3>
+
+<p>When we&rsquo;re working with multiple subdomains like this we often want to nest other resources so that they&rsquo;re only accessible through the right subdomain. For example our first article about pirates has an <code>id</code> of <code>1</code> and its URL is <code>http://pirates.blogs.dev/articles/1</code>. If we know the <code>id</code> for one of the other blogs&rsquo; articles we can still visit it through the <code>pirates</code> subdomain.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/940/original/E123RI04.png" width="800" height="422" alt="Accessing an article through the wrong subdomain."/>
+</div>
+
+<p>To fix this we need to modify the show action so that instead of just fetching an <code>Article</code> globally we fetch it through its blog.</p>
+
+``` /app/controllers/articles_controller.rb
+class ArticlesController < ApplicationController
+  def show
+  	@blog = Blog.find_by_subdomain(!request.subdomain)
+    @article = @blog.articles.find(params[:id])
+  end
+end
+```
+
+<p>If we try to access an article through the wrong blog now we&rsquo;ll see an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/941/original/E123RI05.png" width="800" height="422" alt="Accessing a blog through the wrong subdomain now shows an error."/>
+</div>
+
+<p>We&rsquo;ll probably need to do this several times throughout this application so we&rsquo;ll move this code into a before filter that we&rsquo;ll call <code>load_blog</code>.</p>
+
+``` /app/controllers/articles_controller.rb
+class ArticlesController < ApplicationController
+  before_filter :load
+  def show
+    @article = @blog.articles.find(params[:id])
+  end
+end
+```
+
+<p>We&rsquo;ll define the <code>load_blog</code> method inside the <code>ApplicationController</code>.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+
+  private
+  def load_blog
+  	@blog = Blog.find_by_subdomain!(request.subdomain)
+  end
+end
+```
+
+<p>Now whenever we need to nest resources through a subdomain we can add this <code>before_filter</code> to a controller and we can reference models through the association by calling <code>@blog</code>. This works for creating records, too. We can create records through the <code>@blog.articles</code> association and this way any new articles will automatically the blog that they&rsquo;re associated with.</p>
+
+<h3>Fixing a Few Last Problems</h3>
+
+<p>What we have so far works well but but there are a couple of issues that we may have to deal with before we can use subdomains in production. If we use <code>www</code> before the domain we&rsquo;ll run into problems because it will be treated as a subdomain instead of showing us the full list of blogs. We&rsquo;ll need to modify the   routes file again as its currently directing all subdomains to the <code>blogs#show</code> action. Instead of messing with a regular expression we&rsquo;ll use a lambda so that we can handle this with Ruby code.</p>
+
+``` /config/routes.rb
+Blogs::Application.routes.draw do
+  resources :blogs
+  resources :articles
+  match '', to: 'blogs#show', constraints: lambda { |r| r.subdomain.present? && r.subdomain != 'www' }
+  root to: 'blogs#index'
+end
+```
+
+<p>The lambda has a request object passed to it and we can use this to see if a subdomain is present and, if so, that it isn&rsquo;t <code>www</code>.</p>
+
+<p>If the logic in the lambda becomes more complex we can move it into a separate class and we demonstrated this in episode 221, but for what we have here it will work perfectly well as it is. If we visit <code>http://www.blogs.dev/</code> now we&rsquo;ll get the home page like we expect.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/942/original/E123RI06.png" width="800" height="422" alt="Visitng the site with www now works as expected."/>
+</div>
+
+<p>We&rsquo;ll also encounter a problem if our application is going to be hosted on a domain with more than one dot in the top-level domain. For example if your site was hosted at <code>http://www.mylovelyblogs.co.uk/ </code>the subdomain portion of the URL won&rsquo;t be detected correctly. This is easy to fix by adding the following line to the production environment file.</p>
+
+``` /config/environments/production.rb
+Blogs::Application.configure do
+  config.action_dispatch.tld_length = 2
+  # Rest of file omitted
+end
+```
+
+<p>This sets the top-level domain length to <code>2</code> which should equal the number of periods in the top-level domain. The default for this is <code>1</code>. This option is new in Rails 3.1; if you&rsquo;re using Rails 3.0 then there are details in episode 221 on how to deal with this.</p>
