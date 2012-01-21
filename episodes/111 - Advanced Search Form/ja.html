@@ -1,0 +1,189 @@
+<p><a href="http://railscasts.com/episodes/37-simple-search-form">エピソード37</a>で、ページに簡単に検索フォームを追加する方法を紹介しました。このフォームではテキストフィールドに簡単な文字列を入力し、一致する商品のリストを表示できました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/846/original/E111I01.png" width="800" height="349" alt="シンプルな検索フォーム"/>
+</div>
+
+<p>この検索フォームはGETリクエストで<code>ProductsController</code>の <code>index</code>アクションを呼び出して<code>search</code>パラメータを渡します。ほとんどのケースでは、アプリケーションに検索機能を追加するにはこの方法がベストでしょう。複数の検索フィールドがある場合でも、検索にはGETリクエストを使用する方法が適しています。 </p>
+
+<p>しかし、アプリケーションにより高度の検索をおこなうために複雑なフォームを提供したいときがあるでしょう。このようなケースでは、GETリクエストで送信するにはパラメータ数やデータ量が多すぎるという場合があります。そのようなフォームの例としては、vBulletinフォーラムの<a href="https://www.vbulletin.com/forum/search.php?search_type=1">高度な検索のページ</a>があります。このフォームには検索パラメータを送信するための10以上のフィールドがあり、GETリクエストで送信するには多すぎます。</p>
+
+<p>そこでRailsアプリケーションでこのような状況に対応するにはどうすればいいでしょうか? ポイントは、検索を単なるリクエストとして扱うのではなく、モデルを持ちデータベースを裏に備えた、独立したリソースとして扱うという点です。</p>
+
+<h3>検索モデルを使用する</h3>
+
+<p>簡単なEコマースアプリケーションに高度な検索機能を付加するためには、<code>Search</code>モデルを追加して、新たに作る高度な検索フォームに持ちたいフィールドに対応する属性を設定します。ユーザにキーワード、分類、最低価格、最高価格による検索を許可します。</p>
+
+``` terminal
+$ rails g model search keywords:string category_id:integer min_price:decimal max_price:decimal
+```
+
+<p><code>rake db:migrate</code>でデータベースのマイグレーションをおこない、新規テーブルを追加します。</p> 
+
+<p>次に、フォームを処理し結果を表示するための<code>SearchesController</code>を作成します。</p>
+
+``` terminal
+$ rails g controller searches
+```
+
+<p>検索はRESTfulな形式のリソースになるので、routesファイルにはそのように定義して追加します。</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  root to: 'products#index'
+  resources :products
+  resources :searches
+end
+```
+
+<p><code>Search</code>リソースができたので、商品ページのシンプルな検索フォームの下に高度な検索のリンクを追加します。これを<code>SearchesController</code>のnewアクションにリンクします。</p>
+
+```/app/views/products/index.html.erb
+<h1>Products</h1>
+
+<%= form_tag products_path, method: :get do %>
+  <p>
+    <%= text_field_tag :search, params[:search] %>
+    <%= button_tag "Search", name: nil %>
+  </p>
+<% end %>
+
+<p><%= link_to "Advanced Search", new_search_path %></p>
+
+<div id="products">
+  <%= render @products %>
+</div>
+```
+
+<p>次にそのアクションをコントローラ内に作成します。</p>
+
+``` /app/controllers/searches_controller.rb
+class SearchesController < ApplicationController
+  def new
+    @search = Search.new
+  end
+end
+```
+
+<p>そしてそこで使用するビューを作成します。</p>
+
+``` /app/views/searches/new.html.erb
+<h1>Advanced Search</h1>
+
+<%= form_for @search do |f| %>
+  <div class="field">
+    <%= f.label :keywords %><br />
+    <%= f.text_field :keywords %>
+  </div>
+  <div class="field">
+    <%= f.label :category_id %><br />
+    <%= f.collection_select :category_id, Category.order(:name), :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= f.label :min_price, "Price Range" %><br />
+    <%= f.text_field :min_price, size: 10 %> -
+    <%= f.text_field :max_price, size: 10 %>
+  </div>
+  <div class="actions"><%= f.submit "Search" %></div>
+<% end %>
+```
+
+<p>このフォームはとてもシンプルです。<code>@search</code>オブジェクトに対して<code>form_for</code>を使用し、<code>keyword</code>のためのテキストフィールド、<code>category</code>のためのドロップダウンメニュー、最低価格と最高価格のための2つのテキストフィールドがあります。高度な検索のリンクをクリックすると新しいフォームが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/847/original/E111I02.png" width="800" height="404" alt="新しい高度な検索のフォーム"/>
+</div>
+
+<p>フォームを送信するユーザへの対応として<code>create</code>アクションが必要です。これによって新規の<code>Search</code>レコードが作成されて、showページにリダイレクトされ結果が表示されるので、ここでshowアクションも作成します。</p>
+
+``` /app/controllers/searches_controller.rb
+class SearchesController < ApplicationController
+  def new
+    @search = Search.new
+  end
+  
+  def create
+    @search = Search.create!(params[:search])
+    redirect_to @search
+  end
+  
+  def show
+    @search = Search.find(params[:id])
+  end
+end
+```
+
+<p>結果を表示する<code>show</code>のためのテンプレートが必要です。</p>
+
+``` /app/views/searches/show.html.erb
+<h1>Search Results</h1>
+
+<%= render @search.products %>
+```
+
+<p>テンプレートでは<code>Search</code>モデル(この後で作成します)のnew productsメソッドを使用し、一致する商品のリストを返して表示(<code>render</code>)します。これは<code>Product</code>ごとに部分テンプレートを表示処理するので、その部分テンプレートを作成します。</p>
+
+``` /app/views/products/_product.html.erb
+<div class="product">
+  <h2><%= link_to product.name, product %></h2>
+  <div class="details">
+    <%= number_to_currency(product.price) %>
+    <% if product.category %>
+      | Category:  <%= product.category.name %>
+    <% end %>
+  </div>
+</div>
+```
+
+<p><code>Search</code>モデルに<code>products</code>メソッドを追加するだけです。</p> 
+
+``` /app/models/search.rb
+class Search < ActiveRecord::Base
+  def products
+    @products ||= find_products
+  end
+  
+private
+  def find_products
+    products = Product.order(:name)
+    products = products.where("name like ?", "%#{keywords}%") if keywords.present?
+    products = products.where(category_id: category_id) if category_id.present?
+	products = products.where("price >= ?", min_price) if min_price.present?
+	products = products.where("price >= ?", max_price) if max_price.present?
+    products
+  end
+end
+```
+
+<p><code>products</code>が複数回呼び出されたときにそのたびに検索が実行されないように、検索結果をインスタンス変数にキャッシュします。実際の作業は<code>find_products</code>というプライベートメソッドに委譲されます。このメソッドのロジックはこのアプリケーション特有のものですが、簡単に修正して他の検索にも転用できます。このケースでは商品を名前で取得し、もしユーザが<code>name</code>, <code>category_id</code>, <code>min_price</code> and <code>max_price</code>のパラメータを条件に指定したら、where句を追加します。最後に一致する商品のリストを返します。</p>
+
+<p>もし希望するならフォームをもっと便利にして、ユーザに結果を表示するときの並びや返される結果の最大数を指定できるようにすることも可能です。</p>
+
+<p>それではフォームの動きを試してみましょう。名前が「catan」で分類が「Toys &amp; Games」で最低価格が$10である商品を検索します。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/848/original/E111I03.png" width="800" height="402" alt="商品を検索する"/>
+</div>
+
+<p>2つの商品が一致しました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/849/original/E111I04.png" width="800" height="307" alt="高度な検索の結果"/>
+</div>
+
+<h3>古い検索をクリアする</h3>
+
+<p>一つ注意しなくてはいけない点として、このアプローチをとる場合、高度な検索がおこなわれるたびにデータベースにレコードが作成されます。つまり<code>searches</code>テーブルはとても大きくなってしまう可能性があるので、定期的に古い検索をクリアするのがいいでしょう。これをおこなう<code>rake</code>タスクを簡単に作ることができます。</p> 
+
+``` /lib/tasks/searches.rake
+desc "Remove searches older than a month"
+task :remove_old_searches => :environment do
+  Search.delete_all ["created_at < ?", 1.month.ago]
+end
+```
+
+<p>このタスクをRails環境に依存させたいので、<code>:environment</code>オプションを渡します。そして作成後1ヶ月たった検索を削除します。</p>
+
+<p>このrakeタスクが実行されると古い検索式が削除されますが、できれば<code>cron</code>ジョブを使って自動的に実行したいところです。これを設定する一番いい方法は、Whenever gemを使用して日次処理タスクとして登録する方法で、<a href="http://railscasts.com/episodes/164-cron-in-ruby">エピソード164</a>で紹介しました。</p>
+
+<p>今回のエピソードでは高度な検索用フォームの作成方法をとりあげました。このアプローチの利点のひとつは、検索式がデータベースに蓄積されるので、ユーザの検索式を保存して過去の検索へのリンクを表示させることなどを簡単に実現できます。</p>

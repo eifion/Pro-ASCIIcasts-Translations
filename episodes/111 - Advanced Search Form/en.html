@@ -6,7 +6,7 @@
 
 <p>The search form performs a GET request that calls the <code>ProductsController</code>&rsquo;s <code>index</code> action, passing a <code>search</code> parameter to it. For most scenarios this is the best way to add searching to an application. Even if you want to have multiple search fields using a GET request for the search is a good approach. </p>
 
-<p>There may be times though when you want to add more advanced searching to an application and present a complicated form to the user. In these cases there may be too many parameters and too much data to send in a GET request. An example of such a form is the <a href="https://www.vbulletin.com/forum/search.php?search_type=1">advanced search page</a> on the vBulletin forums. This form has a over a dozen different fields for submitting various search parameters, probably more than you&rsquo;d want to submit via a GET request.</p>
+<p>There may be times though when you want to add more advanced searching to an application and present a complicated form to the user. In these cases there may be too many parameters and too much data to send in a GET request. An example of such a form is the <a href="https://www.vbulletin.com/forum/search.php?search_type=1">advanced search page</a> on the vBulletin forums. This form has over a dozen different fields for submitting various search parameters, probably more than you&rsquo;d want to submit via a GET request.</p>
 
 <p>So how should we handle this kind of situation in a Rails application? The key is not to treat search as a simple request but as a separate resource that has a model and which is backed by a database.</p>
 
