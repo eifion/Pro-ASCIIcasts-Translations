@@ -1,0 +1,135 @@
+<p>This episode covers creating custom environments. It&rsquo;s a simple topic but one that some Rails developers may not be aware of. When we generate a new Rails application we get three environments by default: <code>development</code>, <code>test</code> and <code>production</code>. There&rsquo;s nothing special about these particular environments, though, and there are very few places in the Rails source code that refer to them. What makes them unique is the way they&rsquo;re configured in an application&rsquo;s config files.</p>
+
+<p>For example the default <code>production.rb</code> config file has <code>config.cache_classes</code> set to <code>true</code> which means that the app&rsquo;s classes won&rsquo;t be reloaded between requests for performance reasons. In development mode it&rsquo;s more convenient for these classes to be reloaded automatically and so in the equivalent <code>development.rb</code> file this option is set to <code>false</code> instead. To get more of an idea of the differences between the environments you can read through the <code>development.rb</code>, <code>production.rb</code> and <code>test.rb</code> files in an app&rsquo;s <code>/config/environments</code> directory and compare them.</p>
+
+<h3>Adding a Custom Environment</h3>
+
+<p>As there&rsquo;s nothing special about any given environment we can create as many custom environments as we want. We could, for example, add a staging environment to an application which behaves like production but which has a few development goodies thrown in. All we need to do is add a config file for that environment. As we want this environment to behave like production we&rsquo;ll copy that environment&rsquo;s configuration into our new staging environment, but we&rsquo;ll change a couple of things such as setting the <code>config.log_level</code> to <code>true</code>.</p> 
+
+``` /config/environments/staging.rb
+Blog::Application.configure do
+  # Settings specified here will take precedence over those in config/application.rb
+
+  # Code is not reloaded between requests
+  config.cache_classes = true
+
+  # Full error reports are disabled and caching is turned on
+  config.consider_all_requests_local       = false
+  config.action_controller.perform_caching = true
+
+  # Disable Rails's static asset server (Apache or nginx will already do this)
+  config.serve_static_assets = false
+
+  # Compress JavaScripts and CSS
+  config.assets.compress = true
+
+  # Don't fallback to assets pipeline if a precompiled asset is missed
+  config.assets.compile = false
+
+  # Generate digests for assets URLs
+  config.assets.digest = true
+
+  # See everything in the log (default is :info)
+  config.log_level = :debug
+
+  # Enable locale fallbacks for I18n (makes lookups for any locale fall back to
+  # the I18n.default_locale when a translation can not be found)
+  config.i18n.fallbacks = true
+
+  # Send deprecation notices to registered listeners
+  config.active_support.deprecation = :notify
+end
+```
+
+<p>When we add a new environment we should also take a look at the application&rsquo;s other configuration files as some of them, such as the <code>database.yml</code> file, contain code specific to each environment. We&rsquo;ll need to add another entry here for our staging environment.</p>
+
+``` /config/database.yml
+staging:
+  adapter: sqlite3
+  database: db/staging.sqlite3
+  pool: 5
+  timeout: 5000
+```  
+
+<p>We could reuse the development database in the staging environment, but giving it a separate database means that we could, for example, add a lot of data to so that we can stress-test that app in staging.</p>
+
+<p>We can now start up our application in our new environment by using the <code>-e</code> option.</p>
+
+``` terminal
+$ rails s -e staging
+=> Booting WEBrick
+=> Rails 3.1.3 application starting in staging on http://0.0.0.0:3000
+=> Call with -d to detach
+=> Ctrl-C to shutdown server
+[2012-01-24 19:58:52] INFO  WEBrick 1.3.1
+[2012-01-24 19:58:52] INFO  ruby 1.9.2 (2011-07-09) [x86_64-darwin11.2.0]
+[2012-01-24 19:58:52] INFO  WEBrick::HTTPServer#start: pid=13416 port=3000
+```
+
+<p>If we want to start up the console in our new environment we just pass its name in as an argument.</p>
+
+``` terminal
+$ rails c staging
+Loading staging environment (Rails 3.1.3)
+1.9.2p290 :001 > 
+```
+
+<p>Alternatively we can set the <code>RAILS_ENV</code> environment variable and then run a command.</p>
+
+``` terminal
+$ RAILS_ENV=staging rails s
+```
+
+<p>If we want to change the default Rails environment we can export this setting. Any future commands will automatically then be run in the specified environment while we have the same terminal session running.</p>
+
+``` terminal
+$ export RAILS_ENV=staging
+```
+
+<p>If we have a dedicated staging server we can put this command in our <code>bash_profile</code> or <code>zshrc</code> file and make that environment a permanent default.</p>
+
+<h3>Bundler</h3>
+
+<p>Next we&rsquo;ll  look at Bundler. As you&rsquo;re probably aware we can use the group option to restrict a gem to a specific environment, like this:</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+# Bundle edge Rails instead:
+# gem 'rails',     :git => 'git://github.com/rails/rails.git'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'tire'
+
+group :staging do
+	gem 'ruby-prof'
+end
+```
+
+<p>The <code>ruby-prof</code> gem will now only be required in the staging environment.</p> 
+
+<p>The groups don&rsquo;t always have to match a given environment, however. For example in a Rails 3.1 gemfile there&rsquo;s an <code>assets</code> group that doesn&rsquo;t match any environment. If we call our <code>staging</code> group something else, say <code>profiling</code>, its gems won&rsquo;t be loaded at all by default. We can change this by modifying the <code>application.rb</code> config file. At the top of this file is a <code>Rails.groups</code> method which is used to assign groups to a a set of environments. We&rsquo;ll set the <code>profiling</code> group so that it&rsquo;s loaded in the staging and development environments.</p>
+
+``` /config/application.rb
+if defined?(Bundler)
+  # If you precompile assets before deploying to production, use this line
+  Bundler.require(*Rails.groups(:assets => %w(development test), :profiling => %w[staging development]))
+  # If you want your assets lazily compiled in production, use this line
+  # Bundler.require(:default, :assets, Rails.env)
+end
+```
+
+<p>The advantage of this approach is that we can add more complex logic here if we want to customize when this group is loaded at runtime instead of specifying which environment it should be loaded in in the gemfile.</p>

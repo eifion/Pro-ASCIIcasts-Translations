@@ -1,0 +1,498 @@
+<p>Rack is mainly known as a way to build Web applications in Ruby, but the Rack gem also includes a lot of useful utilities many of which Rails uses internally. If we want to build a lightweight Web app we&rsquo;ll generally use a framework such as Sinatra but by using Rack directly from scratch we can learn a lot about these various utilities.</p>
+
+<h3>Getting Started</h3>
+
+<p>To start we&rsquo;ll install the Rack gem to make sure that we have the latest version installed (1.4.0 at the time of writing).</p>
+
+``` terminal
+$ gem install rack
+```
+
+<p>Next we&rsquo;ll create a new directory for our application, which we&rsquo;ll call <code>greeter</code> and move in to.</p>
+
+``` terminal
+$ mkdir greeter
+$ cd greeter
+```
+
+<p>To make a Rack application all we need is a Rackup file.</p> 
+
+``` /config.ru
+class Greeter
+  def call(env)
+    [200, {}, "Hello, World!"]
+  end
+end
+
+run Greeter.new
+```
+
+<p>In this file we&rsquo;ve written a <code>Greeter</code> class. All Rack applications need to have a <code>call</code> method that takes an environment hash variable as an argument and returns an array containing a numeric HTTP status, a hash of headers and a response object and that&rsquo;s what we&rsquo;ve done here, although our header hash is empty. Finally we run a new instance of the class.</p>
+
+<p>We start this app up by running <code>rackup</code>.</p>
+
+``` terminal
+$ rackup
+>> Thin web server (v1.3.1 codename Triple Espresso)
+>> Maximum connections set to 1024
+>> Listening on 0.0.0.0:9292, CTRL+C to stop
+```
+
+<p>This will start the application up on its default port, 9292. Let&rsquo;s take a look at it in a browser.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/947/original/E317I01.png" width="798" height="413" alt="Our Rack app, showing an error."/>
+</div>
+
+<p>When we do we see a <code>Rack::Lint::LintError</code>. <code>Rack::Lint</code> is one of the utilities that Rack provides and this error is shown because our application isn&rsquo;t returning a <code>Content-Type</code> header. Where does this error page come from? When we run the <code>rackup</code> command the <code>Rack::Server</code> class&rsquo;s <code>start</code> method is called and this includes several pieces of Rack middleware by default.</p>
+
+
+``` https://github.com/rack/rack/blob/master/lib/rack/server.rb
+def self.logging_middleware
+  lambda { |server|
+    server.server.name =~ /CGI/ ? nil : [Rack::CommonLogger, $stderr]
+  }
+end
+
+def self.middleware
+  @middleware ||= begin
+    m = Hash.new {|h,k| h[k] = []}
+    m["deployment"].concat [
+      [Rack::ContentLength],
+      [Rack::Chunked],
+      logging_middleware
+    ]
+    m["development"].concat m["deployment"] + [[Rack::ShowExceptions], [Rack::Lint]]
+    m
+  end
+end
+```
+
+<p>One piece of middleware that&rsquo;s included is <code>Rack::ShowExceptions</code> and it&rsquo;s this that captures exceptions and creates the formatted output to send back to the browser. Another is <code>Rack::Lint</code> which makes sure that our Rack application responds properly. <code>Rack::ContentLength</code>, which sets the <code>Content-Length</code> header, is also included as is <code>Rack::Chunked</code> which handles streaming responses. It also uses the <code>Rack::CommonLogger</code> middleware to log the request to <code>$stderr</code>.</p>
+
+<p>So now we know where the <code>Rack::Lint</code> exception comes from and why the error message is formatted that way it is. Let&rsquo;s fix the error by setting the <code>Content-Type</code> header.</p>
+
+``` /config.ru
+class Greeter
+  def call(env)
+    [200, {"Content-Type" => "text/plain"}, "Hello, World!"]
+  end
+end
+
+run Greeter.new
+```
+
+<p>We&rsquo;ll need to stop and restart our <code>rackup</code> server for the change to be picked up but when we do our application should now work.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/949/original/E317I02.png" width="798" height="280" alt="Our Rack app now works."/>
+</div>
+
+<p>If you get a blank page when you try this and you&rsquo;re running Ruby 1.9 it&rsquo;s because the third part of the response needs to be able to respond to <code>to_each</code> and, while strings in Ruby 1.8 do they don&rsquo;t in 1.9. The easiest way to do this is to turn the string into an array with the string as its only element.</p>
+
+``` /config.ru
+class Greeter
+  def call(env)
+    [200, {"Content-Type" => "text/plain"}, ["Hello, World!"]]
+  end
+end
+
+run Greeter.new
+```
+
+<h3>Getting Changes To Reload Automatically</h3>
+
+<p>There&rsquo;s a lot more we want to do inside the <code>Greeter</code> class but before we do we&rsquo;ll organise our code and move the class into its own file in a new <code>lib</code> directory.</p>
+
+``` /lib/greeter.rb
+class Greeter
+  def call(env)
+    [200, {"Content-Type" => "text/plain"}, ["Hello, World!"]]
+  end
+end
+```
+
+<p>We can then require this class in our Rackup file.</p>
+
+``` /config.ru
+require "greeter"
+
+run Greeter.new
+```
+
+<p>Now that our <code>Greeter</code> class is in its own file we&rsquo;ll look at another piece of Rack middleware called <code>Rack::Reloader</code>. This automatically reloads any required files each time we make a request which means that we no longer have to restart the <code>rackup</code> server every time we make a change to <code>Greeter</code>.</p>
+
+``` /config.ru
+require "greeter"
+
+use Rack::Reloader, 0
+
+run Greeter.new
+```
+
+<p>The reloader has a ten-second cool-down period by default but we&rsquo;ve changed it to zero so that changes are picked up immediately. When we start the <code>rackup</code> server now we&rsquo;ll need to include the <code>lib</code> directory so that it can find the <code>Greeter</code> class.</p>
+
+``` terminal
+$ rackup -Ilib
+```
+
+<p>If we change our <code>Greeter</code> class now and reload the page in the browser the change will be reflected straight away. In more complex scenarios the reloader may not work very well but in these cases there are other utilities can that help to do this such as <a href="https://github.com/rtomayko/shotgun">Shotgun</a>.</p> 
+
+<h3>Using Template Files</h3>
+
+<p>Writing out the full response every time isn&rsquo;t very convenient, especially if we need to send back a large number of headers. Rack comes with a class called Response which makes this easier. We can pass a body to it and it will default to a <code>200</code> status.</p>
+
+``` /lib/greeter.rb
+class Greeter
+  def call(env)
+    Rack::Response.new("Hello")
+  end
+end
+```
+
+<p>When we reload the page now the text has changed. It&rsquo;s also displayed in a different font and this is because <code>Rack::Response</code> uses a default <code>Content-Type</code> of <code>text/html</code>, rather than the <code>text/plain</code> that we were using before.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/950/original/E317I03.png" width="798" height="280" alt="Our app now uses the Response class."/>
+</div>
+
+<p>Normally we just want to put some HTML into the response. Writing long strings of HTML is rarely fun and its generally better to render out a template that uses, say, erb. This isn&rsquo;t difficult to do; we just need to require <code>erb</code>, create a template and use the ERB class to render it.</p>
+
+``` /lib/greeter.rb
+class Greeter
+  def call(env)
+    Rack::Response.new(render("index.html.erb"))
+  end
+
+  def render(template)
+    path = File.expand_path("../views/#{template}", __FILE__)
+    ERB.new(File.read(path)).result(binding)
+  end
+end
+```
+
+<p>Our new <code>render</code> method takes the name of a template as an argument and looks for a file with that name in a <code>views</code> subdirectory. We then call <code>ERB.new</code> and pass it that file. We call <code>result</code> on this and pass in the current binding so that we have access to all the methods defined here. We&rsquo;ll create that <code>index.html.erb</code> file now and put some static HTML into it.</p>
+
+``` /lib/views/index.html.erb
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Greeter</title>
+    <style type="text/css" media="screen">
+      body {
+        background-color: #4B7399;
+        font-family: Verdana;
+        font-size: 14px;
+      }
+
+      #container {
+        width: 75%;
+        margin: 0 auto;
+        background-color: #FFF;
+        padding: 20px 40px;
+        border: solid 1px #black;
+        margin-top: 20px;
+      }
+      a { color: #0000FF; }
+    </style>
+  </head>
+  <body>
+    <div id="container">
+      <h1>Hello World!</h1>
+    </div>
+  </body>
+</html>
+```
+
+<p>When we reload the page now we&rsquo;ll see our template rendered.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/951/original/E317I04.png" width="798" height="280" alt="Our app now renders its template."/>
+</div>
+
+<h3>Changing The Response Based on The Request</h3>
+
+<p>Currently our application will always respond in the same way but we want it to behave differently based on what the user requests. We can do this by using a <code>Rack::Request</code> object and passing it the environment.</p>
+
+``` /lib/greeter.rb
+class Greeter
+	def call(env)
+    request = Rack::Request.new(env)
+    case request.path
+    when "/" then Rack::Response.new(render("index.html.erb"))
+    else Rack::Response.new("Not found", 404)
+	  end
+ end
+
+  def render(template)
+    path = File.expand_path("../views/#{template}", __FILE__)
+    ERB.new(File.read(path)).result(binding)
+  end
+end
+```
+
+<p>The <code>request</code> object that you&rsquo;ll be familiar with in Rails inherits from <code>Rack::Request</code> and the methods we can call here are very similar. For example we can call <code>path</code> to get the path of the URL that was requested. We&rsquo;ve done that here in a <code>case</code> statement so that if the root URL is called our template is rendered. For any other URLs we&rsquo;ll return a <code>404</code> response. Visiting our application&rsquo;s root URL now will show the template as before but if we visit any other URL we get the <code>404</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/952/original/E317I05.png" width="798" height="280" alt="Visiting any page but the home page now gives a 404 error."/>
+</div>
+
+<h3>Using Forms and Cookies</h3>
+
+<p>Let&rsquo;s say that we want a way for the user to be able to change the name they&rsquo;re greeted by. We&rsquo;ll need a form field where they can enter their preferred name so we&rsquo;ll add a form to the template.</p>
+
+``` /lib/views/index.html.erb
+<body>
+  <div id="container">
+    <h1>Hello World!</h1>
+    <form method="post" action="/change">
+      <input name="name" type="text">
+      <input type="submit" value="Change Name">
+    </form>
+  </div>
+</body>
+```
+
+<p>This form will send a POST request to the <code>/change</code> path and will send a <code>name</code> attribute containing the text that was entered in the text field. We need to respond to this request in our <code>Greeter</code> class and for now we&rsquo;ll just return the name that was entered.</p>
+
+``` /lib/greeter.rb
+def call(env)
+  request = Rack::Request.new(env)
+  case request.path
+  when "/" then Rack::Response.new(render("index.html.erb"))
+  when "/change" then Rack::Response.new(request.params["name"])
+  else Rack::Response.new("Not found", 404)
+  end
+end
+```
+
+<p>The <code>params</code> hash we&rsquo;ve used here works very similarly to the one Rails uses except that the key needs to be passed in as a string instead of a symbol. If we reload the default page now and enter a name on the form we&rsquo;ll see that name when we submit the form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/953/original/E317I06.png" width="798" height="280" alt="The value from the textbox is shown when we submit the form."/>
+</div>
+
+<p>When the form is submitted we want to do more that just show the name. Instead we want to set a cookie and redirect back to the home page. To do this we&rsquo;ll change the call to <code>Rack::Response</code> that&rsquo;s called for <code>/change</code> requests so that it uses a block. This block takes a <code>response</code> object and there are a variety of things we can do with it this object. For example we can use square brackets to assign header values. We won&rsquo;t do that here, instead we&rsquo;ll use <code>set_cookie</code> set a cookie containing the name that was entered in the form and <code>redirect</code> to redirect back to the home page.</p>
+
+``` /lib/greeter.rb
+class Greeter
+  def call(env)
+    request = Rack::Request.new(env)
+    case request.path
+    when "/" then Rack::Response.new(render("index.html.erb"))
+    when "/change" then 
+      Rack::Response.new do |response|
+        response.set_cookie("greet", request.params["name"])
+        response.redirect("/")
+      end
+    else Rack::Response.new("Not found", 404)
+  end
+end
+```
+
+<p>Now when we enter a name in the form and click &ldquo;Change Name&rdquo; we&rsquo;ll be redirected back to the home page. We&rsquo;ll change our template so that it displays the value set in the cookie through a new method called <code>greet_name</code>.</p>
+
+``` /lib/views/index.html.erb
+<h1>Hello <%= greet_name %>!</h1>
+```
+
+<p>We&rsquo;ll write this method in our <code>Greeter</code> class. It will return the value in the cookie or, if that&rsquo;s not been set, default to &ldquo;World&rdquo;.</p>
+
+``` /lib/greeter.rb
+def greet_name
+  request.cookies["greet"] || "World"
+end
+```
+
+<p>This won&rsquo;t work, however, as we don&rsquo;t have access to <code>request</code> outside our <code>call</code> method. We&rsquo;ll change this to be an instance variable so that we can access it anywhere in our class.</p>
+
+``` /lib/greeter.rb
+class Greeter
+  def call(env)
+    @request = Rack::Request.new(env)
+    case @request.path
+    when "/" then Rack::Response.new(render("index.html.erb"))
+    when "/change" then 
+      Rack::Response.new do |response|
+        response.set_cookie("greet", @request.params["name"])
+        response.redirect("/")
+      end
+    else Rack::Response.new("Not found", 404)
+    end
+  end
+
+  def render(template)
+    path = File.expand_path("../views/#{template}", __FILE__)
+    ERB.new(File.read(path)).result(binding)
+  end
+
+  def greet_name
+    @request.cookies["greet"] || "World"
+  end
+end
+```
+
+<p>Now when we reload the page we&rsquo;ll see the name we entered earlier.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/954/original/E317I07.png" width="800" height="280" alt="The name we entered is now shown."/>
+</div>
+
+
+<h3>Handling Multiple Requests</h3>
+
+<p>It&rsquo;s important to be aware that only one <code>Greeter</code> object is instantiated throughout the entire application. This means that if we were to set any other instance variables inside this class they could persist between requests which could potentially cause some tricky issues. We&rsquo;ll change the Rackup file so that instead of instantiating a <code>Greeter</code> here we pass in the class as a Rack application.</p>
+
+``` /config.ru
+require "greeter"
+
+use Rack::Reloader, 0
+
+run Greeter
+```
+
+<p>This means that we can define <code>call</code> as a class method in Greeter and instantiate a new greeter each time. This way there&rsquo;s no chance that instance variables will persist between requests. We&rsquo;ll also take the opportunity to do some renaming of the methods in the class here.</p>
+
+``` /lib/greeter.rb
+require "erb"
+
+class Greeter
+  def self.call(env)
+    new(env).response.finish
+  end
+  
+  def initialize(env)
+    @request = Rack::Request.new(env)
+  end
+  
+  def response
+    case @request.path
+    when "/" then Rack::Response.new(render("index.html.erb"))
+    when "/change"
+      Rack::Response.new do |response|
+        response.set_cookie("greet", @request.params["name"])
+        response.redirect("/")
+      end
+    else Rack::Response.new("Not Found", 404)
+    end
+  end
+  
+  def render(template)
+    path = File.expand_path("../views/#{template}", __FILE__)
+    ERB.new(File.read(path)).result(binding)
+  end
+  
+  def greet_name
+    @request.cookies["greet"] || "World"
+  end
+end
+```
+
+<p>We&rsquo;ve done this so that we can easily call <code>finish</code> on the Rack <code>response</code> object that gets returned. This will convert it to the array format that Rack expects.</p> 
+
+<p>Another part of our application that could use some improvement is the HTML document. Currently its CSS is included in the HTML file but it would be better to use an external stylesheet with a <code>link</code> tag. We&rsquo;ll create the stylesheet in a new <code>/public/stylesheets</code> directory and call it <code>application.css</code>. We can paste the CSS from the HTML document into there and then reference it.</p>
+
+``` /lib/views/index.html.erb
+<head>
+  <title>Greeter</title>
+  <link rel="stylesheet" href="/stylesheets/application.css" type="text/css" charset="utt-8">
+</head>
+```
+
+<p>There&rsquo;s a problem, though, in that our Rack application doesn&rsquo;t know how to serve the static files inside the public directory. This solution might work in production where we have a separate server but we need something that will work in development.</p> 
+
+<p>There are a couple of ways that we can do this in Rack. One is to use a piece of Rack middleware called <code>Rack::Static</code>. This is designed for serving static files but we haven&rsquo;t had much luck getting it to work so instead we&rsquo;ll use <code>Rack::Cascade</code>. This isn&rsquo;t middleware so we&rsquo;re going to instantiate in the Rackup file.</p>
+
+``` /config.ru
+require "greeter"
+
+use Rack::Reloader, 0
+
+run Rack::Cascade.new([Rack::File.new("public"), Greeter])
+```
+
+<p>We need to pass <code>Rack::Cascade</code> an array of Rack applications.  It will try the first Rack app in the array and if it gets a 404 response it will cascade to the next. The first app in our array is <code>Rack::File</code>, which serves static files from the directory we pass it. Now when we request a file <code>Rack::File</code> will look for that file and, if it&rsquo;s not found, <code>Rack::Cascade</code> will look for it in our <code>Greeter</code> app.</p>
+
+<p>The <code>Rack::Reloader</code> middleware won&rsquo;t pick up changes in the Rackup file so we&rsquo;ll need to stop and restart the server. Our page still works when we reload it, even though we&rsquo;re using an external stylesheet.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/955/original/E317I08.png" width="800" height="280" alt="Our external stylesheet works."/>
+</div>
+
+<p>We can view the stylesheet through the Rack::File at <code>http://localhost:9292/stylesheets/application.css</code>.</p> 
+
+<h3>Adding Authentication</h3>
+
+<p>Let&rsquo;s say that we want to protect our application with some simple authentication. We can use the <code>Rack::Auth::Basic</code> middleware to do this.</p>
+
+``` /config.ru
+require "greeter"
+
+use Rack::Reloader, 0
+
+use Rack::Auth::Basic do |username, password|
+  password == "secret"
+end
+
+run Rack::Cascade.new([Rack::File.new("public"), Greeter])
+```
+
+<p>We pass <code>Rack::Auth::Basic</code> a block and this takes <code>username</code> and <code>password</code> arguments. If the block returns <code>true</code> then access is allowed. When we restart our Rack application and try visiting it again we&rsquo;ll be asked for a username and password.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/956/original/E317I09.png" width="800" height="403" alt="The app now requires authentication."/>
+</div>
+
+<p>As long as we enter the correct password we&rsquo;ll be able to access our application.</p> 
+
+<h3>Adding Tests</h3>
+
+<p>There&rsquo;s so much great middleware that we can&rsquo;t cover it all here but we&rsquo;ve given you some idea of the different options you can use in an Rack application. We&rsquo;ll finish off this episode by adding some tests to our Rack application. Here&rsquo;s our test code.</p>
+
+``` /greeter_test.rb
+require "rubygems"
+require "rack"
+require "minitest/autorun"
+require File.expand_path("../lib/greeter", __FILE__)
+
+describe Greeter do
+  before do
+    @request = Rack::MockRequest.new(Greeter)
+  end
+
+  it "returns a 404 response for unknown requests" do
+    @request.get("/unknown").status.must_equal 404
+  end
+
+  it "/ displays Hello World by default" do
+    @request.get("/").body.must_include "Hello World!"
+  end
+
+  it "/ displays the name passed into the cookie" do
+    @request.get("/", "HTTP_COOKIE" => "greet=Ruby").body.must_include "Hello Ruby!"
+  end
+
+  it "/change sets cookie and redirects to root" do
+    response = @request.post("/change", params: {"name" => "Ruby"})
+    response.status.must_equal 302
+    response["Location"].must_equal "/"
+    response["Set-Cookie"].must_include "greet=Ruby"
+  end
+end
+```
+
+<p>We&rsquo;re using Minitest here to get this up and running and <code>Rack::MockRequest</code> to easily mock a request. We can call <code>get</code>, <code>post</code>, <code>put</code> and <code>delete</code> methods on this to make requests and methods like <code>status</code>, <code>body</code>, <code>must_include</code> and so on on the response from those methods to test various parts of our application. We can run these tests by running the file through <code>ruby</code>.</p>
+
+``` terminal
+$ ruby greeter_test.rb 
+Loaded suite greeter_test
+Started
+....
+Finished in 0.332446 seconds.
+
+4 tests, 9 assertions, 0 failures, 0 errors, 0 skips
+
+Test run options: --seed 441
+```
+
+<p>There&rsquo;s a lot more to Rack that we haven&rsquo;t covered in this episode. There&rsquo;s more information available in the <a href="http://rubydoc.info/github/rack/rack/frames">documentation</a> and you can browse through the classes listed here to see what each of them can do. If you want even more take a look at the <a href="http://rubydoc.info/github/rack/rack/frames">Rack Contrib</a> project. This includes a lot of useful utilities and middleware that you can use in your applications.</p>
