@@ -1,0 +1,276 @@
+<p>In the previous Pro episode we showed you how to build a Rack Application from  scratch. The Rack gem comes with a number of useful classes, several of which are used within the Rails source code, especially in middleware. To see what&rsquo;s used we can go to a Rails application and run <code>rake middleware</code>. This will give us a list of the middleware that&rsquo;s used by the application in development mode. There are some differences in production mode and we&rsquo;ll mention these at the end of the episode. Note also that  this list is from a Rails 3.2 application; if you&rsquo;re using a earlier version the list may be different.</p>
+
+``` terminal
+$ rake middleware
+use ActionDispatch::Static
+use Rack::Lock
+use #<ActiveSupport::Cache::Strategy::LocalCache::Middleware:0x007fb391aa43c0>
+use Rack::Runtime
+use Rack::MethodOverride
+use ActionDispatch::RequestId
+use Rails::Rack::Logger
+use ActionDispatch::ShowExceptions
+use ActionDispatch::DebugExceptions
+use ActionDispatch::RemoteIp
+use ActionDispatch::Reloader
+use ActionDispatch::Callbacks
+use ActiveRecord::ConnectionAdapters::ConnectionManagement
+use ActiveRecord::QueryCache
+use ActionDispatch::Cookies
+use ActionDispatch::Session::CookieStore
+use ActionDispatch::Flash
+use ActionDispatch::ParamsParser
+use ActionDispatch::Head
+use Rack::ConditionalGet
+use Rack::ETag
+use ActionDispatch::BestStandardsSupport
+run Store::Application.routes
+```
+
+<p>Each time a request comes in it will go through the first piece of middleware in the list then the second and so on until it reaches the application itself at the bottom of the list. There&rsquo;s a lot of here and each middleware component has its own behaviour and affects the request. In this episode we&rsquo;ll walk you through each of these so that you can get a better idea as to what goes on behind the scenes when a request comes in. Hopefully you&rsquo;ll learn a few cool things about Rails and Rack along the way too.</p>
+
+<p>The documentation for all this middleware is a bit scattered. Some of it is defined in Rails, some in the Rack gem and some is elsewhere. The best way to find it is often to do a Google search on the middleware&rsquo;s name, though sometimes you may have to read the relevant source code. Let&rsquo;s get started.</p>
+
+<h3>ActionDispatch::Static</h3>
+
+<p>There isn&rsquo;t much documentation about <code>ActionDispatch::Static</code> but its name gives us a big hint as to what it does. This is used to serve the static files under the <code>/public</code> directory similar to the <code>Rack::Static</code> middleware we mentioned in episode 317. If we look at its source code we&rsquo;ll see that all it does is look for a file that matches the request path. If it finds a match it will serve that file, otherwise the request will continue on to the next piece of middleware.</p>
+
+``` actionpack/lib/action_dispatch/middleware/static.rb
+def call(env)
+  case env['REQUEST_METHOD']
+  when 'GET', 'HEAD'
+    path = env['PATH_INFO'].chomp('/')
+    if match = @file_handler.match?(path)
+      env["PATH_INFO"] = match
+      return @file_handler.call(env)
+    end
+  end
+
+  @app.call(env)
+end
+```
+
+<h3>Rack::Lock</h3>
+
+<p><code>Rack::Lock</code> is included in the Rack gem and the best information we could find about it is in <a href="http://rack.lighthouseapp.com/projects/22435/tickets/22-lockmutex-middleware">this ticket</a>. This explains that this middleware component locks the app down to a single thread. This is useful as it means that anything higher up in the middleware chain can support multiple threads. In the example below <code>Rack::Cache</code> can support multiple threads but anything after <code>Rack::Lock</code> will be locked down to a single thread, in this case our Rails app.</p>
+
+``` ruby
+use Rack::Cache
+use Rack::Lock
+run myapp
+```
+
+<h3>ActiveSupport::Cache::Strategy::LocalCache::Middleware</h3>
+
+<p>The next piece of middleware in the list is quite interesting as it&rsquo;s actually an object, in this case <code>#&lt;ActiveSupport::Cache::Strategy::LocalCache::Middleware:0x007fb391aa43c0&gt;</code>, instead of a named class. This is used internally by <code>Rails.cache</code> and it provides a key-value based caching interface that lets us read and write cache values based on a given key. We can demonstrate this in the console.</p>
+
+``` terminal
+1.9.2-p290 :001 > Rails.cache.write('foo', 'bar')
+ => true 
+1.9.2-p290 :002 > Rails.cache.read('foo')
+ => "bar" 
+``` 
+
+<p>This was covered in more detail in <a href="http://railscasts.com/episodes/115-caching-in-rails-2-1">episode 115</a>. By default <code>Rails.cache</code> is a file--based store that uses <code>ActiveSupport::Cache::FileStore</code> but it caches the values again internally using a memory-based store that will be reset on each request. It&rsquo;s unsure as to why an object is used here instead of a class, possibly for performance reasons. Either way this piece of  middleware is used to flush memory the memory-based store that&rsquo;s used internally by <code>Rails.cache</code>.</p>
+
+<h3>Rack::Runtime</h3>
+
+<p>This is also provided by the Rails gem and it sets an <code>X-Runtime</code> response header that contains the amount of time it took to process the request. We can see it if we run <code>curl</code> for a page in a Rails application and include the headers.</p>
+
+``` terminal
+$ curl -I http://railscasts.com
+HTTP/1.1 200 OK
+Date: Sat, 28 Jan 2012 22:48:35 GMT
+Server: Apache/2.2.14 (Ubuntu)
+X-Powered-By: Phusion Passenger (mod_rails/mod_rack) 3.0.1
+ETag: "4bef64726cf14ba52e665df367c878d3"
+Cache-Control: max-age=0, private, must-revalidate
+X-UA-Compatible: IE=Edge,chrome=1
+X-Runtime: 0.068022
+Set-Cookie: _railscasts_session=BAh7B0kiD3Nlc3Npb25faWQGOgZFRiIlYzRiNGMyYzRkYmQ0MzBjMGZjNDQ4NGFmNDQ2NmEzOWNJIhBfY3NyZl90b2tlbgY7AEZJIjFTU0FQT3UxbERkYzg3S055Mm5ONW1mYmFqM0YzODlZNGg3QlZlSUQ5aW5NPQY7AEY%3D--d774cf6e391e3025fa06946eec298ea9f9212485; path=/; HttpOnly
+Status: 200
+Vary: Accept-Encoding
+Content-Type: text/html; charset=utf-8
+```
+
+<h3>Rack::MethodOverride</h3>
+
+<p>If we go to an edit form in a Rails application and view the HTML source we&rsquo;ll find a hidden field called <code>_method</code> which will have a value of <code>put</code>.</p>
+
+``` html
+<input name="_method" type="hidden" value="put" />
+```
+
+<p>The reason for this is that forms in HTML only support POST and GET requests. If we want to fake a PUT or DELETE request we can use this hidden field and set its value to either <code>put</code> or <code>delete</code>. <code>Rack::MethodOverride</code> sets the HTTP request method based on the value in this hidden field.</p>
+
+<h3>ActionDispatch::RequestId</h3>
+
+<p>This one is new to Rails 3.2 and it assigns a unique id to each request which can then be used, say, for tracking inside logs. This value is also returned back in an <code>X-Request-Id</code> header.</p> 
+
+<h3>Rails::Rack::Logger</h3>
+
+<p>This one is also fairly simple. It logs the beginning of a request and flushes the log afterwards. We can see this by looking at its source code.</p>
+
+``` ruby
+# File railties/lib/rails/rack/logger.rb, line 22
+def call_app(env)
+  request = ActionDispatch::Request.new(env)
+  path = request.filtered_path
+  Rails.logger.info "\n\nStarted #{request.request_method} \"#{path}\" for #{request.ip} at #{Time.now.to_default_s}"
+  @app.call(env)
+ensure
+  ActiveSupport::LogSubscriber.flush_all!
+end
+```
+
+<h3>ActionDispatch::ShowExceptions &amp; ActionDispatch::DebugExceptions</h3>
+
+<p>Rails 3.1 only had <code>ActionDispatch::ShowExceptions</code> but <code>DebugExceptions</code>
+was extracted out of it in Rails 3.2. These both help with exceptions as their names imply. If a Rails app generates an exception it will be caught by one of these and the standard Rails error message page will be shown.</p> 
+
+<h3>ActionDispatch::RemoteIp</h3>
+
+<p>This captures the remote IP address and stores in the request environment for use later on in the application. It also does some spoofing checks.</p>
+
+<h3>ActionDispatch::Reloader</h3>
+
+<p>This piece of middleware is similar to <code>Rack::Reloader</code> which was covered in <a href="http://railscasts.com/episodes/317-rack-app-from-scratch">episode 317</a>. It handles the reloading of classes in development mode.</p>
+
+<h3>ActionDispatch::Callbacks</h3>
+
+<p>This provides a generic callback hook that we can tap in to. We can call <code>before</code> or <code>after</code> methods on this and pass in a block which will then be triggered on each request. We&rsquo;ll demonstrate this in the console.</p>
+
+``` terminal
+1.9.2p290 :001 > ActionDispatch::Callbacks.before { puts "before request" }
+```
+
+<p>If we then simulate a request we&rsquo;ll see the callback being executed.</p>
+
+``` terminal
+1.9.2p290 :002 > app.get '/'
+before request
+ => 200 
+``` 
+ 
+<p>Generally it&rsquo;s better to use a before filter in the controller to do this kind of thing but if we need it to happen earlier on in a request this option is available. Alternatively we could write our own piece of middleware for adding this kind of functionality to the request chain.</p>
+
+<h3>ActiveRecord::ConnectionAdapters::ConnectionManagement</h3>
+
+<p>We&rsquo;re moving into some ActiveRecord-related things next. The first class is <code>ConnectionManagement</code>. There isn&rsquo;t much documentation about this but if we look at the source code we&rsquo;ll see that is doesn&rsquo;t do much more than clear the active database connections so that they don&rsquo;t stick around beyond the request.</p>
+
+``` ruby
+# File activerecord/lib/active_record/connection_adapters/abstract/connection_pool.rb, line 440
+def call(env)
+  testing = env.key?('rack.test')
+
+  status, headers, body = @app.call(env)
+
+  [status, headers, Proxy.new(body, testing)]
+rescue
+  ActiveRecord::Base.clear_active_connections! unless testing
+  raise
+end
+```
+
+<h3>ActiveRecord::QueryCache</h3>
+
+<p>You&rsquo;ve probably seen this in the Rails log. If a request performs the same SQL query multiple times this will cache it the first time and read it from the cache when the query&rsquo;s made again so that the database isn&rsquo;t hit any more often than necessary. The cache will need to be reset between requests and that&rsquo;s what <code>QueryCache</code> does.</p>
+
+<h3>ActionDispatch::Cookies, Session::CookieStore and Flash</h3>
+
+<p>These are all similar. We&rsquo;ll look at <code>Flash</code> first. As you no doubt know flash messages need to persist between requests and that&rsquo;s what this does. It stores the flash message in a session variable so that it persists and sweeps the older flash messages so that they&rsquo;re cleared out.</p>
+
+<p>The <code>Session::CookieStore</code> middleware stores the session data in a cookie so that it persists between requests. This class inherits from <code>Rack::Session::Cookie</code> which is included in the Rack gem so you can check out its documentation for more information about how it works.</p>
+
+<p>Finally, <code>ActionDispatch::Cookies</code> stores the cookies in the browser through the <code>set-cookie</code> header. The source code for this is quite simple. It takes the <code>action_dispatch.cookies</code> environment variable and stores them in the response header.</p>
+
+``` ruby
+# File actionpack/lib/action_dispatch/middleware/cookies.rb, line 336
+def call(env)
+  cookie_jar = nil
+  status, headers, body = @app.call(env)
+
+  if cookie_jar = env['action_dispatch.cookies']
+    cookie_jar.write(headers)
+    if headers[HTTP_HEADER].respond_to?(:join)
+      headers[HTTP_HEADER] = headers[HTTP_HEADER].join("\n")
+    end
+  end
+
+  [status, headers, body]
+end
+```
+
+<h3>ActionDispatch::ParamsParser</h3>
+
+<p>There are only a few left to go now and the next one is <code>ParamsParser</code>. You&rsquo;re probably best browsing the <a href="https://github.com/rails/rails/blob/master/actionpack/lib/action_dispatch/middleware/params_parser.rb">source code</a> for this one. The <code>ParamsParser</code> accepts parameters in a variety of formats such as XML, YAML and JSON and parses them into parameters which are then stored so that they can be accessed later through the <code>params</code> hash.</p>
+
+<h3>ActionDispatch::Head</h3>
+
+<p>This is a simple piece of middleware. All it does is check to see if a request is a HEAD  request. If so it will covert it into a GET request, call the app then strip out the body from the response so that it&rsquo;s converted into a HEAD request and only the header data is returned to the user.</p>
+
+<h3>Rack::ConditionalGet and Rack::ETag</h3>
+
+<p>These two are loosely related and both of them are provided by the Rack gem. <code>Rack::ETag</code> sets an <a href="http://en.wikipedia.org/wiki/HTTP_ETag">ETag header</a> based on the response body. If two response bodies are the same they will have the same ETag. <code>ConditionalGet</code> will strip out the response body and send a <code>304 Not Modified</code> response if the Etag matches. This means that if the response is the same as the last time the user requested it the response data won&rsquo;t all be sent back again. There are some other conditions where this applies and there is a bit more to this but that&rsquo;s something for another episode.</p>
+
+<h3>ActionDispatch::BestStandardsSupport</h3>
+
+<p>This is the last one in our list. It sets the <code>X-UA-Compatible</code> header to <a href="http://en.wikipedia.org/wiki/Google_Chrome_Frame">IE=Edge,chrome=1</a>. This means that if the user is running Internet Explorer the page will tell it to use the <a href="http://en.wikipedia.org/wiki/Google_Chrome_Frame">Chrome Frame plugin</a>  if it&rsquo;s available; otherwise it will tell IE to use the latest rendering engine available.</p>
+
+<p>If we look in the development environment&rsquo;s configuration file we&rsquo;ll see an option called <code>best_standards_support</code>.</p>
+
+``` /config/environments/development.rb
+# Only use best-standards-support built into browsers
+config.action_dispatch.best_standards_support = :builtin
+```
+
+<p>This is set to <code>:builtin</code> by default but we can change this behaviour if we want to modify how the best standards support works in the middleware. Setting this to <code>:builtin</code> means that Chrome Frame won&rsquo;t be used so we may want to change this if Chrome Frame testing in development mode is important.</p>
+
+<h3>Differences in Production Mode</h3>
+ 
+<p>Once this has run the request falls through to our application so that&rsquo;s it. That&rsquo;s all the middleware that used in Rails in development; a request goes through quite a lot behind the scenes. As we mentioned at the beginning there are some differences in production mode. Let&rsquo;s take a look at the middleware that&rsquo;s used there.</p>
+
+``` terminal
+$ RAILS_ENV=production rake middleware
+use Rack::Cache
+use Rack::Lock
+use #<ActiveSupport::Cache::Strategy::LocalCache::Middleware:0x007fa6f126c3a8>
+use Rack::Runtime
+use Rack::MethodOverride
+use Rails::Rack::Logger
+use ActionDispatch::ShowExceptions
+use ActionDispatch::RemoteIp
+use Rack::Sendfile
+use ActionDispatch::Callbacks
+use ActiveRecord::ConnectionAdapters::ConnectionManagement
+use ActiveRecord::QueryCache
+use ActionDispatch::Cookies
+use ActionDispatch::Session::CookieStore
+use ActionDispatch::Flash
+use ActionDispatch::ParamsParser
+use ActionDispatch::Head
+use Rack::ConditionalGet
+use Rack::ETag
+use ActionDispatch::BestStandardsSupport
+run Blog::Application.routes
+```
+
+<p>This list is fairly similar to the development mode list. To get a better idea of the differences we can use the <code>diff</code> command.</p>
+
+``` terminal
+$ rake middleware > development-middleware.txt
+$ RAILS_ENV=production rake middleware > production-middleware.txt
+$ diff development-middleware.txt production-middleware.txt 
+1c1
+< use ActionDispatch::Static
+---
+> use Rack::Cache
+9d8
+< use ActionDispatch::Reloader
+```
+
+<p>There&rsquo;s not a whole load of difference. There&rsquo;s no <code>ActionDispatch::Static</code> in production mode which makes sense because the static files don&rsquo;t need to be served through Rails, they can be served through a separate server such as Apache or Nginx. Production also adds the <code>Rack::Cache</code> middleware and excludes <code>ActionDispatch::Reloader</code> as the classes aren&rsquo;t loaded between requests.</p> 
+
+<p><a href="http://rtomayko.github.com/rack-cache/"><code>Rack::Cache</code></a> is a Ruby gem that provides support for HTTP caching using the <code>Expires</code> and <code>Cache-Control</code> headers. This is a big topic in itself and is something for a future episode.</p> 
+
+<p>That&rsquo;s it for the list of middleware that&rsquo;s used by a Rails 3.2 application. There&rsquo;s quite a lot going on and hopefully you now have a better idea of what&rsquo;s going on behind the scenes when a request is made to a Rails app.</p>
