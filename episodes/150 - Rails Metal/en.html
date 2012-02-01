@@ -1,0 +1,163 @@
+Below is a page from an application that shows the processes running on the server. This page automatically updates every few seconds by making an AJAX request.
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/957/original/E150RI01.png" width="800" height="447" alt="Our processes application."/>
+</div>
+
+
+<p>As this request polls frequently we should make it as efficient as possible. Before we start optimizing it we&rsquo;ll walk through the code so that you have a better idea as to how it works. Most of it work is done in a CoffeeScript file which repeatedly makes a call to the server to get the list of processes.</p>
+
+``` /app/assets/javascripts/processes.js.coffee
+jQuery ->
+  if $('#processes').length
+    update = ->
+      $.get '/processes/list', (list) -> $('#processes').text(list)
+    setInterval(update, 3000)
+    update()
+```	
+
+<p>The <code>update</code> function in this code fetches the list of processes and then updates an element with the <code>id</code> of <code>processes</code> with that list. It does this every three seconds.</p> 
+
+``` /app/controllers/processes_controller.rb
+class ProcessesController < ApplicationController
+  def index
+  end
+
+  def list
+    render text: `ps -axcr -o 'pid,pcpu,pmem,time,comm'`
+  end
+end
+```
+
+<p>The path <codde>/processes/list</codde> path it calls routes to the <code>ProcessController</code>&rsquo;s <code>list</code> action. This action runs the <code>ps</code> command to fetch the list of processes and renders it as text to the client.</p>
+
+<p>The issue here is that we&rsquo;re going through the entire Rails stack for the simple <code>list</code> action which just renders some text. We don&rsquo;t need the entire stack here and we can shave a few milliseconds off the request by bypassing it.</p>
+
+<h3>Bypassing The Stack</h3>
+
+<p>In the past we&rsquo;ve done this by using Rails Metal which provides a way to respond to a request without using the whole Rails stack. Rails Metal was removed in Rails 3 and rightfully so as there are alternatives which work better. There is still something called <code>ActionController::Metal</code> which, despite having the name, isn&rsquo;t quite the same, being basically a stripped-down Rails controller. This won&rsquo;t give us as much of a performance boost as we&rsquo;re looking for so we won&rsquo;t use that here.</p>
+
+<p>The core of this issue is that much of the request processing now happens through Rack middleware. When a request comes in it goes through around twenty pieces of middleware before it hits the application itself. Our controller may be highly efficient but a request still needs to go through a lot of middleware before it gets there. To get around this we can write our own middleware component and place it at the top of the list so that it is hit first before any of the other processing happens. This is the solution we&rsquo;ll be using in this episode.</p>
+
+<h3>Own Own Middleware Class</h3>
+
+<p>We need to write a piece of middleware that has the same behaviour as our <code>list</code> action. Where should we put this code? We could put in the application&rsquo;s <code>/lib</code> directory but in this case we&rsquo;ll put it in a new <code>/app/middleware</code> directory. This way it will be automatically loaded. A middleware component is a simple Ruby class that meets two requirements. One is that it can be initialized with a app argument; the other is that is responds to call just like a Rack app does. Here&rsquo;s our <code>ProcessList</code> class.</p>
+
+``` /app/middleware/processes_list.rb
+class ProcessesList
+  def initialize(app)
+    @app = app
+  end
+  
+  def call(env)
+    if env["PATH_INFO"] == "/processes/list"
+      list = `ps -axcr -o 'pid,pcpu,pmem,time,comm'`
+      [200, {"Content-Type" => "text/plain"}, [list]]
+    else
+      @app.call(env)
+    end
+  end
+end
+```
+
+<p>In <code>call</code> we see if the path passed in matches the processes list path. If it does we respond in the same way the <code>list</code> action does by passing the list of processes back. We need to respond in the way that Rack does, passing an array containing a status code, a hash of headers and the body of the response. If the path doesn&rsquo;t  match the call is forwarded on to the application that was passed in.</p>
+
+<p>This piece of middleware now has roughly the same behaviour as the controller action but we still need to add it to our application. To do that we modify the app&rsquo;s config file and add this line within the <code>Application</code> class.</p>
+
+``` /config/application.rb
+config.middleware.use ProcessesList
+```
+
+<p>This won&rsquo;t quite work as our class hasn&rsquo;t been loaded by the time the config file is loaded. If we pass the class in as a string it will work and load it later.</p>
+
+``` /config/application.rb
+config.middleware.use "ProcessesList"
+```
+
+<p>Now when we run rake middleware it we&rsquo;ll see our <code>ProcessesList</code> class is listed but it&rsquo;s near the end of the stack and we need it to be near the top.</p>
+
+``` terminal
+$ rake middleware
+use ActionDispatch::Static
+use Rack::Lock
+use #<ActiveSupport::Cache::Strategy::LocalCache::Middleware:0x007fb0eb0586d0>
+use Rack::Runtime
+use Rack::MethodOverride
+use ActionDispatch::RequestId
+use Rails::Rack::Logger
+use ActionDispatch::ShowExceptions
+use ActionDispatch::DebugExceptions
+use ActionDispatch::RemoteIp
+use ActionDispatch::Reloader
+use ActionDispatch::Callbacks
+use ActiveRecord::ConnectionAdapters::ConnectionManagement
+use ActiveRecord::QueryCache
+use ActionDispatch::Cookies
+use ActionDispatch::Session::CookieStore
+use ActionDispatch::Flash
+use ActionDispatch::ParamsParser
+use ActionDispatch::Head
+use Rack::ConditionalGet
+use Rack::ETag
+use ActionDispatch::BestStandardsSupport
+use ProcessesList
+run Processes::Application.routes
+```
+
+<p>Where we place a custom middleware component in the stack depends on what it needs. For example if it needs to use cookies we could place it after <code>ActionDispatch::Cookies</code>. Each piece of middleware in this list was covered in <a href="http://railscasts.com/episodes/319-rails-middleware-walkthrough">episode 319</a> so if you&rsquo;re curious as to what a particular one does you&rsquo;ll find more information there. Our <code>ProcessesList</code> class is very simple and so we can move it to the very top of the stack. To specify where it&rsquo;s placed we use either <code>insert_before</code> or <code>insert_after</code> instead of <code>use</code> when adding it, specifying the class it should some before or after.</p>
+
+``` /config/application.rb
+config.middleware.insert_before Rack::Lock, "ProcessesList"
+```
+
+<p>Alternatively we can use an index the place the middleware in the stack.</p>
+
+``` /config/application.rb
+config.middleware.insert_before 0, "ProcessesList"
+```
+
+<p>This will place ProcessesList at the top of the stack which we can see when we run <code>rake middleware</code> again.</p>
+
+``` terminal
+$ rake middleware
+use ProcessesList
+use ActionDispatch::Static
+use Rack::Lock
+<rest of list omitted>
+```
+
+<p>When we visit our application now it still works as it did before and it&rsquo;s using our <code>ProcessesList</code> middleware to handle updating the list so that it doesn&rsquo;t go through the entire stack.</p>
+
+<h3>Benchmarking</h3>
+
+<p>We could delete our <code>ProcessesController</code>&rsquo;s <code>list</code> action now but before we do we&rsquo;ll use it to do some performance benchmarking. We&rsquo;ll update the routes file so that the <code>/processes/old_list path</code> points to that controller action so that we can benchmark each one.</p>
+
+
+``` /config/routes.rb
+Processes::Application.routes.draw do
+  root to: 'processes#index'
+  match 'processes/old_list', to: 'processes#list'
+end
+```
+
+<p>Whenever we&rsquo;re benchmarking it&rsquo;s a good idea to start the server in the production environment so that we can get an idea of the performance in production. We&rsquo;ll detach the server too so that it&rsquo;s not in the same process.</p> 
+
+``` terminal 
+$ rails s -e production -d
+```
+
+<p>We&rsquo;ll use the <code><a href="http://httpd.apache.org/docs/2.0/programs/ab.html">ab</a></code> command to do the benchmarking and we&rsquo;ll trigger 100 requests to our old process list first.</p>
+
+``` terminal
+$ ab -n 100 -r http://localhost:3000/processes/old_list
+```
+
+<p>When we run this we get an average time per request of around 15.5ms, which is around 65 requests per second. Let&rsquo;s try our new list for comparison.</p>
+
+``` terminal
+$ ab -n 100 -r http://localhost:3000/processes/list
+```
+
+<p>This gives us an average of around 13.5ms and 74 requests per second. There&rsquo;s not a huge improvement in speed so there&rsquo;s not a huge improvement in speed but if you do this to a process that&rsquo;s called extremely frequently then it may be enough to make a difference.</p> 
+
+<p>That&rsquo;s it for this episode. This technique isn&rsquo;t something that should be done everywhere as there aren&rsquo;t that many places where saving a new milliseconds is vital but for those cases where it does this is a great approach.</p>
