@@ -204,7 +204,7 @@ noonoo:store eifion$ curl https://raw.github.com/janl/mustache.js/master/mustach
 //= require_tree .
 ```
 
-<p>We now have almost everything in place to render out the products. We just need to replace the <code>alert</code> in the render function with the code to do this which will loop through the products, render each one and append it to the <code>products</code> div. To render a product we call <code>Mustache.to_html</code>, passing it the our template and the product. Once we&rsquo;ve rendered each product we&rsquo;ll re-enable the scroll event so that the next time we scroll down to the bottom more products are added to the list.</p>
+<p>We now have almost everything in place to render out the products. We just need to replace the <code>alert</code> in the render function with the code to do this which will loop through the products, render each one and append it to the <code>products</code> div. To render a product we call <code>Mustache.to_html</code>, passing it our template and the product. Once we&rsquo;ve rendered each product we&rsquo;ll re-enable the scroll event so that the next time we scroll down to the bottom more products are added to the list.</p>
 
 ``` /app/assets/products.js.coffee
   render: (products) =>
@@ -319,7 +319,7 @@ end
 ActionView::Template.register_template_handler(:mustache, MustacheTemplateHandler)
 ```
 
-<p>We used a module here, but we could have used a class, a proc or even a lambda as any of them respond to <code>call</code>. The <code>call</code> method is a little odd as it needs to return a string containing some Ruby code so if it returned <code>&quot;1 + 1&quot;</code> then the template would render <code>&ldquo;2&rdquo;</code>. Instead of that we call <code>template.source</code> which is the content of the template that&rsquo;s being rendered, in this case the Mustache template partial we created earlier. We call <code>inspect</code> on this to return an object which will be the string-escaped version of it&rsquo;s Ruby representation and then call <code>html_safe</code> on the output from this to make sure that it&rsquo;s escaped properly. Finally we register the new handler by calling <code>register_template_handler</code>, passing in the name of the handler and our module.</p>
+<p>We used a module here, but we could have used a class, a proc or even a lambda as any of them respond to <code>call</code>. The <code>call</code> method is a little odd as it needs to return a string containing some Ruby code so if it returned <code>&quot;1 + 1&quot;</code> then the template would render <code>&ldquo;2&rdquo;</code>. Instead of that we call <code>template.source</code> which is the content of the template that&rsquo;s being rendered, in this case the Mustache template partial we created earlier. We call <code>inspect</code> on this to return an object which will be the string-escaped version of its Ruby representation and then call <code>html_safe</code> on the output from this to make sure that it&rsquo;s escaped properly. Finally we register the new handler by calling <code>register_template_handler</code>, passing in the name of the handler and our module.</p>
 
 <p>Whenever we create or alter an initializer we need to restart the server, but once we do the page will load and work as it did before.</p>
 
