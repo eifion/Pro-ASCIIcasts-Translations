@@ -1,0 +1,445 @@
+<p><a href="http://mustache.github.com/">Mustache</a>はとてもシンプルなテンプレート用言語で、RubyとJavaScriptを含む多くのプログラミング言語でサポートされています。複数の言語でテンプレートを共有しなければいけない場合、Mustacheはすばらしいソリューションです。<a href="http://mustache.github.com/#demo">デモサイト</a>にはいろいろ試せるサンプルのテンプレートがあります。以下に例を示します。
+</p>
+
+``` html
+<h1>{{header}}</h1>
+{{#bug}}
+{{/bug}}
+
+{{#items}}
+  {{#first}}
+    <li><strong>{{name}}</strong></li>
+  {{/first}}
+  {{#link}}
+    <li><a href="{{url}}">{{name}}</a></li>
+  {{/link}}
+{{/items}}
+
+{{#empty}}
+  <p>The list is empty.</p>
+{{/empty}}
+```
+
+<p>Mustacheテンプレートは、二重の波括弧で属性を定義します。波カッコとハッシュ記号(#)を使ってブロックを定義して、複数の項目で繰り返し処理をおこなったりif条件として使用します。上のテンプレートに下のJSONデータを渡します。</p>
+
+``` javascript
+{
+  "header": "Colors",
+  "items": [
+      {"name": "red", "first": true, "url": "#Red"},
+      {"name": "green", "link": true, "url": "#Green"},
+      {"name": "blue", "link": true, "url": "#Blue"}
+  ],
+  "empty": false
+}
+```
+
+<p>すると、次のような出力を生成します。</p>
+
+``` html
+<h1>Colors</h1>
+<li><strong>red</strong></li>
+<li><a href="#Green">green</a></li>
+<li><a href="#Blue">blue</a></li>
+```
+
+<p>ではRailsアプリケーションにMustacheを追加する方法を見ていきましょう。</p>
+
+<h3>Mustacheを使ってJavaScriptでリストに項目を追加する</h3>
+
+<p>今回使用するRailsアプリケーションには、商品の一覧を表示するページがあり、現状はデータベースにあるうちの最初の10件だけを表示しています。これを改良して、ユーザが画面を下にスクロールするのに従ってさらに商品情報を読み込んで、際限なくスクロールしているような効果を得られるようにします。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/807/original/E295I01.png" width="800" height="475" alt="商品ページ"/>
+</div>
+
+<p>このページのテンプレートは単純です。商品の<code>id</code>付きの<code>div</code>があり、この中で商品をループして一つずつ表示します。</p>
+
+```/app/views/index.html.erb
+
+<h1>Products</h1>
+
+<div id="products">
+<% @products.each do |product| %>
+  <div class="product">
+    <h2><%= link_to product.name, product %></h2>
+    <div class="details">
+      <%= number_to_currency(product.price) %>
+      <% if product.released_at %>
+        | Released  <%= product.released_at.strftime("%B %e, %Y") %>
+      <% end %>
+    </div>
+  </div>
+<% end %>
+</div>
+```
+
+<p>ユーザが下方向にスクロールしてページの終わりに近づいたことを検知したら、<code>div</code>内にさらに商品を追加します。<code>products.js.coffee</code>の中にこの処理をおこなうコードを記述します。このコードをまずは以下のように書いてみました。</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      alert 'near bottom'
+      
+  nearBottom: =>
+	$(window).scrollTop() > $(document).height() - $(window).height() - 50
+```    
+    
+<p>このコードではまずDOMがロードされて<code>products</code>のdivがページに存在することをチェックします。スクロールの処理と商品の読み込みのロジックは、これが完成する頃にはかなり複雑になるため、<code>ProductsPager</code>クラスとして別に定義することにします。このクラスのコンストラクタに、ページがスクロールされるごとに<code>check</code>関数を起動するイベントハンドラを追加します。</p> 
+
+<p>checkを定義するときに、細い矢印(<code>-&gt;</code>)ではなく太い矢印(<code>=&gt;</code>)を使用します。これによってコンテキストが常に同じであることが保証されます。 つまり、<code>scroll</code>イベントがバインドしたものではなく、常に<code>ProductsPager</code>インスタンスを参照します。 </p>
+
+<p><code>check</code>関数内で、ユーザがページの一番下近くにスクロールしたかどうかをチェックします。一番下に近づいたら、<code>scroll</code>イベントから関数のバインドを解き、それ以上起動され続けないようにします。ここで次ページ分の商品を取得してページに追加しますが、今はとりあえずアラートを表示するだけにします。ユーザがページの一番下近くにスクロールしたことを<code>nearBottom</code>関数でチェックするのですが、この関数はウィンドウのスクロールバーがページの最下部から50ピクセル以内かどうかをチェックします。</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      alert 'near bottom'
+      
+  nearBottom: =>
+	$(window).scrollTop() > $(document).height() - $(window).height() - 50
+```    
+
+<p>ここでページをリロードしてページを下の方にスクロールするとアラートが表示されます。しかし「dismiss」をクリックしたあとは、イベントのバインドが解かれるため再度アラートが表示されることはありません。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/808/original/E295I02.png" width="801" height="477" alt="ページを最後までスクロールするとアラートが表示される"/>
+</div>
+
+<h3>サーバからさらに商品を取得する</h3>
+
+<p>コードが機能することがわかったので、<code>alert</code>の部分をRailsアプリケーションからさらに商品を取得してページに表示するコードに置き換えます。通常はjQueryの<code>getScript</code>関数を使って、RailsアプリケーションにJavaScriptテンプレートを作ってそこですべてを処理します。しかし、場合によってはサーバから取得したJSONデータを使って、すべてをクライアント側で処理したいときもあります。JSONはMustacheテンプレートで扱うことができるので、ここではそれを使用します。</p>
+
+<p>JSONデータを取得する元のURLが必要ですが、これを直接CoffeeScriptファイルに埋め込むのではなく、products <code>div</code>のデータ属性に追加します。</p>
+
+``` /app/views/products/index.html.erb
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+
+```
+
+<p>ここでCoffeeScriptコードのアラートの部分を<code>getJSON</code>の呼び出しに置き換えて、そのURLから商品のJSONデータを取得します。<code>getJSON</code>関数は、データが返されたときに起動するコールバック関数をとるので、新規に作成する<code>render</code>という関数を渡します。この関数は今はとりあえず返されたデータをアラート表示するだけです。</p>
+ 
+``` /app/assets/products.js.coffee
+jQuery ->
+  if $('#products').length
+    new ProductsPager()
+    
+class ProductsPager
+  constructor: ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      $(window).unbind('scroll', @check)
+      $.getJSON($('#products').data('json-url'), @render)
+      
+  nearBottom: =>
+	$(window).scrollTop() > $(document).height() - $(window).height() - 50
+    
+  render: (products) =>
+    alert products
+```    
+
+<p>このJSONリクエストが<code>ProductController</code>の<code>index</code>アクションを起動します。このアクションのコードを修正して、JSONリクエストを受け付けて商品情報の配列をJSONとして返すようにします。</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  respond_to do |format|
+    format.html
+    format.json { render json: @products }
+  end
+end
+```
+
+<p>ページをリロードしてページの最後までスクロールすると、商品のリストがアラートで表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/809/original/E295I03.png" width="801" height="477" alt="商品のリストがサーバから返される"/>
+</div>
+
+<h3>Mustache.jsで商品を表示する</h3>
+
+<p>商品のリストをサーバから取得できるようになりましたが、まだこれをページに表示する必要があり、ここでMustacheが登場します。テンプレートが必要なので、<code>index</code>ビュー内にすでにあるものをベースにして各商品を表示するテンプレートを作成します。</p>
+
+<p>Mustacheはシンブルな言語で<code>link_to</code>などのヘルパーメソッドは提供されないため、これらを標準のリンクに置き換えなくてはいけません。テンプレートをページに表示させたくないので、それを<code>script</code>タグでラップし<code>id</code>を付与してJavaScriptから参照できるようにします。</p>
+
+```/app/views/products.html.erb
+<script type="text/html" id="product_template">
+  <div class="product">
+    <h2><a href="/products/{{id}}">{{name}}</script></a></h2>
+    <div class="details">
+      {{price}}
+      {{#released_at}}
+        | Released {{released_at}}
+      {{/released_at}}
+    </div>
+  </div>
+</script>
+```
+
+<p><a href="https://github.com/janl/mustache.js">mustache.js</a>プロジェクトを利用することでMustacheテンプレートをJavaScriptで表示することができるようになります。このプロジェクトに含まれているJavaScriptファイルをダウンロードしてRailsアプリケーションで利用できます。これは外部のJavaScriptファイルなので、<code>curl</code>を使ってダウンロードし、新規に作成したvendor/assets/javascriptsディレクトリに置きます。</p>
+
+
+
+``` terminal
+$ mkdir -p vendor/assets/javascripts
+noonoo:store eifion$ curl https://raw.github.com/janl/mustache.js/master/mustache.js > vendor/assets/javascripts/mustache.js
+```
+
+<p>最後に<code>application.js</code>を修正してこのファイルをインクルードします。</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require mustache
+//= require_tree .
+```
+
+<p>これで商品を表示するために必要なものがほぼすべて揃いました。あとはrender関数の中の<code>alert</code>を、商品を表示するコードに置き換えます。これは商品をループしてひとつずつ表示し<code>products</code> divに追加していきます。商品を表示するために、<code>Mustache.to_html</code>を呼び出して、テンプレートと商品情報を渡します。各商品を表示したらscrollイベントを再度有効化して、次にページの最後にスクロールしたときにさらに商品がリストに追加されるようにします。</p>
+
+``` /app/assets/products.js.coffee
+  render: (products) =>
+    for product in products
+      $('#products').append Mustache.to_html($('#product_template').html(), product)
+    $(window).scroll(@check)
+```    
+
+<p>ここでページをリロードして下方向にスクロールすると、ページの最後までスクロールすると新しい商品が追加されます。しかし一つ問題があります。下方向にスクロールするたびに同じ商品がロードされるので、次にこれを修正します。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/810/original/E295I04.png" width="800" height="381" alt="同じ商品が何度も返される"/>
+</div>
+
+<h3>次のページの商品を取得する</h3>
+
+<p>次にどのページの商品を取得すればいいかがわかるように、products.js.coffeeファイルで現在のページ数を記録し、productsのJSONデータを取得するRailsリクエストの中に入れて送信します。<code>ProductsPager</code>のコンストラクタに<code>page</code>インスタンス変数を作成し、ページの最後に達するごとに1を追加し、現在の値をJSONリクエストに入れて送信します。</p>
+
+```/app/assets/javascripts/products.js.coffee
+class ProductsPager
+  constructor: (@page = 1) ->
+    $(window).scroll(@check)
+  
+  check: =>
+    if @nearBottom()
+      @page++
+      $(window).unbind('scroll', @check)
+      $.getJSON($('#products').data('json-url'), page: @page, @render)
+```      
+
+<p>商品の最後のページを表示したら<code>scroll</code>イベントのチェックをやめるべきなので、コールバック関数の中に商品が返されたかどうかのチェックを追加して、返された場合のみイベントを再度有効にするようにします。</p>
+
+``` /app/assets/javascripts/products.js.coffee
+  render: (products) =>
+    for product in products
+      $('#products').append Mustache.to_html($('#product_template').html(), product)
+	$(window).scroll(@check) if products.length > 0
+```    
+
+<p><code>index</code>アクションでこのpageパラメータを使って、オフセットを定義することで商品の正しいページが返されるようになりました。</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  @products = @products.offset((params[:page].to_i - 1) * 10) if params[:page].present?
+  respond_to do |format|
+    format.html
+    format.json { render json: @products }
+  end
+end
+```
+
+<p>ページをリロードして下方向にスクロールし続けると、各商品が一度ずつ表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/811/original/E295I05.png" width="800" height="379" alt="各商品は一度ずつリストに追加される"/>
+</div>
+
+<h3>重複を取り除く</h3>
+
+<p>Mustacheテンプレートを介して表示されるコードは少しフォーマットを直す必要がありますが、その前にRailsとJavaScriptで商品の表示のされ方にいくつか重複があるので、それを取り除きます。<code>index</code>アクションには現在、MustacheテンプレートとErbテンプレートという2つの非常によく似たテンプレートが存在します。使用するテンプレートを1つにすることでコードをきれいにできるので、両方でMustacheテンプレートを使うことにします。このためにはRubyでMustacheテンプレートを表示できるようにする方法が必要ですが、これには<a href="https://github.com/defunkt/mustache">mustache</a> gemを使うことができます。このgemと合わせて使用することでRailsにMustacheを統合して使いやすくするその他のgemもありますが、ここではすべて手動でおこなうことにして、テンプレートハンドラがどういう仕組みで機能するかをよりよく理解しましょう。</p>
+
+<p>mustache gemをインストールするには通常の方法で<code>Gemfile</code>に追加して<code>bundle</code>コマンドを実行します。</p>
+
+```/Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~&gt; 3.1.4'
+  gem 'coffee-rails', '~&gt; 3.1.1'
+  gem 'uglifier', '&gt;= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'mustache'
+```
+
+<p>次にmustacheテンプレートを<code>index</code>ビューから部分テンプレート(partial)に移します。部分テンプレートはMustacheテンプレートなので、拡張子は通常の<code>.erb</code>ではなく、<code>.mustache</code>を付けます。</p>
+
+``` /app/views/products/_product.html.mustache
+<div class="product">
+  <h2><a href="/products/{{id}}">{{name}}</a></h2>
+  <div class="details">
+    {{price}}
+    {{#released_at}}
+      | Released {{released_at}}
+    {{/released_at}}
+  </div>
+</div>
+```
+
+<p><code>index</code>でこの部分テンプレートを呼び出します。</p>
+
+``` /app/views/products/index.html.erb
+<script type="text/html" id="product_template">
+  <%= render 'product' %>
+</script>
+```
+
+<p>ここでページをリロードすると<code>MissingTemplate</code>エラーが表示されます。これはアプリケーションにmustacheテンプレートのハンドラがないからです。それを<code>/config/initializers</code>ディレクトリに作成します(あるいは<code>/lib</code>ディレクトリに入れることも可能です)。テンプレートハンドラはRails 3.1で大きく変わりました。以前は<code>render</code>メソッドと<code>compile</code>メソッドをオーバーライドする必要がありましたが、Rails 3.1では<code>call</code>を定義するだけです。</p>
+
+``` /config/initalizers/mustache_template_handler.rb
+module MustacheTemplateHandler
+  def self.call(template)
+    "#{template.source.inspect}.html_safe"
+  end
+end
+
+ActionView::Template.register_template_handler(:mustache, MustacheTemplateHandler)
+```
+
+<p>ここではモジュールを使用しましたが、その代わりにクラスやprocやlambdaのような、<code>call</code>にレスポンスするものであれば何でも使えます。<code>call</code>メソッドが変わっている点は、Rubyコードが含まれた文字列を返さなくてはいけないところです。もし<code>"1 + 1"</code>を返したら、テンプレートは<code>“2”</code>を表示します。その代わりに<code>template.source</code>を呼び出します。これは表示されるテンプレートの内容のことなので、今回の場合は先に作成したMustacheの部分テンプレートになります。ここで<code>inspect</code>を呼び出すとオブジェクトが返されますが、これは文字列をエスケープしたRuby形式で表現されたバージョンになります。そしてここからの出力に対して<code>html_safe</code>を呼び出して、正しくエスケープされていることを保証します。最後に<code>register_template_handler</code>を呼び出してハンドラ名とモジュールを渡すことで新しいハンドラを登録します。</p>
+
+<p>初期化ファイルを新規に作成したり修正した場合には、サーバを再起動する必要があります。するとページが読み込まれ、前と同じように動作します。</p>
+
+<p>これでMustacheテンプレートを用いて、<code>index</code>ビューで最初の商品リストを表示させることができます。各<code>product</code>をテンプレートに渡すことで、<code>mustache</code>テンプレートを用いて表示するということを知らせます。商品を<code>mustache</code>というローカル変数として渡し、JavaScriptからテンプレートに渡されるデータと同じ形式であることを保証するためにそれをJSONフォーマットに変換します。</p>
+
+``` /app/views/products/index.html.erb
+<h1>Products</h1>
+
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+<% @products.each do |product| %>
+  <%= render 'product', :mustache => product.as_json %>
+<% end %>
+</div>
+
+<script type="text/html" id="product_template">
+  <%= render 'product' %>
+</script>
+```
+
+<p>Mustacheテンプレートハンドラで<code>mustache</code>オプションをチェックして、リクエストがAJAXリクエストではなく、<code>index</code>アクションから直接来たものであることを確認します。これをおこなうために、渡されたキーが含まれるtemplate.localsをチェックします。indexから直接来ている場合は、Ruby Mustacheを使って、現在の商品が含まれたmustache変数を渡して、テンプレートを表示します。そうでなければ、クライアント側で処理するためにJavaScript用のテンプレートをそのまま表示します。</p>
+
+```/config/initalizers/mustache_template_handler.rb
+module MustacheTemplateHandler
+  def self.call(template)
+    if template.locals.include? :mustache
+      "Mustache.render(#{template.source.inspect}, mustache).html_safe"
+    else
+      "#{template.source.inspect}.html_safe"      
+    end
+  end
+end
+
+ActionView::Template.register_template_handler(:mustache, MustacheTemplateHandler)
+```
+
+<p>サーバを再起動してページをリロードすると、JavaScriptで表示される商品だけはなく、Mustacheテンプレートを用いてすべての商品が表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/812/original/E295I06.png" width="800" height="379" alt="すべての商品がMustacheテンプレートで表示される"/>
+</div>
+
+<h3>出力をフォーマットする</h3>
+
+<p>重複を取り除いたので、次はフォーマットを正しく直すことに集中して、価格と発売日が希望する形式になるように修正します。テンプレートに渡すことができる正しくフォーマットされた商品を返す、product_for_mustacheというヘルパーメソッドを作成します。</p>
+
+``` /app/helpers/products_helper.rb
+module ProductsHelper
+  def products_for_mustache(product)
+    {
+      url: product_url(product),
+      name: product.name,
+      price: number_to_currency(product.price),
+      released_at: product.released_at.try(:strftime, "%B %e, %Y")
+    }
+  end
+end
+```
+
+<p>このメソッドはかなり単純ですが、ここに複雑なロジックを置きたい場合は、<a href="http://railscasts.com/episodes/287-presenters-from-scratch">エピソード287</a>で紹介した方法で、presenterクラスに移動することを検討するのもいいかも知れません。しかし、今回の場合はシンプルなヘルパーメソッドで十分です。</p>
+
+<p>indexビューでこのメソッドを呼び出して、テンプレートに正しくフォーマットされた商品情報が渡されるようにします。</p>
+
+``` /app/views/products/index.html.erb
+
+<div id="products" data-json-url="<%= products_url(:format => :json) %>">
+<% @products.each do |product| %>
+  <%= render 'product', :mustache => products_for_mustache(product) %>
+
+<% end %>
+</div>
+```
+
+<p>Mustacheテンプレートを少し修正します。ヘルパーメソッドが商品ごとのURLを返すので、テンプレートに決め打ちされたURLをその値に置き換えます。</p>
+
+```/app/products/views/_product.html.mustache
+<div class="product">
+  <h2><a href="{{url}}">{{name}}</a></h2>
+  <div class="details">
+    {{price}}
+    {{#released_at}}
+      | Released {{released_at}}
+    {{/released_at}}
+  </div>
+</div>
+```
+
+<p>最後に一つ修正が必要です。<code>ProductsController</code>の<code>index</code>アクションにJSONリクエストを送信すると、JSONで商品リストが返されます。それぞれが正しくフォーマットされるように、個別にヘルパーメソッドを介して渡したいのですが、それには<code>map</code>を使って各商品で繰り返し処理を行ってヘルパーメソッドを介します。コントローラからヘルパーメソッドを呼び出しているので、<code>view_context</code>を介さなくてはいけないことに留意してください。</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").limit(10)
+  @products = @products.offset((params[:page].to_i - 1) * 10) if params[:page].present?
+  respond_to do |format|
+    format.html
+    format.json do
+       render json: @products.map { |p| view_context.products_for_mustache(p) }
+    end
+  end
+end
+```  
+  
+<p>商品ページをリロードすると、商品は希望したとおりにフォーマットされています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/813/original/E295I07.png" width="800" height="345" alt="商品は正しくフォーマットされた"/>
+</div>
+
+<p>RailsとJavaScriptでMustacheテンプレートを共有する今回のエピソードは以上です。これで、最初の10項目をRubyで表示した場合と、ページを下にスクロールしたときにJavaScriptで表示した場合で、同じように項目を表示するページができました。</p>
+
+<p>もしMustacheを気に入ったら、Handlebarsも一見の価値があります。これはMustacheを拡張し、テンプレートでさらに複雑なことができるような機能を付加します。またパフォーマンス向上のために独立したコンパイルステップを追加します。</p>
