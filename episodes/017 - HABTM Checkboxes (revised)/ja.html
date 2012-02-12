@@ -1,0 +1,158 @@
+<p>下の画面は、商品のリストを表示するRailsアプリケーションのページです。</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/909/original/E017RI01.png" width="800" height="449" alt="商品リストを表示するページ"/>
+</div>
+
+<p>商品は複数のカテゴリーに属し、<code>Product</code>モデルと<code>Category</code>モデルは多対多の関連を持っています。以下に示す商品はいずれのカテゴリーにも属しておらず、今のままでは画面から商品にカテゴリーを関連づける方法がありません。今回のエピソードでは、ユーザが商品情報を編集するときにチェックボックスのリストからカテゴリーを設定できる機能を付加します。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/910/original/E017RI02.png" width="800" height="313" alt="新規商品の登録ページ"/>
+</div>
+
+<p>2つのモデルは<code>has_many :through</code>を使って関連づけられています。以下は<code>Product</code>のコードです。</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  has_many :categorizations
+  has_many :categories, through: :categorizations
+end
+```
+
+<p>商品は、<code>Categorization</code>という結合用モデルを介して複数のカテゴリを持ちます。</p>
+
+``` /app/models/categorization.rb
+class Categorization < ActiveRecord::Base
+  belongs_to :category
+  belongs_to :product
+end
+```
+
+<p><code>Category</code>モデルは、同じような<code>has_many :through</code>の関係を<code>Product</code>に対して持っています。</p>
+
+<p>紹介するテクニックは<code>has_and_belongs_to_many</code>の関係に対しても機能しますが、<code>has_many :through</code>の方がずっと柔軟性が高いので今回はそちらを利用することにしました。利点の一つは、商品の<code>category_ids</code>にアクセスするメソッドを提供してくれる点です。これをコンソールで実際に試すために、商品を取得して<code>category_ids</code>をリストアップしてみます。</p>
+
+``` terminal
+> p = Product.first
+> p.category_ids
+ => [] 
+``` 
+ 
+<p>このmethodを介してcategory_idを設定することも可能です。</p>
+
+``` terminal
+> p.category_ids = [1,2]
+ => [1, 2] 
+``` 
+ 
+<p>これはカテゴリーを設定して、categorizationのレコードも作成し、 それによって商品に対応するカテゴリーを取得できます。</p>
+
+``` terminal
+> p.categories
+ => [#<Category id: 1, name: "Board Games", created_at: "2011-12-26 21:22:48", updated_at: "2011-12-26 21:22:48">, #<Category id: 2, name: "Clothing", created_at: "2011-12-26 21:22:48", updated_at: "2011-12-26 21:22:48">]
+``` 
+
+<p>ブラウザで商品を見てみると設定したカテゴリーが表示されています。</p>
+
+<div class="imageWrapper">
+  <img src="あhttp://asciicasts.com/system/photos/911/original/E017RI03.png" width="800" height="360" alt="商品に対応するカテゴリーがページに表示される"/>
+</div>
+
+<h3>商品情報編集フォームにカテゴリーを追加する</h3>
+
+<p>商品情報の編集フォームを修正して、カテゴリーの追加や削除ができるようにします。フォームのテンプレートは以下の通りです。</p>
+
+``` /app/views/products/_form.html.erb
+<%= form_for(@product) do |f| %>
+  <% if @product.errors.any? %>
+    <div class="error_messages">
+      <h2><%= pluralize(@product.errors.count, "error") %>  prohibited this product from being saved:</h2>
+
+      <ul>
+      <% @product.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :price %><br />
+    <%= f.text_field :price %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>フォームには現状2つのフィールドがあります。それぞれ、商品の名称と価格です。もう一つのフィールドをカテゴリー用に追加します。その方法は以下のとおりです。</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <% Category.all.each do |category| %>
+    <%= check_box_tag "product[category_ids][]", category.id %>
+    <%= category.name %><br/>
+  <% end %>
+</div>
+```
+
+<p>上のコードでは、カテゴリー内をループしてそれぞれ用にチェックボックスを表示します。一つのチェックボックスを表示するだけであれば、<code>f.check_box :category_ids</code>を使うことができますが、ここでは<code>category_ids</code>が配列であるために各属性用に複数の属性を設定する必要があり、うまく動作しません。その代わりに今回はマニュアルによる方法をとり、<code>check_box_tag</code>を使用しました。複数のチェックボックスを扱えるように、名前の末尾に空の角カッコを付けます。これがRailsに対して複数の値をまとめて<code>params</code>ハッシュ内の配列に入れるように指示します。商品の編集用フォームにアクセスしてみると、チェックボックスが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/912/original/E017RI04.png" width="800" height="495" alt="商品フォームに、カテゴリー用のチェックボックスが表示される"/>
+</div>
+
+<p>いくつかを選択してフォームを送信すると、カテゴリーが追加されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/913/original/E017RI05.png" width="800" height="389" alt="カテゴリーが追加された"/>
+</div>
+
+<p>しかし商品を再度編集するためにページに戻ると、選択したカテゴリーにチェックが入っていません。これを修正するために<code>check_box_tag</code>に3つ目の引数を追加して、商品の<code>category_id</code>にそのカテゴリーが含まれている場合はチェックボックスがチェックされるようにします。</p>
+
+``` /app/views/products/_form.html.erb
+<% Category.all.each do |category| %>
+  <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id) %>
+  <%= category.name %><br/>
+<% end %>
+```
+
+<p>商品を編集すると、正しくチェックボックスにチェックが入っています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/914/original/E017RI06.png" width="800" height="504" alt="編集フォームで商品の現在のカテゴリーがチェックされている"/>
+</div>
+
+<p>しかしこのフォームにはまだバグが存在します。選択されているチェックボックのチェックをはずしてフォームを送信すると、以前選択されていたカテゴリーが削除されていません。これは、選択されていないチェックボックスがサーバに送信されるための値を持たないことが原因です。この問題に対処するために、フォームにチェックボックスと同じ名前の隠しフィールドを追加して値に<code>nil</code>を設定します。</p> 
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= hidden_field_tag "product[category_ids][]", nil%>
+    <% Category.all.each do |category| %>
+    <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id) %>
+    <%= category.name %><br/>
+  <% end %>
+</div>
+```
+
+<p>これでフォームが送信されるときにチェックボックスが一つもチェックされていない場合は、サーバにpostされるフィールドに隠しフィールドが追加されて、商品のカテゴリーが削除されます。</p>
+
+<h3>クリック可能なチェックボックスのラベル</h3>
+
+<p>編集フォームにはもう一つ解決しなくてはいけない問題があります。チェックボックスの隣のラベルをクリックしたときには、そのチェックボックスをクリックしたのと同じように振る舞うべきです。<code>label</code>タグの中に名前をラップするのは簡単ですが、ラベルを<code>id</code>を介してチェックボックスに関連づける必要があるものの、現状では各チェックボックスが同じ<code>id</code>を持っています。これはよくない設定なので、まずビューテンプレートを修正して各チェックボックスが個別のidを持つようにします。</p>
+
+``` /app/views/products/_form.html.erb
+<% Category.all.each do |category| %>
+  <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id), id: dom_id(category) %>
+  <%= label_tag dom_id(category), category.name %><br/>
+<% end %>
+```
+
+<p>各チェックボックスの<code>id</code>をユニークにするために、Railsが提供する<code>dom_id</code>メソッドを使用してそれにカテゴリを渡します。これが<code>category_n</code>の<code>id</code>を生成します。ここで<code>n</code>はカテゴリーの<code>id</code>です。次に<code>label_tag</code>を使用してカテゴリー名を表示しますが、ここで<code>dom_id</code>も使用してラベルをチェックボックスと関連づけます。これでページをリロードすると、ラベルをクリックすることでチェックボックスのチェックを入れたり外したりできるようになりました。</p>
+
+<p>コードは正常に動作するようになりましたが、少し複雑になってしまいました。特にビューがそうです。これをフォームビルダーに抽出することもできますが、それは今回のエピソードの範囲を超えています。代替案として<a href="https://github.com/plataformatec/simple_form">SimpleForm</a>や<a href="https://github.com/justinfrench/formtastic">Formtastic</a>などのgemを利用する方法があります。SimpleFormにはcollection_check_boxesメソッドがあり、今回おこなった処理をずっと簡潔に行う方法を提供します。Formtasticには似たようなcheck_boxesメソッドがあります。</p>
