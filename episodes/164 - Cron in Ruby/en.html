@@ -51,7 +51,7 @@ every 15.minutes do
 end
 ```
 
-<p>The <code>command</code> method runs a terminal command and the we can use the <code>path</code> variable to give us access to our application&rsquo;s path. We can see the equivalent cron code at any time by running whenever, again through <code>bundle exec</code>.</p>
+<p>The <code>command</code> method runs a terminal command and then we can use the <code>path</code> variable to give us access to our application&rsquo;s path. We can see the equivalent cron code at any time by running whenever, again through <code>bundle exec</code>.</p>
 
 ``` terminal
 $ bundle exec whenever
@@ -132,7 +132,7 @@ every 15.minutes do
 end
 ```
 
-<p>We use <code>job_type</code> to create a new job type and give it a name and a path. For our job this the path is application&rsquo;s <code>script</code> directory and <code>:task</code> indicates that it should run whatever task we pass in. We&rsquo;ll also use <code>:output</code> so that any output the script returns is passed to the log file. With this in place we can non define <code>script</code> jobs just like any other type of job and when we run whenever again we&rsquo;ll see our custom job in its output.</p>
+<p>We use <code>job_type</code> to create a new job type and give it a name and a path. For our job this the path is application&rsquo;s <code>script</code> directory and <code>:task</code> indicates that it should run whatever task we pass in. We&rsquo;ll also use <code>:output</code> so that any output the script returns is passed to the log file. With this in place we can now define <code>script</code> jobs just like any other type of job and when we run whenever again we&rsquo;ll see our custom job in its output.</p>
 
 ``` terminal
 $ bundle exec whenever

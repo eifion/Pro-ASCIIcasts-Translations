@@ -1,0 +1,165 @@
+<p>Cronは、スケジュールされた繰り返されるジョブを扱う最も一般的な方法のひとつです。しかしその記法は暗号のように読みづらいものです。以下は<a href="http://en.wikipedia.org/wiki/Cron">cron</a>についてのWikipediaページにある例です。</p>
+
+``` cron
+1 0 * * *  printf > /www/apache/logs/error_log
+```
+
+<p>このコマンドがどういう頻度で実行されるのかはよくわかりません。毎分なのか、毎時1分なのか、それともそれ以外なのか? 実際は毎日最初の1分に実行されます。これはどうでしょうか?</p>
+
+``` cron
+0 */2 * * *  /home/username/test.pl
+```
+
+<p>これは2時間ごとに実行されるのですが、これを理解して正しい記法で自分のcronジョブを設定するのは簡単ではありません。cronジョブは一つのアプリケーションで実行される場合が多いので、直接サーバで管理するのではなくアプリケーション内で管理する方がいいでしょう。このような場合には<a href="https://github.com/javan/whenever">Whenever</a> gemが便利です。このgemはアプリケーションのcronタスクを直接Rubyで管理する便利な情報を提供してくれます。わかりやすい記法で与えられたタスクをどういう頻度で実行させるかを定義することができ、多種類のタスクを実行するための便利なコマンドが提供されています。</p>
+
+<h3>Wheneverでスケジュールされたタスクを作成する</h3>
+
+<p>アプリケーションにWheneverを追加するには、gemfileにそれを追加してbundleを実行してインストールします。</p>
+
+``` /Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.3'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.5'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'whenever', require: false
+```
+
+<p>RailsアプリケーションでWheneverを使用しないので、<code>require</code>オプションを<code>false</code>に設定したことに注意してください。<code>whenverize</code>コマンドを実行してアプリケーションにWheneverを設定します。その時に<code>bundle exec</code>を付けます。</p>
+
+``` terminal
+$ bundle exec wheneverize
+[add] writing `./config/schedule.rb'
+[done] wheneverized!
+```
+
+<p>このコマンドは<code>/config</code>ディレクトリにいくつかのドキュメントと一緒に<code>schedule.rb</code>ファイルを作成します。これを自分のタスクと置き換えます。例えば15分ごとにキャッシュファイルを削除したいとします。そのタスクを次のように書きます。</p>
+
+``` /config/schedule.rb
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+end
+```
+
+<p><code>command</code>メソッドがターミナルコマンドを実行し、<code>path</code>変数を使ってアプリケーションのパスにアクセスすることができます。いつでもwheneverを(<code>bundle exec</code>を介して)実行することで、対応するcronコードを確認することができます。</p>
+
+``` terminal
+$ bundle exec whenever
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'''
+```
+
+<p>このコマンドの出力に、指定したタスクに対応するcronが表示されます。</p>
+
+<p>この他にもいろいろな方法でWheneverでスケジュールを指定することができます。例えばターミナルコマンドではなくRubyコードを実行したい場合はそれも可能です。例えばe-コマースアプリケーションで、放置されたカートを週に1度、日曜日の朝にクリアしたいとします。<code>Cart</code>モデルにこれを行うクラスメソッドがあり、<code>runner</code>を呼び出してこれを実行できます。</p>
+
+``` /config/schedule.rb
+every :sunday, at: "4:28 AM" do
+  runner "Cart.clear_abandoned"
+end
+```
+
+<p>このコマンドはRailsの環境を読み込んで、渡したRubyコードを実行します。同じようにRakeタスクを実行することも可能です。例えばアプリケーションにThinking Sphinxサーバがある場合、サーバが再起動される度にThinking Sphinxが確実に起動されていることを確認したいでしょう。これは次のタスクを追加することで可能です。</p>
+
+``` /config/schedule.rb
+every :reboot do
+  rake "ts:start"
+end
+```
+
+<p>ここで<code>whenever</code>を実行すると、これらのタスクが対応するcronの記法に翻訳されるのを確認できます。</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'''
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'''
+```
+
+<p>Wheneverは自動的に<code>rails runner</code>でのRubyコードの実行とRakeタスクの実行を正しく処理するので我々がそれらについて気にかける必要はありません。</p>
+
+<p>これらのコマンドからの出力のログを保存しておくのがいいでしょう。そのためにはsetコマンドでoutputオプションを使用してパスを指定します。</p>
+
+``` /config/schedule.rb
+set :output, "#{path}/log/cron.log"
+
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+end
+
+every :sunday, at: "4:28 AM" do
+  runner "Cart.clear_abandoned"
+end
+
+every :reboot do
+  rake "ts:start"
+end
+```
+
+<p>このコマンドが出力をアプリケーションの<code>log</code>ディレクトリの<code>cron.log</code>ファイルに保存します。再度wheneverを実行するとコマンドが出力をログファイルにパイプで渡しているのがわかります。</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+```
+
+<h3>独自のジョブタイプを作成する</h3>
+
+<p>独自のジョブタイプを作成することも可能です。Wheneverには標準で3つのタイプ、<code>command</code>、<code>runner</code>、<code>rake</code>がありますが、他のものを頻繁に実行する場合は独自のジョブタイプを作成できます。例えばアプリケーションの<code>script</code>ディレクトリにcronで実行するスクリプトが多くある場合はそれを実行するための新しいジョブタイプを作成できます。</p>
+
+``` /config/schedule.rb
+set :output, "#{path}/log/cron.log"
+job_type :script, "'#{path}/script/:task :output"
+
+every 15.minutes do
+  command "rm '#{path}/tmp/cache/foo.txt'"
+  script "generate_report"
+end
+```
+
+<p><code>job_type</code>コマンドを使用して、新規にジョブタイプを作成して名前とパスを与えます。今回のジョブではパスはアプリケーションの<code>script</code>ディレクトリで、<code>:task</code>は渡されるタスクをすべて実行することを示しています。また<code>:output</code>を使用して、スクリプトが返す出力をログファイルに渡します。これが設定できたら<code>script</code>ジョブを他のジョブタイプと同じように定義し、再度wheneverを実行すると出力の中にカスタムジョブを確認できます。</p>
+
+``` terminal
+$ bundle exec whenever
+@reboot /bin/bash -l -c 'cd /Users/eifion/schedules && RAILS_ENV=production bundle exec rake ts:start --silent >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c 'rm '\''/Users/eifion/schedules/tmp/cache/foo.txt'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+0,15,30,45 * * * * /bin/bash -l -c ''\''/Users/eifion/schedules/script/generate_report >> /Users/eifion/schedules/log/cron.log 2>&1'
+
+28 4 * * 0 /bin/bash -l -c 'cd /Users/eifion/schedules && script/rails runner -e production '\''Cart.clear_abandoned'\'' >> /Users/eifion/schedules/log/cron.log 2>&1'
+```
+
+<h3>タスクのデプロイ</h3>
+
+<p>これで希望通りのスケジュールが設定できましたが、それらをどうやってサーバにデプロイすればいいでしょうか? Capistranoを使用していればこれは簡単で、<code>deploy.rb</code>ファイルに次の2行を追加するだけです。</p>
+
+``` /config/deploy.rb
+require "bundler/capistrano"
+
+set :whenever_command, "bundle exec whenever"
+require 'whenever/capistrano'
+```
+
+<p>真ん中の行で、Capistranoに対してBundlerを介して<code>whenever</code>コマンドを実行するよう指示し、その下の行でアプリケーションがデプロイされる度にcrontabに書き込むCapistranoタスクを追加しています。必要な作業は以上です。次回にアプリケーションをデプロイするときにはすべてが自動的に設定されます。</p>
+
+<h3>代替ツール</h3>
+
+<p>WheneverはRailsアプリケーションの中からcronジョブを管理する優れた方法ですが、すべてのスケジュールされたジョブにとってcronが最適な方法であるとは限りません。ジョブを頻繁に実行する場合や実行時間の長いタスクの場合は、代替ツールを検討する価値があります。</p>
+
+<p>RedisとResqueを使用してジョブキューを管理している場合(これについては<a href="http://railscasts.com/episodes/271-resque">エピソード271</a>で取り上げました)は<a href="https://github.com/bvandenbos/resque-scheduler">Resque Scheduler</a>を参照してください。これはRedisとResqueを使ってスケジュールされたジョブを処理する永続プロセスです。このツールの利点はResqueが提供するWebインターフェースでジョブの状態を確認することができるという点です。Resque Schedulerは<a href="https://github.com/jmettraux/rufus-scheduler">Rufus Scheduler</a>というgemの上で稼働します。Resqueを使用していなくてより汎用的なソリューションが必要な場合はこちらの方がいいでしょう。もう一つ見てみる価値があるのが<a href="https://github.com/adamwiggins/clockwork">Clockwork</a>です。これは各種のキューイングエンジンに対応しておりWheneverに似た使いやすい記法を利用できます。</p>
