@@ -1,0 +1,632 @@
+<p>This is the second part of a two-part series on using Backbone with Rails. Our objective over these two episodes is to make the application shown below which helps us raffle off prizes. With this app we can add participants and select multiple winners. The app has some validation, too. If we try to add a name without entering anything in the text box an <code>alert</code> will show to tell us what we&rsquo;ve done wrong.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/995/original/E325I01.png" width="800" height="604" alt="Our Raffler application."/>
+</div>
+
+<p>We started building this application in <a href="http://railscasts.com/episodes/323-backbone-on-rails-part-1">part one</a> so before we do any more work we&rsquo;ll review what we&rsquo;ve done so far. First we created a new Rails application with a default page that simply contains a div with some placeholder text.</p>
+
+``` /app/views/main/index.html.erb
+<div id="container">Loading...</div>
+```
+
+<p>From here our Backbone app takes over. This starts in a <code>raffler.js.coffee</code> file.</p>
+
+``` /app/assets/javascripts/raffler.js.coffee
+window.Raffler =
+  Models: {}
+  Collections: {}
+  Views: {}
+  Routers: {}
+  init: ->
+    new Raffler.Routers.Entries()
+    Backbone.history.start()
+
+$(document).ready ->
+  Raffler.init()
+```  
+
+<p>The <code>init</code> function in this code is triggered when the page loads and it  generates a new <code>Entries</code> router then visits it. Let&rsquo;s look at that router.</p>
+
+``` /app/assets/javascripts/routers/entries_router.js.coffee
+class Raffler.Routers.Entries extends Backbone.Router
+  routes:
+    '': 'index'
+    'entries/:id': 'show'
+
+  initialize: ->
+    @collection = new Raffler.Collections.Entries()
+    @collection.fetch()
+
+  index: ->
+    view = new Raffler.Views.EntriesIndex(collection: @collection)
+    $('#container').html(view.render().el)
+
+  show: (id) ->
+    alert "Entry #{id}"
+```	
+
+<p>This code creates a new <code>Entries</code> collection then fetches and fills it with data from the database via our Rails application. The <code>index</code> route then renders the <code>EntriesIndex</code> view with that collection and places it inside the <code>container</code> div. Here&rsquo;s what that <code>EntriesIndex</code> class looks like:</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+class Raffler.Views.EntriesIndex extends Backbone.View
+  template: JST['entries/index']
+
+  initialize: ->
+    @collection.on('reset', @render, this)
+
+  render: ->
+    $(@el).html(@template(entries: @collection))
+    this
+```	
+<p>This view passes the collection of data to this template.</p>
+
+``` /app/assets/templates/entries/index.jst.eco
+<h1>Raffler</h1>
+
+<ul>
+<% for entry in @entries.models: %>
+  <li><%= entry.get('name') %></li>
+<% end %>
+</ul>
+```
+
+<p>The template is fairly straightforward. It loops through the entries in the collection and displays a <code>name</code> for each one. When we browse our application in its current state we&rsquo;ll see the list of entry records displayed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/996/original/E325I02.png" width="800" height="489" alt="Our application as it currently is with the list of entries showing."/>
+</div>
+
+<p>If any of this is confusing or unfamiliar then you should read through part one to get a more thorough explanation of how we&rsquo;ve got this far.</p>
+
+<h3>Adding New Entries</h3>
+
+<p>We&rsquo;ll carry on now and add more functionality to our app. First we&rsquo;ll add a form at the top of the page for adding new entries. We&rsquo;ll add it in the template immediately above the code that lists the entries.</p>
+
+``` /app/assets/templates/entries/index.jst.eco
+<h1>Raffler</h1>
+
+<form id="new_entry">
+  <input type="text" name="name" id="new_entry_name">
+  <input type="submit" value="Add">
+</form>
+
+<ul>
+<% for entry in @entries.models: %>
+  <li><%= entry.get('name') %></li>
+<% end %>
+</ul>
+```
+
+<p>This adds the form to the page but clicking &ldquo;Add&rdquo; won&rsquo;t add an entry yet as clicking the button just submits the form and reloads the page. We need to capture the <code>submit</code> event and add the entry through the application. Events in Backbone are often handled in the views and we&rsquo;ll do this inside our <code>Entries</code> index view. We want to listen to the form&rsquo;s <code>submit</code> event and Backbone provides a special way to define and handle events by setting an events property.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+class Raffler.Views.EntriesIndex extends Backbone.View
+  template: JST['entries/index']
+  
+  events:
+	  'submit #new_entry': 'createEntry'
+
+  initialize: ->
+    @collection.on('reset', @render, this)
+
+  render: ->
+    $(@el).html(@template(entries: @collection))
+    this
+	
+  createEntry: (event) ->
+    event.preventDefault()
+	@collection.create name: $('#new_entry_name').val()
+```	
+
+<p>In <code>events</code> we set the name of the event we want to listen to followed by a space and an identifier for the element we want to listen to the event on, in this case the form. The value should be the name of a function which will be triggered when the event fires. In this case we call a <code>createEntry</code> function which we&rsquo;ve also defined here. This function takes an <code>event</code> parameter and in it we first call <code>preventDefault</code> to ensure that the event&rsquo;s default action, in this case submitting the form, doesn&rsquo;t happen. Next we create a new record through our collection, passing in the name attribute with a value based on the text in the text field.</p>
+
+<p>If we reload the page now we&rsquo;ll see the form. When we enter a name and click &ldquo;Add&rdquo; the browser will submit a POST request in the background to our Rails application to create the record.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/997/original/E325I03.png" width="800" height="489" alt="Adding a record."/>
+</div>
+
+<p>Although the record is added the front end doesn&rsquo;t change until we reload the page so we need a way to add a new record to the list when it&rsquo;s added to the database. We could update the view directly in the <code>createEntry</code> function but a general practice in Backbone is only to focus on changing the model data here and to use callbacks to update the view. We have a <code>reset</code> callback that we created in the previous episode which re-renders the view when we fetch the collection data from our Rails application. We&rsquo;ll make another event callback here for the add event that will re-render the view when we add a new record.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+class Raffler.Views.EntriesIndex extends Backbone.View
+  template: JST['entries/index']
+  
+  events:
+	  'submit #new_entry': 'createEntry'
+
+  initialize: ->
+    @collection.on('reset', @render, this)
+    @collection.on('add', @render, this)
+	
+  render: ->
+    $(@el).html(@template(entries: @collection))
+    this
+	
+  createEntry: (event) ->
+    event.preventDefault()
+    @collection.create name: $('#new_entry_name').val()
+```	
+
+<p>If we add a new entry now (say &ldquo;Bob&rdquo;) the list will update as soon as we click &ldquo;Add&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/998/original/E325I04.png" width="800" height="615" alt="Now when we add a new entry it&rsquo;s added to the list."/>
+</div>
+
+<h3>Adding The New Entry More Efficiently</h3>
+
+<p>This solution works but every time we add a new entry the entire template including the form and all the entries are re-rendered. It&rsquo;s generally best to only update the portion of the page that changes, in this case we just want to add a new item to the list. To do this we&rsquo;ll need a way to render a single entry and we can do this by creating a separate entry view which handles the rendering of a single entry. This view will be quite similar to the other view but for now we&rsquo;ll just have it render out its template without passing an entry object to it.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+class Raffler.Views.Entry extends Backbone.View
+  template: JST['entries/entry']
+  
+  render: ->
+    $(@el).html(@template())
+    this
+```	
+
+<p>We need to create a new template to go with this view and we&rsquo;ll do that now, though we&rsquo;ll just put some placeholder text in it.</p>
+
+``` /app/assets/templates/entries/entry.jst.eco
+Entry goes here.
+```
+
+<p>In our index template we can use this new template to render the list of entries. We&rsquo;ll remove the code that loops through the entries collection and replace it with a static <code>ul</code> element with an <code>id</code>.</p>
+
+``` /app/assets/templates/entries/index.jst.eco
+<h1>Raffler</h1>
+
+<form id="new_entry">
+  <input type="text" name="name" id="new_entry_name">
+  <input type="submit" value="Add">
+</form>
+
+<ul id="entries"></ul>
+```
+
+<p>In the index view now we&rsquo;ll change the way we render the template. We no longer need to pass the entries collection in to the template, instead we&rsquo;ll fill it with the entries separately.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+render: ->
+  $(@el).html(@template())
+  @collection.each(@appendEntry)
+  this
+	
+appendEntry: (entry) ->
+  view = new Raffer.Views.Entry()
+  $('#entries').append(view.render().el)
+``` 
+
+<p>Now in <code>render</code> we loop through each entry in the collection and call a new <code>appendEntry</code> function. In this we create a new entry view and then render it out by appending it to the list. If we reload the page now we&rsquo;ll see the placeholder text for each item but they don&rsquo;t appear to be rendered in a list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/999/original/E325I05.png" width="800" height="387" alt="Each entry is now rendered using our new template."/>
+</div>
+
+<p>If we look at the source we&rsquo;ll see why. The the wrapper <code>ul</code> element is there but each entry is wrapped in a <code>div</code> which is the default wrapper for Backbone views.</p>
+
+``` html
+<ul id="entries"><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div><div>Entry goes here.
+</div></ul>
+```
+
+<p>We can change the wrapper element by setting the <code>tagName</code> property in the view.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+class Raffler.Views.Entry extends Backbone.View
+  template: JST['entries/entry']
+  tagName: 'li'
+  
+  render: ->
+    $(@el).html(@template())
+    this
+```	
+
+<p>When we reload the page now it looks correct but we still need to replace the placeholder text with the actual entry name. To do this we&rsquo;ll need to pass the entry model to the view when we create it.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+appendEntry: (entry) ->
+  view = new Raffler.Views.Entry(model: entry)
+  $('#entries').append(view.render().el)
+```  
+
+<p>Now in the view we can pass the model into the template.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+render: ->
+  $(@el).html(@template(entry: @model))
+  this
+```  
+
+<p>Finally in the template we can replace the placeholder text with the entry&rsquo;s <code>name</code>.</p>
+
+``` /app/assets/templates/entries/entry.jst.eco
+<%= @entry.get('name') %>
+```
+
+<p>When we reload the page now we&rsquo;ll see the list of names again.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1000/original/E325I06.png" width="800" height="578" alt="The new template now shows each name correctly."/>
+</div>
+
+<p>With these changes in place we no longer have to re-render the entire template when we add a new entry. Instead we can call <code>appendEntry</code> and simply add the new entry to the list.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+initialize: ->
+  @collection.on('reset', @render, this)
+  @collection.on('add', @appendEntry, this)
+```  
+
+<p>This works, but when we add an item now the text field is no longer cleared as the entire template isn&rsquo;t being re-rendered. We&rsquo;ll need to manage this manually and we can do so by modifying the <code>createEntry</code> function.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+createEntry: (event) ->
+  event.preventDefault()
+  @collection.create name: $('#new_entry_name').val()
+  $('#new_entry')[0].reset()
+```
+
+<h3>Adding Validations</h3>
+
+<p>Now that we know how to add entries efficiently we&rsquo;ll take a look at validations. If a user clicks the &ldquo;Add&rdquo; button without entering a name we want to show an error message. Backbone offers support for client-side validations with the <code>validate</code> function and there are details of this in the <a href="http://documentcloud.github.com/backbone/#Model-validate">documentation</a> but we won&rsquo;t be using them here. Instead we&rsquo;ll focus on server-side validations and integration with Rails.</p>
+
+<p>Our app&rsquo;s Entry model doesn&rsquo;t have any validations yet so to start we&rsquo;ll add one.</p>
+
+``` /app/models/entry.rb
+class Entry < ActiveRecord::Base
+  validates_presence_of :name
+end
+```
+
+<p>If we try to add a new record without a name with this validation in place nothing seems to happen. If we look at the browser&rsquo;s network activity, however, we&rsquo;ll see that a POST request was made and that the response status is <code>422 Bad Request</code>. The response&rsquo;s content is some JSON containing the error messages.</p>
+
+``` json
+{"errors":{"name":["can't be blank"]}}
+```
+
+<p>We can use this JSON, which is generated by <code>respond_with</code> call in the <code>create</code> action, to display the error to the user. If you&rsquo;re not using <code>respond_with</code> you&rsquo;ll need to manually check if there are any validation errors on the model and handle the response in a similar fashion.</p>
+
+```/app/controllers/entries_controller.rb
+def create
+  respond_with Entry.create(params[:entry])
+end
+```
+
+<p>Now that we know how this error is generated we&rsquo;ll handle the <code>422</code> response in our Backbone app and display the error message to the user. When the entry is created in the index view we can pass in some callback functions to handle either a successful or failing response. </p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+createEntry: (event) ->
+  event.preventDefault()
+  attributes = name: $('#new_entry_name').val()
+  @collection.create attributes,
+    success: -> $('#new_entry')[0].reset()
+    error: @handleError
+
+handleError: (entry, response) ->
+  if response.status == 422
+    errors  = $.parseJSON(response.responseText).errors
+    for attribute, messages of errors
+      alert "#{attribute} #{message}" for message in messages
+```	  
+
+<p>We&rsquo;ve cleaned up the code that creates the new entry by moving the code that creates the attributes out into a separate variable and we&rsquo;ve also added two callbacks here: <code>success</code>, which fires when the new entry is created successfully and <code>error</code> which fires when it isn&rsquo;t. We&rsquo;ve also moved the line of code that clears the text box so that it only runs when the item is created. When the creation fails we call a new <code>handleError</code> function.</p>
+
+<p>This function has the entry model and the response passed to it. We can check if the response&rsquo;s status is <code>422</code> and if it is we get the errors from the response by parsing its JSON content and fetching its <code>errors</code> object. We then loop through this object and <code>alert</code> each message in the messages array. We need to do this as there can be multiple error for each attribute. When we reload the page now and try to add a new entry without a name we&rsquo;ll see an error displayed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1001/original/E325I07.png" width="804" height="565" alt="The error message returned from the server showing in an alert."/>
+</div>
+
+<p>We do have an issue here, however. If we look at the bottom of the list we&rsquo;ll see a blank entry in the collection, although if we reload the page it will go away. For some reason an entry is still being added to the collection. The issue is that calling <code>@collection.create</code> doesn&rsquo;t wait for the server to respond before adding the entry to the collection so if there is a validation error the entry will be added anyway. If we had client-side validation then this wouldn&rsquo;t be as much of an issue but as we don&rsquo;t we&rsquo;ll need another approach. We can pass a <code>wait</code> option to create and set it to <code>true</code> and this way the new item won&rsquo;t be added to the collection until the server responds.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+createEntry: (event) ->
+  event.preventDefault()
+  attributes = name: $('#new_entry_name').val()
+  @collection.create attributes,
+    wait: true
+    success: -> $('#new_entry')[0].reset()
+    error: @handleError
+```	
+
+<p>Now when we try to create a new entry we&rsquo;ll see the error but the blank line won&rsquo;t be created.</p>
+
+<h3>Selecting a Winner</h3>
+
+<p>Now that we have validations working it&rsquo;s time to add the &ldquo;Draw Winner&rdquo; button so that we can select a random winner from the list. First we&rsquo;ll add the button to the template.</p>
+
+``` /app/assets/templates/entries/index.jst.eco
+<h1>Raffler</h1>
+
+<form id="new_entry">
+  <input type="text" name="name" id="new_entry_name">
+  <input type="submit" value="Add">
+</form>
+
+<ul id="entries"></ul>
+
+<button id="draw">Draw Winner</button>
+```
+
+<p>Next we&rsquo;ll need to write some code so that the button does something when we click on it. We can do this in the same way that we listen to the <code>submit</code> event for creating an entry.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+class Raffler.Views.EntriesIndex extends Backbone.View
+  template: JST['entries/index']
+  
+  events:
+    'submit #new_entry': 'createEntry'
+    'click #draw': 'drawWinner'
+  
+  drawWinner: (event) ->
+    event.preventDefault()
+    @collection.drawWinner()
+
+  # Other functions omitted.
+```  
+
+<p>The logic for selecting a random winner is fairly complex and in such cases it&rsquo;s a good idea to pass it off to the model or collection layers. We call a new <code>drawWinner</code> function on the collection and we&rsquo;ll need to write that next.</p>
+
+``` /app/assets/javascripts/collections/entries.js.coffee
+class Raffler.Collections.Entries extends Backbone.Collection
+  url: '/api/entries'
+
+  drawWinner: ->
+    winner = @shuffle()[0]
+    if winner
+      winner.set(winner: true)
+      winner.save()
+```	  
+
+<p>In part one we mentioned that we can use <code>shuffle</code> on a collection to return a randomized array of records. We get the first record from the shuffled collection and if that record exists mark it as the winner then call save to send a PUT request back to the server to save the record.</p>
+
+<p>Clicking the button will now mark one of the entries as a winner but there&rsquo;s no indication of this in the UI. We&rsquo;ll do this inside the template for a single entry where we currently just display the entry&rsquo;s <code>name</code>.</p>
+
+``` /app/assets/templates/entries/entry.jst.eco
+<%= @entry.get('name') %>
+<% if @entry.get('winner'): %>
+  <span class="winner">WINNER</span>
+<% end %>
+```
+
+<p>Now when we click the button a few times then reload the page we&rsquo;ll see some of the entries listed as winners.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1002/original/E325I08.png" width="800" height="642" alt="Winning entries are now shown."/>
+</div>
+
+<p>If we click &ldquo;Draw Winner&rdquo; again another winner is selected but the view isn&rsquo;t updated to show them. We&rsquo;ll do this in the entry view where we render the individual entry. We need to create an <code>initialize</code> function for this class and in it we bind the the change event for the model to the <code>render</code> function so that a model is re-rendered when the model changes.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+class Raffler.Views.Entry extends Backbone.View
+  template: JST['entries/entry']
+  tagName: 'li'
+
+  initialize: ->
+    @model.on('change', @render, this)
+  
+  render: ->
+    $(@el).html(@template(entry: @model))
+    this
+```	
+
+<p>The <code>change</code> event is triggered by Backbone when a model saves and so it will be fired when we set an entry as a winner. When we reload the page now then click &ldquo;Draw Winner&rdquo; a new winner is selected and they&rsquo;re shown as being a winner on the page. Next we&rsquo;ll highlight the newest selected winner&rsquo;s text in red so that they&rsquo;re easier to spot. One way to do this is to trigger a custom event when a winner has been selected. We aren&rsquo;t limited to the events that come with Backbone, we can trigger any event. We&rsquo;ll make use of this to trigger a custom <code>highlight</code> event when a winner is set.</p>
+
+``` /app/assets/javascripts/collections/entries.js.coffee
+class Raffler.Collections.Entries extends Backbone.Collection
+  url: '/api/entries'
+
+  drawWinner: ->
+    winner = @shuffle()[0]
+    if winner
+      winner.set(winner: true)
+      winner.save()
+      winner.trigger('highlight')
+```	  
+
+<p>In the entry view we can now listen to this event in the same way we listen to the <code>change</code> event.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+class Raffler.Views.Entry extends Backbone.View
+  template: JST['entries/entry']
+  tagName: 'li'
+
+  initialize: ->
+    @model.on('change', @render, this)
+    @model.on('highlight', @highlightWinner, this)
+
+  highlightWinner: ->
+    $('.winner').removeClass('highlight')
+    @$('.winner').addClass('highlight')
+  
+  render: ->
+    $(@el).html(@template(entry: @model))
+    this
+```	
+
+<p>This event calls a new <code>highlightWinner</code> function when it&rsquo;s triggered and this function adds a <code>highlight</code> class to the <code>.winner</code> element. We don&rsquo;t want every one of these elements to be highlighted, only the one that&rsquo;s inside this template and Backbone provides a nice way to do this by calling <code>this.</code> before the element matcher, although as our code is in CoffeeScript we&rsquo;ve used the <code>@</code> symbol here instead. As there may be a previously highlighted winner showing on the page we remove the class from all of the <code>winner</code> elements first.</p>
+
+<p>If we reload the page now and click &ldquo;Draw Winner&rdquo; a new winner will be selected and shown in red. When we click the button again that winner will revert to being shown in grey and a new winner will be shown in red.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1003/original/E325I09.png" width="800" height="642" alt="The most recent winner is now displayed in red."/>
+</div>
+
+<h3>Refactoring</h3>
+
+<p>It&rsquo;s currently possible for a winner to be chosen who has already been marked as a winner. This is something you may or may not want to fix but we won&rsquo;t do that here. What we will do next is move the logic that sets a entry as a winner into the entry model. We call a lot of functions against the entry model here which is a sign that it&rsquo;s a good idea to move this code into the model. First we&rsquo;ll remove the code that sets the winner from the entries class and replace it with a call to a new <code>win</code> function on the model.</p>
+
+``` /app/assets/javascripts/collections/entries.js.coffee
+class Raffler.Collections.Entries extends Backbone.Collection
+  url: '/api/entries'
+
+  drawWinner: ->
+    winner = @shuffle()[0]
+    winner.win() if winner	
+```	
+
+<p>We can now define this function in the model class. Note that we now call these functions against <code>this</code> instead of through the <code>winner</code> variable.</p>
+
+``` /app/assets/javascripts/models/entry.js.coffee
+class Raffler.Models.Entry extends Backbone.Model
+
+  win: ->       
+    @set(winner: true)
+    @save()
+    @trigger('highlight')
+```	
+
+<p>When we try this, though, it doesn&rsquo;t work. If we look at the browser&rsquo;s console we&rsquo;ll see an error telling us that the <code>win</code> function is undefined. The issue is that the models we&rsquo;ve been working with in the collection aren&rsquo;t actually entry models and they don&rsquo;t contain the logic we define in the entry model class. To get this behaviour we need to define the class we want to use for a model.</p>
+
+``` /app/assets/javascripts/collections/entries.js.coffee
+class Raffler.Collections.Entries extends Backbone.Collection
+  url: '/api/entries'
+  model: Raffler.Models.Entry
+
+  drawWinner: ->
+    winner = @shuffle()[0]
+    winner.win() if winner
+```	
+
+<p>Now this collection class won&rsquo;t use the base model but will use <code>Entry</code> and we&rsquo;ll have access to its functionality. With this fix in place the &ldquo;Draw Winner&rdquo; button works as it should again.</p>
+
+<h3>Preloading Data</h3>
+
+<p>Next we&rsquo;ll look at preloading data. In part one we set up a call to <code>@collection.fetch</code> in our router. This loads up the initial entries by making a request to our Rails application. This second request can be avoided if we preload the data in the initial request to the page. There are a variety of ways that we can do this and we covered them in <a href="http://railscasts.com/episodes/324-passing-data-to-javascript">episode 324</a>. Here&rsquo;s we&rsquo;ll use the <code>content_tag</code> technique and pass in the initial set of entries in a <code>data-</code> attribute.</p>
+
+``` /app/views/main/index.html.erb
+<%= content_tag "div", "Loading...", id: "container", data: { entries: Entry.all } %>
+```
+
+<p>If we reload the page now and view the source we&rsquo;ll see the JSON representation of the entries in the <code>data-entries</code> attribute.</p>
+
+``` html
+<div data-entries="[{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:1,&quot;name&quot;:&quot;Matz&quot;,&quot;updated_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:2,&quot;name&quot;:&quot;Yehuda Katz&quot;,&quot;updated_at&quot;:&quot;2012-02-22T20:13:27Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:3,&quot;name&quot;:&quot;DHH&quot;,&quot;updated_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:4,&quot;name&quot;:&quot;Jose Valim&quot;,&quot;updated_at&quot;:&quot;2012-02-22T20:13:35Z&quot;,&quot;winner&quot;:false},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:5,&quot;name&quot;:&quot;Dr Nic&quot;,&quot;updated_at&quot;:&quot;2012-02-22T20:13:43Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:6,&quot;name&quot;:&quot;John Nunemaker&quot;,&quot;updated_at&quot;:&quot;2012-02-22T20:13:51Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;id&quot;:7,&quot;name&quot;:&quot;Aaron Patterson&quot;,&quot;updated_at&quot;:&quot;2012-02-20T22:13:51Z&quot;,&quot;winner&quot;:true},{&quot;created_at&quot;:&quot;2012-02-22T18:54:08Z&quot;,&quot;id&quot;:12,&quot;name&quot;:&quot;Bob&quot;,&quot;updated_at&quot;:&quot;2012-02-22T20:15:00Z&quot;,&quot;winner&quot;:false}]" id="container">Loading...</div>
+```
+
+<p>Now, instead of calling <code>fetch</code> on the collection we can call <code>reset</code> and supply the data directly from that attribute.</p>
+
+``` /app/assets/javascripts/routers/entries_router.js.coffee
+class Raffler.Routers.Entries extends Backbone.Router
+  routes:
+    '': 'index'
+    'entries/:id': 'show'
+
+  initialize: ->
+    @collection = new Raffler.Collections.Entries()
+    @collection.reset($('#container').data 'entries')
+
+  index: ->
+    view = new Raffler.Views.EntriesIndex(collection: @collection)
+    $('#container').html(view.render().el)
+
+  show: (id) ->
+    alert "Entry #{id}"
+```	
+	
+<p>When we reload the page, however, the list is empty.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1004/original/E325I10.png" width="800" height="331" alt="The list is empty."/>
+</div>
+
+<p>This problem goes back to the way we render the entries in the index view. </p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+render: ->
+  $(@el).html(@template())
+  @collection.each(@appendEntry)
+  this
+	
+appendEntry: (entry) ->
+  view = new Raffer.Views.Entry()
+  $('#entries').append(view.render().el)
+```  
+
+<p>After we render the template we call <code>@collection.each</code> and append the view for each entry to the <code>#entries</code> list element. The problem is that this list element doesn&rsquo;t exist yet on the page since this now happens immediately when the view is created and rendered but not yet added to the container on the page.  To fix this we need to change the way we access the list of entries and make sure that we always go through this view by using <code>@</code> so the the code looks for the <code>entries</code> element within the view&rsquo;s element and not on the page directly.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+appendEntry: (entry) ->
+  view = new Raffer.Views.Entry()
+  @$('#entries').append(view.render().el)
+```  
+
+<p>There&rsquo;s still a problem with this, though. The context in this function is not the view context. When we call <code>@collection.each</code> and pass it a function the context isn&rsquo;t maintained. One way to fix this is to pass this as a second argument to <code>@collection.each</code> but in CoffeeScript we have another solution which is to use the &lsquo;fat arrow&rsquo; when defining the function. This will always maintain this as the view context wherever this function is called and means that we don&rsquo;t need to pass <code>this</code> as a second argument.</p>
+
+``` /app/assets/javascripts/views/entries/entries_index.js.coffee
+appendEntry: (entry) =>
+  view = new Raffer.Views.Entry()
+  @$('#entries').append(view.render().el)
+```  
+
+<p>We could do this elsewhere, too, such as where we pass <code>this</code> as a third argument to  on when we&rsquo;re defining event handlers. Now our page works again and is pre-populated with a list of data when it loads so there&rsquo;s no need for it to make an extra request to the server to get the initial list of data. </p>
+
+<h3>Routing</h3>
+
+<p>We&rsquo;ll finish off this episode with a look at routing. So far we&rsquo;ve kept everything inside the <code>index</code> route but we did also set up a show route in part one. Let&rsquo;s say that when we click on a specific entry we want to trigger this route for that entry so that we can display more detail about it. We&rsquo;ll handle this <code>click</code> event inside the entry view.</p>
+
+``` /app/assets/views/entries/entry.js.coffee
+class Raffler.Views.Entry extends Backbone.View
+  template: JST['entries/entry']
+  tagName: 'li'
+  
+  events:
+    'click': 'showEntry'
+
+  initialize: ->
+    @model.on('change', @render, this)
+    @model.on('highlight', @highlightWinner, this)
+    
+  showEntry: ->
+    Backbone.history.navigate("entries/#{@model.get('id')}", true)
+```	
+	
+<p>We&rsquo;ve added a <code>click</code> event here but haven&rsquo;t passed in a second option as we&rsquo;re listening on the full element. When the event fires it clicks a <code>showEntry</code> function. This function will visit the URL for the clicked entry and the show route. To do this we call <code>Backbone.history.navigate</code> and pass in a path. Passing <code>true</code> as a second option here triggers that route.</p>
+
+<p>If we reload the page now then click one of the entries we&rsquo;ll see an <code>alert</code> and the path will change to that specific route.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1005/original/E325I11.png" width="803" height="406" alt="Clicking a single entry now shows that template."/>
+</div>
+
+<p>We mentioned in part one that there are ways to change this routing behaviour so that it uses the actual URL path instead of an anchor. To do this we need to modify the the <code>raffler.js.coffee</code> file and add a <code>pushState: true</code> option to the call to <code>Backbone.history.start</code>.</p>
+
+``` /app/assets/javascripts/raffler.js.coffee
+window.Raffler =
+  Models: {}
+  Collections: {}
+  Views: {}
+  Routers: {}
+  init: ->
+    new Raffler.Routers.Entries()
+    Backbone.history.start(pushState: true)
+
+$(document).ready ->
+  Raffler.init()
+```  
+
+<p>Now when we click on an entry we&rsquo;ll see the <code>alert</code> again but the entry&rsquo;s <code>id</code> is now part of the path instead of in an anchor. This causes a problem if we call a URL directly. If we try it we&rsquo;ll see a routing error from our Rails app as it doesn&rsquo;t respond to that route. To fix this we could add a catch-all route to the end of our Rails router that matches anything and passes it to the <code>MainController</code>&rsquo;s <code>index</code> action which will load up our Backbone application.</p>
+
+```/config/routes.rb
+Raffler::Application.routes.draw do
+  scope "api" do
+    resources :entries
+  end
+
+  root to: "main#index"
+  match '*path', to: 'main#index'
+end
+```
+
+<p>Now any path in our Rails application will load up our Backbone application and we can visit the page for a single entry directly. There&rsquo;s no template for this page yet so we&rsquo;ll just see the &lsquo;&ldquo;Loading...&rdquo; message but adding this is left as an exercise for the reader.</p>
