@@ -1,0 +1,226 @@
+<p>Below is a page from an application that manages products.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/988/original/E169RI01.png" width="800" height="467" alt="Our products application."/>
+</div>
+
+<p>This page takes a while to run, not because Rails doesn&rsquo;t scale, but because the <code>index</code> action has some code in it that makes it sleep for two seconds to simulate a slow request.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.all
+  sleep 2
+end
+```
+
+<p>If we have a slow page like this we can use page caching to help speed it up as we showed in the <a href="http://railscasts.com/episodes/89-page-caching-revised">last revised episode</a> so let&rsquo;s try that here.</p>
+
+``` /app/controllers/products_controller.rb
+class ProductsController < ApplicationController
+  caches_page :index
+  def index
+    @products = Product.all
+    sleep 2
+  end
+
+  # Other actions omitted.
+end
+```
+
+<p>To get page caching to work in development mode we&rsquo;ll need to enable it in the config file.</p>
+
+``` /config/environments/development.rb
+config.action_controller.perform_caching = true
+```
+
+<p>We&rsquo;ll need to restart the server for this change to take effect. After we&rsquo;ve done this that page will still load slowly the next time we request it but after that it will be very quick as it&rsquo;s being served by the cache. This works by saving the HTML output from the action to a static file under the application&rsquo;s <code>/public</code> directory but we have a problem with this approach here in that there&rsquo;s some dynamic content on the page that&rsquo;s specific to the current user. At the top of the page their login status is shown and now that we&rsquo;ve cached the page while being logged in as the <code>admin</code> user anyone else who visits the page will see the &ldquo;Logged in as <em>admin</em>.&rdquo; status message. Even if we log out from the app this message will persist as it&rsquo;s statically cached.</p>
+
+<p>We could work around this by looking at different types of caching, for example fragment caching, but this will also be an issue as we have &ldquo;edit&rdquo; and &ldquo;destroy&rdquo; links next to each product and these should only show when the current user is an admin. An alternative solution is to stick with page caching but hide all the dynamic content then load it back in as appropriate through JavaScript. We&rsquo;ll show you how to do just that in this episode.</p>
+
+<h3>Adding Dynamic Page Caching</h3>
+
+<p>First we&rsquo;ll disable the caching we&rsquo;ve just added and remove the <code>sleep</code> from the <code>index</code> action so that we can focus on getting everything working.</p>
+
+``` /app/controllers/products_controller.rb
+class ProductsController < ApplicationController
+  #caches_page :index
+  def index
+    @products = Product.all
+    #sleep 2
+  end
+
+  # Other actions omitted.
+end
+```
+
+<p>We&rsquo;ll also remove the cached file at <code>/public/index.html</code>. Now when we reload the page it falls back to its proper logged-out status and hides all the administration links for managing the products.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/989/original/E169RI02.png" width="800" height="467" alt="The links are now hidden when we&rsquo;re logged out."/>
+</div>
+
+<p>Next we&rsquo;ll need to modify this section of view template for this page.</p> 
+
+
+``` /app/views/products/index.html.erb
+<% if admin? %>
+  <div class="admin">
+    <%= link_to "Edit", edit_product_path(product) %> |
+    <%= link_to "Destroy", product, method: "delete", confirm: "Are you sure?" %>
+  </div>
+<% end %>
+```
+
+<p>We&rsquo;ll need to remove the code that only shows the admin links if the current user is an admin so that they&rsquo;re included on the page all the time.</p> 
+
+``` /app/views/products/index.html.erb
+<div class="admin">
+  <%= link_to "Edit", edit_product_path(product) %> |
+  <%= link_to "Destroy", product, method: "delete", confirm: "Are you sure?" %>
+</div>
+```
+
+<p>We&rsquo;ll then stop the links from being displayed with some CSS.</p>
+
+``` /app/assets/stylesheets/products.css.scss
+// Place all the styles related to the products controller here.
+// They will automatically be included in application.css.
+// You can use Sass (SCSS) here: http://sass-lang.com/
+#products .admin { 
+	display: none; 
+}
+```
+
+<p>When we visit the page now the links are there in the source but they&rsquo;re not displayed. If we&rsquo;re logged in as an admin we want the links to be displayed through JavaScript. We&rsquo;ll do this by adding some code to the products CoffeeScript file.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  if $('#products').length
+    $.getScript('/users/current')
+```	
+	
+<p>This code first checks that the page&rsquo;s DOM has loaded. Once it has we make sure that we&rsquo;re on the right page by looking for the <code>products</code> div. The JavaScript doesn&rsquo;t know the current user&rsquo;s status and so we need to make a request back to the server and we use <code>getScript</code> for this. This calls an action on the server and as we&rsquo;re using the path <code>/users/current</code> the <code>UsersController</code>&rsquo;s <code>show</code> action will be called, although we can use any action we want. We&rsquo;ll write that action now and it can be left blank.</p>
+
+``` /app/controllers/users_controller.rb
+def show
+    
+end
+```
+
+<p>Along with this blank action we&rsquo;ll create a new JavaScript template.</p>
+
+``` /app/views/users/show.js.erb
+<% if admin? %>
+  $('.admin').show();
+<% end %>
+```
+
+<p>If the current user is an admin this template will return some jQuery code that will show the admin links. This code will be evaluated on the client as a result of the <code>getScript</code> call in the products CoffeeScript file. Now when we&rsquo;re logged in as an admin we&rsquo;ll see the links, but if we log out they won&rsquo;t be shown.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/990/original/E169RI03.png" width="800" height="467" alt="The links are visible when we log in again."/>
+</div>
+
+<h3>Handling The Rest of The Dynamic Content</h3>
+
+<p>Next we need to handle the rest of the content on the page: the flash message and the user status section. These appear next to each other inside the application&rsquo;s layout file at the top of the <code>container</code> div.</p>
+
+``` /app/views/layouts/application.html.erb
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Store</title>
+    <%= stylesheet_link_tag    "application", media: "all" %>
+    <%= javascript_include_tag "application" %>
+    <%= csrf_meta_tag %>
+  </head>
+  <body>
+    <div id="container">
+      <div id="user_status">
+        <% if current_user %>
+          Logged in as <strong><%= current_user.name %></strong>.
+          <%= link_to "Log out", logout_path %>
+        <% else %>
+          <%= link_to "Sign up", signup_path %> or
+          <%= link_to "log in", login_path %>
+        <% end %>
+      </div>
+
+      <% flash.each do |name, msg| %>
+        <%= content_tag :div, msg, id: "flash_#{name}" %>
+      <% end %>
+
+      <%= yield %>
+    </div>
+  </body>
+</html>
+```
+
+<p>The first step here is to move the status and flash message code into a partial that we&rsquo;ll call <code>dynamic_header</code>. We want to hide this dynamic content if we&rsquo;re using page caching and so we won&rsquo;t render it if a <code>@page_caching</code> instance variable is set to <code>true</code>.</p>
+
+
+``` /app/views/layouts/application.html.erb
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Store</title>
+    <%= stylesheet_link_tag    "application", media: "all" %>
+    <%= javascript_include_tag "application" %>
+    <%= csrf_meta_tag %>
+  </head>
+  <body>
+    <div id="container">
+	  <%= render 'layouts/dynamic_header' unless @page_caching %>
+      <%= yield %>
+    </div>
+  </body>
+</html>
+```
+
+<p>We have to take this instance variable approach as there&rsquo;s no easy way to detect whether a given action has page caching enabled. This means that we&rsquo;ll need to set it in every action where we&rsquo;re caching the page.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @page_caching = true
+  @products = Product.all
+  #sleep 2
+end
+```
+
+<p>Now that we&rsquo;ve hidden the header it&rsquo;s time to show it again with some JavaScript. We&rsquo;ll do this in the same show JavaScript template where we display the &ldquo;edit&rdquo; and &ldquo;destroy&rdquo; links.</p> 
+
+``` /app/views/users/show.js.erb
+<% if admin? %>
+  $('.admin').show();
+<% end %>
+$('#container').prepend('<%= j render("layouts/dynamic_header") %>');
+```
+
+<p>To do this we render out the partial and add it at the start of the <code>container</code> div. Note that we use the <code>j</code> method to make sure that the contents of the partial are escaped correctly for JavaScript. With this in place we can reenable page caching and also the <code>sleep</code> so that we can see it in action.</p>
+
+``` /app/controllers/products_controller.rb
+class ProductsController < ApplicationController
+  caches_page :index
+  def index
+    @products = Product.all
+    sleep 2
+  end
+
+  # Other actions omitted.
+end
+```
+
+<p>When we reload the page now we&rsquo;ll see the delay, but when we reload it again it will load almost instantly as we&rsquo;ll be seeing the cached version. When we login, the status and flash messages both update and the &ldquo;edit&rdquo; and &ldquo;destroy&rdquo; links are shown even though the page is cached.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/991/original/E169RI04.png" width="800" height="467" alt="The links now show when we're logged in even though the page is cached."/>
+</div>
+
+<p>The performance of this won&rsquo;t be as great as pure page caching  as we&rsquo;re still sending a separate request to our Rails application to fetch the user-specific content. This content will generally be small enough for the request to return quickly and so this won&rsquo;t be too much of an issue. If this does become an issue we could cache these details on the client in a cookie when the user logs in. This would remove the  need to send a separate request to determine the user&rsquo;s admin status, name and so on to display them and we can set them call on the client depending on the contents of the cookie. This approach is outside of the scope of this episode but it&rsquo;s worth investigating if performance is an issue.</p>
+
+<p>We&rsquo;ll finish off by mentioning one more piece of dynamic content: the <code>crsf_meta_tag</code>. It&rsquo;s a good idea to hide this when we&rsquo;re using page caching so that any cached pages don&rsquo;t contain that user-specific detail.</p>
+
+```/app/views/layouts/application.html.erb
+<%= csrf_meta_tag unless @page_caching %>
+```
+
