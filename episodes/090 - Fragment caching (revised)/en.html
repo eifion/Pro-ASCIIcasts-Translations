@@ -1,0 +1,244 @@
+<p>Below is is page from a blogging application which displays information about a single article. An article has many comments and these are also displayed on the page. There&rsquo;s also a section on the righthand side of the page that displays recent articles.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1006/original/E090RI01.png" width="800" height="598" alt="The article page from our blogging application."/>
+</div>
+
+<p>Let&rsquo;s say that this page is slow to load and that we want to improve the performance by adding some caching. We could consider page caching for this page (this was covered in <a href="http://railscasts.com/episodes/89-page-caching">episode 89</a>) but let&rsquo;s say that we only want to cache certain sections of the page, for example the section on the right that fetches the related articles. We can use fragment caching to do this.</p> 
+
+<p>Here&rsquo;s what the view template for the page looks like. We can see the part that displays the list of recent articles at the top.</p>
+
+``` /app/views/articles/show.html.erb
+<div id="recent_articles">
+  <h3>Recent Articles</h3>
+  <ul>
+  <% @recent_articles.each do |article| %>
+    <li><%= link_to article.name, article %></li>
+  <% end %>
+  </ul>
+</div>
+
+<div id="article">
+  <h1><%= @article.name %></h1>
+  <%= @article.content %>
+  <p>
+    <%= link_to "Edit", edit_article_path %> |
+    <%= link_to "Browse Articles", articles_path %>
+  </p>
+
+  <h2><%= pluralize(@article.comments.size, "comment") %></h2>
+  <div id="comments">
+    <%= render @article.comments %>
+  </div>
+  <%= render "comments/form" %>
+</div>
+```
+
+<p>It&rsquo;s easy to add fragment caching to this part of the page. All we need to do is wrap it in a <code>cache</code> block.</p>
+
+``` /app/views/articles/show.html.erb
+<% cache do %>
+<div id="recent_articles">
+  <h3>Recent Articles</h3>
+  <ul>
+  <% @recent_articles.each do |article| %>
+    <li><%= link_to article.name, article %></li>
+  <% end %>
+  </ul>
+</div>
+<% end %>
+```
+
+<p>Caching is disabled by default in the development environment so to test this we&rsquo;ll need to modify the relevant configuration file and set <code>perform_caching</code> to <code>true</code>. We&rsquo;ll need to restart the server for this change to be picked up.</p>
+
+``` /config/environments/development.rb
+config.action_controller.perform_caching = true
+```
+
+<p>The next time we reload the page the cache will be written and on each subsequent reload the list of recent articles will be read from the cache instead of being fetched from the database. We can see this by comparing the two requests in the log file. The first time we reloaded the page Rails tried to read the cache file and because it didn&rsquo;t exist the code in the block was executed and the list of articles was read from the database. The output was then written to a cache file.</p>
+
+``` /log/development.log
+Started GET "/articles/3" for 127.0.0.1 at 2012-02-25 09:02:52 +0000
+Processing by ArticlesController#show as HTML
+  Parameters: {"id"=>"3"}
+  Article Load (0.1ms)  SELECT "articles".* FROM "articles" WHERE "articles"."id" = ? LIMIT 1  [["id", "3"]]
+Read fragment views/localhost:3000/articles/3 (0.2ms)
+  Article Load (0.3ms)  SELECT "articles".* FROM "articles" ORDER BY published_at desc
+Write fragment views/localhost:3000/articles/3 (2.9ms)
+   (0.2ms)  SELECT COUNT(*) FROM "comments" WHERE "comments"."article_id" = 3
+  Comment Load (0.2ms)  SELECT "comments".* FROM "comments" WHERE "comments"."article_id" = 3
+  Rendered comments/_comment.html.erb (0.6ms)
+  Rendered comments/_form.html.erb (2.4ms)
+  Rendered articles/show.html.erb within layouts/application (72.1ms)
+Completed 200 OK in 81ms (Views: 79.2ms | ActiveRecord: 0.8ms)
+cache: [GET /assets/application.css?body=1] miss
+```
+
+<p>The next time we reloaded the page the cache does exist and so that file&rsquo;s content is output to the view and the database query to fetch all the articles isn&rsquo;t executed.</p>
+
+
+``` /log/development.log
+Started GET "/articles/3" for 127.0.0.1 at 2012-02-25 09:03:25 +0000
+Processing by ArticlesController#show as HTML
+  Parameters: {"id"=>"3"}
+  Article Load (0.2ms)  SELECT "articles".* FROM "articles" WHERE "articles"."id" = ? LIMIT 1  [["id", "3"]]
+Read fragment views/localhost:3000/articles/3 (0.2ms)
+   (0.2ms)  SELECT COUNT(*) FROM "comments" WHERE "comments"."article_id" = 3
+  Comment Load (0.2ms)  SELECT "comments".* FROM "comments" WHERE "comments"."article_id" = 3
+  Rendered comments/_comment.html.erb (0.6ms)
+  Rendered comments/_form.html.erb (2.1ms)
+  Rendered articles/show.html.erb within layouts/application (9.5ms)
+Completed 200 OK in 17ms (Views: 15.5ms | ActiveRecord: 0.5ms)
+cache: [GET /assets/application.css?body=1] miss
+```
+
+<h3>Sharing Caches Across Pages</h3>
+
+<p>The cache has a name which defaults to the current path and this means that a separate cache will be written for each article we visit. The recent articles section remains the same across articles so we don&rsquo;t need a separate version of this cache for each article. We can change the name that&rsquo;s used by supplying an argument to the call to <code>cache</code>.</p>
+
+``` /app/views/articles/show.html.erb
+<% cache "recent_articles" do %>
+<div id="recent_articles">
+  <h3>Recent Articles</h3>
+  <ul>
+  <% @recent_articles.each do |article| %>
+    <li><%= link_to article.name, article %></li>
+  <% end %>
+  </ul>
+</div>
+<% end %>
+```
+
+<p>Now, no matter which article we visit the same fragment cache will be used. </p>
+
+<h3>Expiring The Cache</h3>
+
+<p>Now that we have caching in place if we change the name of an article then the recent articles section won&rsquo;t change to reflect the new name.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1007/original/E090RI02.png" width="" height="" alt="The &ldquo;Recent Articles&rdquo; section doesn&rsquo;t update when the article&rsquo;s title changes."/>
+</div>
+
+<p>To fix this we need to expire the fragment cache whenever an article changes. This means modifying the <code>ArticlesController</code>&rsquo;s update action and adding a call to <code>expire_fragment</code> when the article is successfully updated.</p>
+
+``` /app/controllers/articles_controller.rb
+def update
+  @article = Article.find(params[:id])
+  if @article.update_attributes(params[:article])
+    expire_fragment "recent_articles"
+    redirect_to @article, notice: "Article has been updated."
+  else
+    render "edit"
+  end
+end
+```
+
+<p>When we try updating the article now the recent articles list is updated as expected.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1008/original/E090RI03.png" width="800" height="428" alt="The &ldquo;Recent Articles&rdquo; section now updates as it should."/>
+</div>
+
+<p>Scattering <code>expire_fragment</code> calls around the controller can get messy so it can be better to use a sweeper to handle expiring the cache. These were also covered in episode 89.</p> 
+
+<h3>Auto-expiring Caches</h3>
+
+<p>Our recent articles section now caches nicely and expires correctly when we update an article. Next we&rsquo;ll show you a nice trick that deals with auto-expiring fragment caches. To demonstrate this we&rsquo;re going to add a fragment cache around the rest of this page, covering the article and its comments.</p> 
+
+``` /app/views/articles/show.html.erb
+<% cache @article do %>
+<div id="article">
+  <h1><%= @article.name %></h1>
+  <%= @article.content %>
+  <p>
+    <%= link_to "Edit", edit_article_path %> |
+    <%= link_to "Browse Articles", articles_path %>
+  </p>
+
+  <h2><%= pluralize(@article.comments.size, "comment") %></h2>
+  <div id="comments">
+    <%= render @article.comments %>
+  </div>
+  <%= render "comments/form" %>
+</div>
+<% end %>
+```
+
+<p>This time instead of passing a name as a string to the cache we&rsquo;ve passed in the <code>@article</code> instance itself. Behind the scenes this will call <code>cache_key</code> on the article and generate the cache&rsquo;s name based on that value. We&rsquo;ll show you how this works in the console. If we fetch an article and call <code>cache_key</code> on it it will return a string.</p>
+
+``` console
+1.9.3p0 :001 > a = Article.first
+1.9.3p0 :002 > a.cache_key
+ => "articles/1-20120224231012"
+``` 
+ 
+<p>This string includes the model&rsquo;s name and id and its <code>updated_at</code> timestamp. If we change the model in anyway then this value will change.</p>
+
+``` console
+1.9.3p0 :003 > a.touch
+  SQL (2.2ms)  UPDATE "articles" SET "updated_at" = '2012-02-25 09:27:07.488943' WHERE "articles"."id" = 1
+ => true 
+1.9.3p0 :004 > a.cache_key
+ => "articles/1-20120225092707"
+``` 
+ 
+<p>Any cache based on this value will expire whenever the article changes. If we reload the page a couple of times to make sure that the new fragment cache is being used then change the article&rsquo;s title again the cache is correctly expired and we see the new name on the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1009/original/E090RI04.png" width="800" height="428" alt="The cache is now auto-expired when an article changes."/>
+</div>
+
+<p>This is really useful as it means that we no longer have to litter <code>expire_fragment</code> calls around our application. That said we do need to be careful to watch out for other parts of the page that might change without updating the model. The comments section is now included in the cache but when we add a new comment the cache isn&rsquo;t expired and so the new comment isn&rsquo;t shown on the page. We need a way to update the article whenever one of its comments changes. ActiveRecord provides an easy way to do this. If we have a <code>belongs_to</code> association we can pass a <code>touch</code> option.</p>
+
+``` /app/models/comment.rb
+class Comment < ActiveRecord::Base
+  belongs_to :article, touch: true
+end
+```
+
+<p>This means that when a comment is created, updated or destroyed its parent <code>Article</code> will be touched and therefore its cache will be expired. If we add another comment to the article now the cache is expired and we see the new comment.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1010/original/E090RI05.png" width="800" height="581" alt="Adding a comment now auto-expires the article&rsquo;s cache."/>
+</div>
+
+<h3>Nested Caches</h3>
+
+<p>Passing a model directly to a <code>cache</code> block can be really powerful for auto-expiring it but we can&rsquo;t use this approach in our recent articles section as we don&rsquo;t have any models to work with. We can mix these two techniques, however. There&rsquo;s nothing to stop us from nesting fragment caches.</p> 
+
+``` /app/views/articles/show.html.erb
+<% cache "recent_articles" do %>
+<div id="recent_articles">
+  <h3>Recent Articles</h3>
+  <ul>
+  <% @recent_articles.each do |article| %>
+    <% cache ["recent", article] do %>
+    <li><%= link_to article.name, article %></li>
+	<% end %>
+  <% end %>
+  </ul>
+</div>
+<% end %>
+```
+
+<p>We can cache each article in the list separately and use that article as the name for that cache. By default the cache for an article in this list and the main cache for the article will have the same name if we do this and so we pass in a array here to give the caches here a different name.</p>
+
+<p>When the recent articles cache is generated now it will create a new separate cache for each item in the list in addition to the full recent articles cache. When the page is reloaded now the recent articles cache will be used but if we edit an article then this cache will expire because of what we set up in the controller. When the cache is regenerated it will use the nested caches for each item in the list apart from the one which has changed, as this one will have auto-expired. We won&rsquo;t really see any benefit to doing this in our application as each item is simple but if they were more complicated and took a while to load then there&rsquo;d be a noticeable improvement to doing this when we need to regenerate the cache for the full list of recent articles.</p> 
+
+<p>If you didn&rsquo;t grasp all that, don&rsquo;t worry. This trick isn&rsquo;t something you&rsquo;ll be using often but it can be a good way to improve the performance of generating a larger fragment cache by caching each section.</p>
+
+<h3>Options For Storing Caches</h3>
+
+<p>We&rsquo;ll end this episode by explaining how fragment caches are stored. Rails comes with a built-in centralized caching mechanism called <code>Rails.cache</code>. This is a simple key-value based store that we can read from and write to. Fragment caches are prefixed with <code>views</code> so we can view the content of our <code>recent_articles</code> cache like this:</p>
+
+``` console
+1.9.3p0 :005 >  Rails.cache.read('views/recent_articles')
+ => "<div id=\"recent_articles\">\n  <h3>Recent Articles</h3>\n  <ul>\n    <li><a href=\"/articles/1\">Superman</a></li>\n    <li><a href=\"/articles/3\">Batman &amp; Robin 4</a></li>\n    <li><a href=\"/articles/6\">Splinter</a></li>\n    <li><a href=\"/articles/2\">Krypton</a></li>\n    <li><a href=\"/articles/5\">Flash</a></li>\n    <li><a href=\"/articles/4\">Wonder Woman</a></li>\n  </ul>\n</div>\n"
+``` 
+ 
+<p>The default storage for this is a file-based store but in production we&rsquo;ll probably want to use something different such as Memcached or Redis. There&rsquo;s a commented-out section of the production config file for changing the cache store.</p>
+
+``` /config/environments/production.rb
+# Use a different cache store in production
+# config.cache_store = :mem_cache_store
+```
