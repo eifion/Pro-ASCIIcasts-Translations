@@ -1,0 +1,396 @@
+<p>Ruby developers have a number of testing libraries to choose from. RSpec, Shoulda and Test::Unit are the most popular but in this episode we&rsquo;re going to look at <a href="http://docs.seattlerb.org/minitest">minitest</a>. Not only is this library fast and lightweight, it comes built-in with Ruby 1.9. Rails developers should pay special attention to it as it looks like it will be the default test environment in Rails 4.0. That day is a long way off yet, so let&rsquo;s take a look at what&rsquo;s involved in using minitest with Rails 3.2. By the way, this episode isn&rsquo;t meant to be a complete guide to testing. If you&rsquo;re new to testing you should first take a look at <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a> which covers testing from scratch.</p> 
+
+<h3>Getting Started With Minitest</h3>
+
+<p>The first thing we&rsquo;ll do is generate a new Rails 3.2 application. We&rsquo;ll pass in the <code>-T</code> option to tell it not to use Test::Unit.</p>
+
+``` terminal
+$ rails new store -T
+```
+
+<p>As we&rsquo;ve told Rails to skip the tests there&rsquo;ll be no <code>/test</code> directory in this app and in its <code>config/application.rb</code> file the test_unit railtie will be commented out. This means that the test-related Rake tasks will not be available.</p>
+
+``` /config/application.rb
+require File.expand_path('../boot', __FILE__)
+
+# Pick the frameworks you want:
+require "active_record/railtie"
+require "action_controller/railtie"
+require "action_mailer/railtie"
+require "active_resource/railtie"
+require "sprockets/railtie"
+# require "rails/test_unit/railtie"
+
+# rest of file omitted.
+```
+
+<p>This also means that generators won&rsquo;t create any test files. We&rsquo;ll generate a scaffold for a product to demonstrate this.</p>
+
+``` terminal
+$ rails g scaffold product name price:decimal released_on:date
+      invoke  active_record
+      create    db/migrate/20120226100043_create_products.rb
+      create    app/models/product.rb
+       route  resources :products
+      invoke  scaffold_controller
+      create    app/controllers/products_controller.rb
+      invoke    erb
+      create      app/views/products
+      create      app/views/products/index.html.erb
+      create      app/views/products/edit.html.erb
+      create      app/views/products/show.html.erb
+      create      app/views/products/new.html.erb
+      create      app/views/products/_form.html.erb
+      invoke    helper
+      create      app/helpers/products_helper.rb
+      invoke  assets
+      invoke    coffee
+      create      app/assets/javascripts/products.js.coffee
+      invoke    scss
+      create      app/assets/stylesheets/products.css.scss
+      invoke  scss
+      create    app/assets/stylesheets/scaffolds.css.scss
+```	  
+
+<p>As you can see the generator didn&rsquo;t create any test-related files. We&rsquo;ll be using this scaffold for our tests so now&rsquo;s a good time to run <code>rake db:migrate</code> to create the <code>products</code> table. Now we have a blank slate for testing so let&rsquo;s add minitest. To start we&rsquo;ll add its gem to the <code>test</code> group in the gemfile and then run bundle to install it.</p>
+
+``` /Gemfile
+source 'https://rubygems.org'
+
+gem 'rails', '3.2.1'
+
+# Bundle edge Rails instead:
+# gem 'rails', :git => 'git://github.com/rails/rails.git'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer'
+
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+group :test do
+  gem 'minitest'
+end
+```
+
+<p>Minitest comes built-in to Ruby 1.9 but by using the gem we&rsquo;re using the latest version and it&rsquo;s easier to manage the version dependencies.</p>
+
+<h3>Our First Test</h3>
+
+<p>Now its time to add our first test. Before we can do this, though, we need to get minitest set up. We&rsquo;ll do this inside a new <code>/test</code> directory with a <code>minitest_helper.rb</code> file.</p>
+
+``` /test/minitest_helper.rb
+ENV["RAILS_ENV"] = "test"
+require File.expand_path("../../config/environment", __FILE__)
+require "minitest/autorun"
+```
+
+<p>The first two lines of code in here should look familiar if you&rsquo;ve seen the standard generated test helper. The first line forces the test environment while the second loads up the Rails application. We also need to start minitest and that&rsquo;s what the last line does.</p> 
+
+<p>Now that we have minitest set up we&rsquo;ll write our first test, which will be a model test. We&rsquo;ll put this is a models directory, but you&rsquo;re free to structure your tests in any way you want. There are a couple of different ways to create tests with minitest either in a  Test::Unit style or in an RSpec style. We&rsquo;ll use the Test::Unit style first.</p> 
+
+``` /test/model/product_test.rb
+require "minitest_helper"
+
+class ProductTest < MiniTest::Unit::TestCase
+  def test_to_param
+    product = Product.create!(name: "Hello World")
+    assert_equal "#{product.id}-hello-world", product.to_param 
+  end
+end
+```
+
+<p>To write tests in this style we need to create a class that inherits from <code>MiniTest::Unit::TestCase</code>. All methods that start with <code>test_</code> are considered test methods so we&rsquo;ve called ours <code>test_to_param</code>. Our objective here is to override the model&rsquo;s <code>to_param</code> method so that it includes the name as well as the product&rsquo;s <code>id</code> so in the test we create a new <code>Product</code> and use <code>assert_equal</code> to test that calling  
+<code>to_param</code> on a product with a name of &ldquo;Hello World&rdquo; returns the product&rsquo;s <code>id</code> followed by &ldquo;-hello-world&rdquo;.</p>
+
+<p>We can run the test now and we&rsquo;ll run it through the <code>ruby</code> command. We need to include the test directory so that it can find the <code>minitest_helper</code> file, so we pass in the <code>-I</code> option here.</p>
+
+``` terminal
+$ ruby -Itest test/models/product_test.rb
+```
+
+<p>When we run this we see the error <code>Could not find table &#x27;products&#x27;</code>. This happens because when we ran the database migration earlier it only created the table in the development database. To get the test database into the correct state we&rsquo;ll need to run <code>rake db:test:prepare</code>. When this command has finished we can run our tests again.</p>
+
+``` terminal
+$ ruby -Itest test/models/product_test.rb 
+Run options: --seed 5437
+
+# Running tests:
+
+F
+
+Finished tests in 0.027575s, 36.2647 tests/s, 36.2647 assertions/s.
+
+  1) Failure:
+test_to_param(ProductTest) [test/models/product_test.rb:6]:
+Expected: "1-hello-world"
+  Actual: "1"
+
+1 tests, 1 assertions, 1 failures, 0 errors, 0 skips
+```
+
+<p>This time the test runs, but it fails as calling <code>to_param</code> on our product has returned <code>1</code> instead of <code>1-hello-world</code>. This isn&rsquo;t a surprise as we haven&rsquo;t overridden <code>to_param</code> in the <code>Product</code> model so let&rsquo;s do that now.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  def to_param
+    "#{id}-#{name.parameterize}"
+  end
+end
+```
+
+<p>When we run the test now it passes.</p>
+
+``` terminal
+$ ruby -Itest test/models/product_test.rb 
+Run options: --seed 2230
+
+# Running tests:
+
+.
+
+Finished tests in 0.177981s, 5.6186 tests/s, 5.6186 assertions/s.
+
+1 tests, 1 assertions, 0 failures, 0 errors, 0 skips
+```
+
+<h3>Creating a Rake Task</h3>
+
+<p>It&rsquo;s a pain to have to run that long <code>ruby</code> command every time we want to run our test so we&rsquo;ll move it into a new Rake task.</p>
+
+``` /lib/tasks/minitest.rake
+require "rake/testtask"
+
+Rake::TestTask.new(:test => "db:test:prepare") do |t|
+  t.libs << "test"
+  t.pattern = "test/**/*_test.rb"
+end
+
+task :default => :test
+```
+
+<p>Here we use <code>Rake::TestTask</code> to create a new task. This task will also run the<code> db:test:prepare</code> task so that we don&rsquo;t need to worry about running it manually when we create further migrations. The code for this task adds the <code>test</code> directory to the load paths and then runs any file under the <code>test</code> directory whose filename ends in <code>_test.rb</code>. Finally we set this to be the default task so that it will run if we just run <code>rake</code> without any arguments.</p>
+
+<p>As our test suite gets larger we could make this logic more complex and add new tasks that only run, say, the model tasks, but for our simple application this will work perfectly well. Running rake now will run our test just like the <code>ruby</code> command did before.</p>
+
+<h3>Fixtures</h3>
+
+<p>So now we now how to create model tests and run them easily. When we have model tests we usually have data for test models and by default in Rails this is done by using fixtures. Fixtures aren&rsquo;t as popular as they once were and it&rsquo;s more common now to use factories to generate model classes by using gems such as <a href="https://github.com/thoughtbot/factory_girl_rails">FactoryGirl</a> or <a href="https://github.com/stephencelis/miniskirt">MiniSkirt</a>. We won&rsquo;t be using fixtures here, but if you do want to use them they&rsquo;re easy enough to add and you can see a good example <a href="https://gist.github.com/821558">in this gist</a>.</p>
+
+<h3>RSpec style tests</h3>
+
+<p>We mentioned earlier that minitest test can be written in either Test::Unit or RSpec styles. In order to demonstrate them both we&rsquo;ll convert our existing test to the RSpec style. We can use <code>describe</code> blocks in minitest and also it blocks, just like we would in RSpec.</p>
+
+``` /test/models/product_test.rb
+require "minitest_helper"
+
+describe Product do
+  it "includes name in to_param" do
+    product = Product.create!(name: "Hello World")
+    product.to_param.must_equal "#{product.id}-hello-world"
+  end
+end
+```
+
+<p>RSpec style assertions are a little different. To test for equality we can all a <code>must_equal</code> method on any object and then pass a value to do an assertion. When we run rake now our Rspec-style test should pass just like the old one did.</p>
+
+<p>The <code>must_equal</code> method that we used to do the assertion is one of the many methods that minitest provides for assertions. To see what else you can use take a look at the <a href="http://docs.seattlerb.org/minitest/MiniTest/Expectations.html">documentation</a>. There&rsquo;s even a negative variation of each assertion that begins with <code>wont_</code>.</p>
+
+<h3>Integration Testing</h3>
+
+<p>Now that we have model testing sorted out let&rsquo;s move on to integration testing. This can be considered the most important kind of testing in a Rails application as it&rsquo;s the only type which tests the entire stack. Capybara is a popular way to do integration testing in Rails applications so we&rsquo;ll use it here. As with minitest we&rsquo;ll need to add its gem to the <code>test</code> group and run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+group :test do
+  gem 'minitest'
+  gem 'capybara'
+end
+```
+
+<p>We&rsquo;ll create our integration tests in an <code>integration</code> subdirectory, though as before, you&rsquo;re free to structure your tests in any way you like.</p>
+
+``` /test/integration/products_integration_test.rb
+require "minitest_helper"
+
+describe "Products integration" do
+  it "shows product's name" do
+    product = Product.create!(name: "Tofu")
+    visit product_path(product)
+    page.text.must_include "Tofu"
+  end
+end
+```
+
+<p>This integration test is structured very similarly to the model test we wrote earlier. This time we create a new <code>Product</code>, visit its page and check that its name is shown. If we try to run this test it won&rsquo;t work. Minitest doesn&rsquo;t know about any of our app&rsquo;s special methods such as <code>product_path</code> or about any Capybara methods. We need to add some functionality to the integration tests for this to work and we&rsquo;ll do this inside our <code>minitest_helper</code> file.</p>
+
+<p>We&rsquo;ll create a new class in this file specifically for integration testing. We do this by having the class inherit from <code>MiniTest::Spec</code>. To get URL helpers working we include <code>Rails.application.routes.url_helpers</code>. For Capybara we have to require <code>capybara/rails</code> at the top of the file and then include <code>Capybara::DSL</code> in the class.</p>  
+
+<p>To tell minitest to use this class for integration tests we use the class method <code>register_spec_type</code>. This takes a regular expression which is used to match the name passed to the <code>describe</code> blocks in out tests. We&rsquo;ll match anything that ends in <code>integration</code>. We also need to pass in the class to use and we use <code>self</code> here so that this class is used for all integration tests.</p>
+
+``` /test/minitest_helper.rb
+ENV["RAILS_ENV"] = "test"
+require File.expand_path("../../config/environment", __FILE__)
+require "minitest/autorun"
+require "capybara/rails"
+
+class IntegrationTest < MiniTest::Spec
+  include Rails.application.routes.url_helpers
+  include Capybara::DSL
+  register_spec_type(/integration$/, self)
+end
+```
+
+<p>Now any test whose description ends with &ldquo;integration&rdquo; will pick up the behaviour of the IntegrationTest class. When we run our tests now they both pass.</p>
+
+``` terminal
+$ rake
+Run options: --seed 40314
+
+# Running tests:
+
+..
+
+Finished tests in 0.485831s, 4.1167 tests/s, 6.1750 assertions/s.
+
+2 tests, 3 assertions, 0 failures, 0 errors, 0 skips
+```
+
+<p>The integration test passes despite us not making any changes to the controller or views as the scaffolding code already has the behaviour that we&rsquo;ve tested.</p>
+
+<h3>Testing Helpers</h3>
+
+<p>Now that we know how to do integration testing lets take a look at testing some of the other layers. We wouldn&rsquo;t normally test views and controllers directly as we have integration tests and we can move any complex controller logic off into a model. Separate helper tests are still useful, however.  We don&rsquo;t have any methods in our <code>ProductsHelper</code> to test so instead we&rsquo;ll test one of Rails&rsquo; built-in helper methods. These tests look similar again to model and integration tests.</p>
+
+``` /test/helpers/product_helper_test.rb
+require "minitest_helper"
+
+describe ProductsHelper do
+  it "converts number to currency" do
+    number_to_currency(5).must_equal "$5.00"
+  end
+end
+```
+
+<p>This test will throw an error because our simple minitest doesn&rsquo;t know about the <code>number_to_currency</code> helper method. We&rsquo;ll have to add this behaviour to it and to do so we do something similar to what we did to get integration tests working.</p>
+
+
+``` /test/minitest_helper.rb
+ENV["RAILS_ENV"] = "test"
+require File.expand_path("../../config/environment", __FILE__)
+require "minitest/autorun"
+require "capybara/rails"
+require "active_support/testing/setup_and_teardown"
+
+class IntegrationTest < MiniTest::Spec
+  include Rails.application.routes.url_helpers
+  include Capybara::DSL
+  register_spec_type(/integration$/, self)
+end
+
+class HelperTest < MiniTest::Spec
+  include ActiveSupport::Testing::SetupAndTeardown
+  include ActionView::TestCase::Behavior
+  register_spec_type(/Helper$/, self)
+end
+```
+
+<p>We&rsquo;ve created a <code>HelperTest</code> class similar to the <code>IntegrationTest</code> class we created earlier and like that class this one includes a couple of modules and then uses <code>register_spec_type</code> to define the tests that should use this extra behaviour. Any test whose describe block&rsquo;s description ends with <code>Helper</code> will use this class. Note that as the <code>ActiveSupport::Testing::SetupAndTeardown</code> module isn&rsquo;t included in Rails by default we&rsquo;ve had to require it manually.</p> 
+
+<p>When we run our tests now they all pass again as the helper test has access to Rails&rsquo; helper methods.</p>
+
+<h3>Minitest&rsquo;s Other Features</h3>
+
+<p>There are several features that minitest provides which we haven&rsquo;t covered yet so we&rsquo;ll show a few of them now.</p> 
+
+<p>We can mark a test as skipped in a couple of different ways. One way is to remove the block so that we just have the call to <code>it</code>. The other is to call skip inside the test definition.</p>
+
+``` /test/helpers/product_helper_test.rb
+require "minitest_helper"
+
+describe ProductsHelper do
+  it "converts number to currency" do
+    number_to_currency(5).must_equal "$5.00"
+  end
+  
+  it "is skipped"
+  
+  it "is also skipped" do
+    skip "Do this later"
+  end
+end
+```
+
+<p>When we run the tests now two of them will be shown as skipped.</p>
+
+``` terminal
+$ rake
+Run options: --seed 10956
+
+# Running tests:
+
+...
+
+Finished tests in 0.688833s, 4.3552 tests/s, 5.8069 assertions/s.
+
+3 tests, 4 assertions, 0 failures, 0 errors, 0 skips
+```
+
+<p>Another interesting part of the test output is the seed value which is shown. This is used to randomize the order in which the tests are run in minitest so that the chance that a test is only passing because of state carried over from a previous test is reduced. If we find a bug where a test fails we can rerun it using the same seed value to make sure that this problem has been fixed. We do this by passing a <code>TESTOPTS</code> environment variable and passing in the seed&rsquo;s value like this:</p>
+
+``` terminal
+$ rake TESTOPTS='--seed=44780'
+Run options: --seed=44780
+```
+
+<p>This will run the tests using that seed so that they&rsquo;re run in the same order again.</p>
+
+<h3>Turn</h3>
+
+<p>We&rsquo;ll finish this episode by showing how the tests&rsquo; output can be improved by using the <a href="https://rubygems.org/gems/turn">Turn</a> gem. This isn&rsquo;t strictly related to minitest but it works well with it. To use it we&rsquo;ll need to add it to the gemfile and then run bundle again.</p>
+
+``` /Gemfile
+group :test do
+  gem 'minitest'
+  gem 'capybara'
+  gem 'turn'
+end
+```
+
+<p>When we run the tests now the output is quite a bit different.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1013/original/E327I01.png" width="802" height="444" alt="The test output with Turn&rsquo;s default settings."/>
+</div>
+
+<p>By default the output is more verbose and shows more detail about each test and its status. It we look at <a href="https://github.com/TwP/turn/blob/master/README.md">Turn&rsquo;s README</a> we&rsquo;ll see that there are many different configuration options that we can use to customize the way the output looks.</p>
+
+<p>We can customize turn in our <code>minitest_helper</code> file by adding this line at the bottom.</p>
+
+``` /test/minitest_helper.rb
+Turn.config.format = :outline
+```
+
+<p>When we run the tests again the output looks quite different. If you don&rsquo;t like this option there are a number of others from which you can choose.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1014/original/E327I02.png" width="802" height="444" alt="The test output when using Turn&rsquo;s outline option."/>
+</div>
+
+<p>That&rsquo;s it for our look at minitest with Rails. Hopefully it will have given you some idea on how you can customize minitest to fit the way you test your Rails applications. To see another approach take a look at the <a href="https://github.com/blowmage/minitest-rails">minitest-rails</a> gem. This includes some generators for setting up minitest in your Rails apps and its source code is straightforward so it&rsquo;s worth reading through to see how else you can set up minitest.</p>
+
+<p>Finalyl we&rsquo;ll mention one other gem, <a href="https://github.com/ordinaryzelig/capybara_minitest_spec">capybara_minitest_spec</a>. This includes some methods that we can use in integration tests with Capybara that work very similarly to what we&rsquo;d do with RSpec. If you&rsquo;re missing the matchers you get with RSpec take a look as this gem.</p>
+
+
+
+
+
