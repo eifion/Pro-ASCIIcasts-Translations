@@ -1,0 +1,242 @@
+<p>In the previous episode we showed you how to use Twitter Bootstrap with Rails. This time we&rsquo;ll be adding on to the project we started last time. We&rsquo;ll show you how to improve forms with Simple Form and how to customize Twitter Bootstrap with LESS and how to switch over to SASS if you prefer to use that.</p>
+
+<h3>Improving The User Experience</h3>
+
+<p>Here&rsquo;s where we ended up last time. We&rsquo;ll start by focusing on some of the user experience issues that this app has.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1032/original/E329I01.png" width="800" height="493" alt="Our Store application."/>
+</div>
+
+<p>One of these issues is that flash messages aren&rsquo;t being shown. It we update a product through the edit form there&rsquo;s no flash message saying that the product was updated. If we take a look at the components section of the documentation we&rsquo;ll see that there&rsquo;s <a href="http://twitter.github.com/bootstrap/components.html#alerts">a section on alerts</a> and these work perfectly for displaying flash messages to the user. The default options to let us display three types of alert: success, information and warning. To display the update message we simply need to wrap the flash message in a <code>div</code> with a CSS class of <code>alert-success</code>.</p>
+
+<p>We&rsquo;ll add the flash messages to the application&rsquo;s layout file, inside the <code>container</code> but above the content.</p>
+
+``` /app/views/layouts/application.html.erb
+<div class="container">
+  <% flash.each do |name, msg| %>
+    <div class="alert alert-<%= name == :notice ? "success" : "error" %>">
+      <%= msg  %>
+    </div>
+  <% end %>
+  <!-- Rest of content -->
+</div>
+```
+
+<p>Here we loop through the messages and display each one. We wrap each message in a <code>div</code> and use the name of the flash message to determine whether it should be displayed as a success alert or an error alert. When we update a product now we&rsquo;ll see the flash message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1033/original/E329I02.png" width="800" height="405" alt="We now see a flash message when we update a product."/>
+</div>
+
+<p>Twitter Bootstrap makes it easy to add a close button to an alert, all we need to do is add another line of code.</p>
+
+``` /app/views/layouts/application.html.erb
+<div class="container">
+  <% flash.each do |name, msg| %>
+    <div class="alert alert-<%= name == :notice ? "success" : "error" %>">
+	 <a class="close" data-dismiss="alert">
+      <%= msg  %>
+    </div>
+  <% end %>
+  <!-- Rest of content -->
+</div>
+```
+
+<p>If we update a product now we&rsquo;ll see an &lsquo;x&rsquo; button that will close the alert when clicked.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1034/original/E329I03.png" width="800" height="405" alt="The alert now has a close button."/>
+</div>
+
+<p>This functionality is handled via JavaScript. We haven&rsquo;t talked much about the JavaScript that Bootstrap provides yet but it includes many useful jQuery plugins. We can use these to create modal dialogs, dropdowns, tabs, tooltips, popovers that display information when a user hovers over an element, and a whole lot more. All of these plugins are already included in our Rails application. If we look in the <code>application.js</code> file we&rsquo;ll see that a <code>twitter/bootstrap</code> file is included and this loads all the plugins. There&rsquo;s also a <code>bootstrap.js</code> file which enables some of the plugin functionality.</p>
+
+``` /app/assets/javascripts/bootstrap.js.coffee
+jQuery ->
+  $("a[rel=popover]").popover()
+  $(".tooltip").tooltip()
+  $("a[rel=tooltip]").tooltip()
+```  
+  
+<h3>Validations</h3>
+
+<p>Another place where we can improve the user experience in our Rails application is in the forms, specifically regarding validations. We don&rsquo;t have any validations on the <code>Product</code> model yet so we&rsquo;ll start by adding some.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  validates_presence_of :name, :price
+end
+```
+
+<p>If we try editing a product now and leave one of the fields blank we&rsquo;ll be taken back to the form but no error messages is shown to tell us what we&rsquo;ve got wrong. Twitter Bootstrap includes a nice way to display error messages in a form and it will colour the form field for invalid fields so we&rsquo;ll use this on our <code>Product</code> form. The problem with doing this is that the markup for our form is fairly complex as it is. If we were to try to embed the logic in there for the validations the page would get messy very quickly.</p>
+
+``` /app/views/products/_form.html.erb
+<%= form_for @product, :html => { :class => 'form-horizontal' } do |f| %>
+  <fieldset>
+    <legend><%= controller.action_name.capitalize %> Product</legend>
+
+    <div class="control-group">
+      <%= f.label :name, :class => 'control-label' %>
+      <div class="controls">
+        <%= f.text_field :name, :class => 'text_field' %>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <%= f.label :price, :class => 'control-label' %>
+      <div class="controls">
+        <%= f.text_field :price, :class => 'text_field' %>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <%= f.submit nil, :class => 'btn btn-primary' %>
+      <%= link_to 'Cancel', products_path, :class => 'btn' %>
+    </div>
+  </fieldset>
+<% end %>
+```
+
+<p>To help us here we&rsquo;ll use a gem to render out the form. <a href="http://blog.plataformatec.com.br/tag/simple_form/">SimpleForm</a> recently added Bootstrap support and while we could use <a href="https://github.com/justinfrench/formtastic">Formtastic</a> with the <a href="https://github.com/mjbellantoni/formtastic-bootstrap">Formtastic Bootstrap gem</a> we&rsquo;re going to use SimpleForm here. To use it we&rsquo;ll need to add its gem to the gemfile and then run bundle.</p>
+
+``` /Gemfile
+gem 'simple_form'
+```
+
+<p>Next we&rsquo;ll need to run SimpleForm&rsquo;s installation generator. Note that we pass the <code>--bootstrap</code> option so that the Twitter Bootstrap variation is used.</p>
+
+``` terminal
+$  rails g simple_form:install --bootstrap
+```
+
+<p>Now we can switch our form over so that it uses SimpleForm. We&rsquo;ll need to replace <code>form_for</code> with <code>simple_form_for</code> at the top of the form and then we can use SimpleForm&rsquo;s input method to define the name and price fields.</p>
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for @product, :html => { :class => 'form-horizontal' } do |f| %>
+  <fieldset>
+    <legend><%= controller.action_name.capitalize %> Product</legend>
+
+    <%= f.input :name %>
+	<%= f.input :price %>
+
+    <div class="form-actions">
+      <%= f.submit nil, :class => 'btn btn-primary' %>
+      <%= link_to 'Cancel', products_path, :class => 'btn' %>
+    </div>
+  </fieldset>
+<% end %>
+```
+
+<p>If you&rsquo;re not familiar with how SimpleForm works take a look at <a href="http://railscasts.com/episodes/234-simple-form-revised">episode 234</a> which covers it in detail. We can try our product form out now. If we reload it then try to update a product without a name we&rsquo;ll see an error message displayed by the name field.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1035/original/E329I04.png" width="800" height="403" alt="Invalid fields are now outlined in red and show an error message."/>
+</div>
+
+<h3>Customizing The Styling</h3>
+
+<p>Our application now looks a lot better than it did before but what if we want to customize it further and make it feel uniquely our own? For example how do we change the colour of the links and buttons or change the way the header looks? If you take a look at the <a href="http://twitter.github.com/bootstrap/less.html">Using LESS</a> section of the documentation you find a list of variables which can be set to customize the look of our site. We can change the colours, the sizing and so on. Even this page doesn&rsquo;t list all the variables available; to see these we&rsquo;ll have to look at the source code.</p>
+
+<p>These variables are defined in a <code>variables.less</code> file and some of the ones listed here aren&rsquo;t mentioned in the documentation. We can set these variables inside the <code>bootstrap_and_overrides.css.less</code> file. The only thing we need to take care about here is that we set them after the line at the top that imports the <code>bootstrap</code> file. Two variables, <code>iconSpritePath</code> and <code>iconWhiteSpritePath</code> are already set in this file and there&rsquo;s some documentation in the file for setting some of the other variables.</p> 
+
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+@import "twitter/bootstrap/bootstrap";
+
+body { padding-top: 60px; }
+
+@import "twitter/bootstrap/responsive";
+
+// Set the correct sprite paths
+@iconSpritePath: asset-path('twitter/bootstrap/glyphicons-halflings.png');
+@iconWhiteSpritePath: asset-path('twitter/bootstrap/glyphicons-halflings-white.png');
+
+// Your custom LESS stylesheets goes here
+//
+// Since bootstrap was imported above you have access to its mixins which
+// you may use and inherit here
+//
+// If you'd like to override bootstrap's own variables, you can do so here as well
+// See http://twitter.github.com/bootstrap/less.html for their names and documentation
+//
+// Example:
+// @linkColor: #ff0000;
+```
+
+<p>As an example let&rsquo;s say that we want to lighten up the header. We can do so by setting these variables.</p>
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+@navbarBackground: #555;
+@navbarBackgroundHighlight: #888;
+@navbarText: #eee;
+@navbarLinkColor: #eee;
+```
+
+<p>When we reload a page on the site now the header is a lighter grey.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1036/original/E329I05.png" width="800" height="403" alt="The header&rsquo;s background is now a different colour."/>
+</div>
+
+<p>Some things, however, can&rsquo;t be easily changed by setting variables. Let&rsquo;s say that we want to set the brand text in the header. The CSS that defines this colour is in the <code>navbar.less</code> file and if we look at the <code>brand</code> class which defines this header we&rsquo;ll see that it&rsquo;s set to have a colour based on the value in the <code>@white</code> variable. While we could change the value of this variable, doing so will have side effects that we don&rsquo;t want. We only want to change this colour in one place and the variables are a little too limiting here. This isn&rsquo;t too much of an issue, though. As we&rsquo;re working with CSS we can override any of the default styling in <code>bootstrap_and_overrides</code>.</p> 
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+.navbar .brand {
+  color: #FAFFB8;
+}
+```
+
+<p>We now have pale yellow brand text and while this isn&rsquo;t the prettiest design you should now have an idea as to how we can override any style we want.</p>
+
+<h3>Customizing What&rsquo;s Included</h3>
+
+<p>As our application develops we may find that there are parts of Twitter Bootstrap that we don&rsquo;t use. It would be good to remove these to reduce the amount of code that is sent to the client. There&rsquo;s a <a href="http://twitter.github.com/bootstrap/download.html">useful page</a> on the Twitter Bootstrap website which will let us choose exactly which parts we want to include and then download a customized version. This will download the static files, however, which as we&rsquo;re using LESS isn&rsquo;t what we want. Instead we should customize the files that are imported in our Rails application. The <code>bootstrap_and_overrides</code> file imports <code>twitter/bootstrap/bootstrap</code> and if we look at the source code for that imported file we&rsquo;ll see that it imports many other files and we can use this to determine exactly which files are imported.</p>
+
+<p>To do so we need to replace the line <code>@import &quot;twitter/bootstrap/bootstrap&quot;;</code> at the top of <code>bootstrap_and_overrides</code> with the contents of this <a href="https://github.com/twitter/bootstrap/blob/master/less/bootstrap.less"><code>bootstrap.less</code> file</a>. This will do the same thing by default but now we can choose exactly which parts of Bootstrap are included. We can do something similar for the JavaScript. The <a href="https://github.com/seyhunak/twitter-bootstrap-rails/blob/master/vendor/assets/javascripts/twitter/bootstrap.js"><code>bootstrap.js</code> file</a> requires all the jQuery plugins that Bootstrap provides and so in our <code>application.js</code> file we can replace the <code>//=require twitter/bootstrap</code> line with the contents of that file and then pick and choose exactly what we want to include.</p>
+
+<h3>Using SASS instead of LESS</h3>
+
+<p>We&rsquo;ll finish this episode by showing how you can use SASS instead of LESS if you want to. Why might you consider choosing SASS over LESS? If you&rsquo;re planning on extensively modifying Twitter Bootstrap&rsquo;s styling you should consider SASS for the reasons given in a <a href="http://metaskills.net/2012/02/27/too-less-should-you-be-using-sass/">recent blog post</a> by Ken Collins, the author of the less-rails and less-rails-bootstrap gems.</p> 
+
+<p>With the asset pipeline it&rsquo;s possible to use both SASS and LESS in the same application. For example If we override something in the CSS, such as the navbar&rsquo;s brand that we modified earlier, we can move this into a <code>.css.scss</code> file but we need  to be sure that the <code>bootstrap_and_overrides</code> is loaded first. The limitations of this technique are that we aren&rsquo;t able to interact with the variables and mix-ins that Twitter Bootstrap uses as these are defined in LESS code.</p>
+
+<p>If you do want to use SASS to interact with the variables and mix-ins you should consider using the <a href="https://github.com/thomas-mcdonald/bootstrap-sass"><code>bootstrap-sass</code> gem</a>. This includes a translation of Twitter Bootstrap into SASS so that you&rsquo;re able to interact the variables and override them. We&rsquo;ll show you now how to switch an application over from the <code>twitter-bootstrap-rails</code> gem, which uses LESS, to <code>bootstrap-sass</code>.  First we&rsquo;ll need to replace the old gem in the gemfile then run <code>bundle</code> again.</p>
+
+``` /Gemfile
+gem 'bootstrap-sass'
+```
+
+<p>Next we&rsquo;ll rename <code>bootstrap_and_overrides.css.less</code> file to end in <code>.scss</code> instead. We then need to replace the contents of the file with the equivalent SASS code. </p>
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+// Set the correct sprite paths
+$iconSpritePath: image-path('glyphicons-halflings.png');
+$iconWhiteSpritePath: image-path('glyphicons-halflings-white.png');
+
+$navbarBackground: #555;
+$navbarBackgroundHighlight: #888;
+$navbarText: #eee;
+$navbarLinkColor: #eee;
+
+@import "bootstrap";
+
+body { padding-top: 60px; }
+
+@import "bootstrap-responsive";
+
+.navbar .brand {
+  color: #FAFFB8;
+}
+```
+
+<p>One important distinction here is that we&rsquo;re setting the variables before loading <code>bootstrap</code> due to differences between the way SASS and LESS work. After it has loaded we can override any CSS that we want to change.</p>
+
+<p>In the <code>application.js</code> file we need to require bootstrap instead of <code>twitter/bootstrap</code>. As before we can load each individual file separately if we want to select specific plugins to load. The bootstrap-sass <a href="https://github.com/thomas-mcdonald/bootstrap-sass/blob/master/README.md">README</a> has an example of how to this. If we reload our application now it looks exactly like it did before but we&rsquo;re now using SASS instead of LESS.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1037/original/E329I06.png" width="800" height="403" alt="The application now looks just the same even though it&rsquo;s using SASS."/>
+</div>
+
+
+
+

@@ -1,0 +1,317 @@
+<p>Below is a page from an application that handles selling board games.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1038/original/E234RI01.png" width="800" height="500" alt="Our board game application."/>
+</div>
+
+<p>The form for creating or updating a game is quite complex. It has several different types of input fields: text boxes, select lists, checkboxes and radio buttons.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1039/original/E234RI02.png" width="800" height="624" alt="The form for editing a game."/>
+</div>
+
+<p>Some of these fields are for associated models. A <code>Product</code> belongs to a <code>Publisher</code> and there&rsquo;s a select menu for this. It also has a many-to-many relationship with <code>Category</code> which is represented by a series of checkboxes.  As you might expect the view template for this form contains a lot of code.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= form_for(@product) do |f| %>
+  <% if @product.errors.any? %>
+    <div class="error_messages">
+      <h2><%= pluralize(@product.errors.count, "error") %> prohibited this product from being saved:</h2>
+
+      <ul>
+      <% @product.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+      </ul>
+    </div>
+  <% end %>
+ <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :price %><br />
+    <%= f.text_field :price %>
+  </div>
+  <div class="field">
+    <%= f.label :released_on %><br />
+    <%= f.date_select :released_on %>
+  </div>
+  <div class="field">
+    <%= f.check_box :discontinued %>
+    <%= f.label :discontinued %>
+  </div>
+  <div class="field">
+    <%= f.label :rating %><br />
+    <%= f.radio_button :rating, 1 %> 1
+    <%= f.radio_button :rating, 2 %> 2
+    <%= f.radio_button :rating, 3 %> 3
+    <%= f.radio_button :rating, 4 %> 4
+    <%= f.radio_button :rating, 5 %> 5
+  </div>
+  <div class="field">
+    <%= f.label :publisher_id %><br />
+    <%= f.collection_select :publisher_id, Publisher.all, :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= hidden_field_tag "product[category_ids][]", nil %>
+    <% Category.all.each do |category| %>
+      <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id), id: dom_id(category) %>
+      <%= label_tag dom_id(category), category.name %><br />
+    <% end %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>There&rsquo;s a lot of markup here to generate the form but in this episode we&rsquo;ll show you  how you can significantly clean up form view templates using a gem called <a href="https://github.com/plataformatec/simple_form">SimpleForm</a>.  SimpleForm provides a form builder which makes it easy to create complex forms. All we have to do is change <code>form_for</code> to <code>simple_form_for</code> and then use an <code>input</code> method which will generate the appropriate form for the type of attribute that&rsquo;s passed to it. In this episode we&rsquo;ll use it to reduce the amount of code in our template.</p>
+
+<h3>Adding SimpleForm To Our Application</h3>
+
+<p>To install SimpleForm we just need to add it to our gemfile and then run <code>bundle</code>.</p>
+
+``` /Gemfile
+source 'https://rubygems.org'
+
+gem 'rails', '3.2.2'
+
+# Bundle edge Rails instead:
+# gem 'rails', :git => 'git://github.com/rails/rails.git'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer'
+
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'simple_form'
+```
+
+<p>Once the gem has installed we&rsquo;ll need to run SimpleForm&rsquo;s <code>install</code> generator.</p>
+
+``` terminal
+$ rails g simple_form:install
+```
+
+<p>If we were using Twitter Bootstrap in this application, like we did in <a href="http://railscasts.com/episodes/329-more-on-twitter-bootstrap">episode 329</a>, we could pass in a <code>--bootstrap</code> option here. This generator creates a couple of configuration files, which we&rsquo;ll take a closer look at later on in this episode, and a form template override for the scaffold generator. We can now start cleaning up our template by switching it over to SimpleForm. Here&rsquo;s what it looks like after we&rsquo;ve changed it over.</p>
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for(@product) do |f| %>
+  <%= f.input :name %>
+  <%= f.input :price %>
+  <%= f.input :released_on %>
+  <%= f.input :discontinued %>
+  <%= f.input :rating %>
+  <%= f.association :publisher %>
+  <%= f.association :categories %>
+  <%= f.button :submit %>
+<% end %>
+```
+
+<p>At the top of the form we&rsquo;ve replaced <code>form_for</code> with <code>simple_form_for</code>. We&rsquo;ve also removed the code that displays the error messages as SimpleForm has a different way of displaying them. Each field in the form has been replaced with a call to <code>f.input</code>, except for the associations which need to be treaded differently. We&rsquo;ve used <code>f.association</code> for these. Finally, for the submit button, we&rsquo;ve used <code>f.button</code>. Our template is now quite a lot smaller.</p>
+
+<p>We&rsquo;ll need to restart the server for the new gem to be picked up. Once we&rsquo;ve done so we can reload the new product page to see what our form now looks like.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1040/original/E234RI03.png" width="800" height="446" alt="The form as rendered by SimpleForm."/>
+</div>
+
+<h3>Adding Styling</h3>
+
+<p>The form isn&rsquo;t nearly as pretty now but it can be improved greatly with some styling. We&rsquo;ll create a new <code>forms.css.scss</code> file and add some CSS there.</p>
+
+``` /app/assets/stylesheets/forms.css.scss
+.simple_form {
+  $indent: 120px;
+  label {
+    float: left;
+    width: $indent - 20px;
+    text-align: right;
+    margin: 2px 10px;
+    &.radio, &.checkbox {
+      float: none;
+      margin: 0;
+      width: auto;
+      text-align: left;
+    }
+    &.checkbox {
+      display: block;
+      margin-left: $indent;
+    }
+    &.radio { margin-right: 10px; }
+  }
+  div.input { margin-bottom: 10px;}
+  input.radio_buttons, input.check_boxes {
+    margin-right: 5px;
+  }
+  .btn { margin-left: $indent; }
+  .alert-error {
+    color: #D00;
+    margin-bottom: 10px;
+    font-weight: bold;
+  }
+  .hint, .error {
+    clear: left;
+    margin-left: $indent;
+    font-size: 12px;
+    color: #D00;
+    display: block;
+  }
+  .hint {
+    color: #555;
+    font-style: italic;
+  }
+}
+```
+
+<p>You can, of course, change this CSS to suit the way you want your forms to look. When we reload our form now it looks much better.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1041/original/E234RI04.png" width="800" height="519" alt="The form after we&rsquo;ve styled it."/>
+</div>
+
+<p>We can see that SimpleForm uses different form fields depending on the type of attribute. We have text fields for string values, numeric fields for number values, select lists for dates, checkboxes for boolean fields and so on. It even handles associations correctly, showing a select list for the <code>belongs_to</code> association with <code>Publisher</code> and a multiple-select for the many-to-many relationship with <code>Category</code>.</p>
+
+<h3>Customizing The Fields</h3>
+
+<p>If we look at the <a href="http://simple-form.plataformatec.com.br/#mappings-inputs-available">documentation</a> we can see how different data types are mapped to  different types of form field. We might not always want the default form field for a given type, however, so how do we change this? For example we want to use checkboxes for the categories instead of a multiple-select field. We can do this by using the <code>as</code> option.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= f.association :categories, as: :check_boxes %>
+```
+
+<p>There are many different options that we can use with <code>input</code> and <code>association</code>. For example let&rsquo;s say that we want to change the label that&rsquo;s shown next to the <code>released_on</code> field. We can do that by using the <code>label</code> option.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :released_on, label: "Release Date" %>
+```
+
+<p>Another handy option we can pass in is called <code>hint</code>. For example we can add a hint to the price field to tell the user which currency the field expects.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :price, hint: "price should be in USD" %>
+```
+
+<p>When we reload the page now we&rsquo;ll see those changes.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1042/original/E234RI05.png" width="800" height="528" alt="The form after we&rsquo;ve changed some of the fields to use different form widgets."/>
+</div>
+
+<p>Next we&rsquo;ll try something a little more advanced. The rating field is currently rendered as a numeric field but we want to show five radio buttons instead so that the product can be rated from 1 to 5. This is easy to do. We can pass in a <code>collection</code> option and pass either an array or a range to it.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= f.input :rating, collection: 1..5 %>
+```
+
+<p>The rating field will now display as a select list with options from 1 - 5. We want radio buttons instead and you can probably guess how we do that.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :rating, collection: 1..5, as: :radio_buttons %>
+```
+
+<p>This will now display the rating as five radio buttons.</p> 
+
+<h3>Validations</h3>
+
+<p>What about validation errors? We don&rsquo;t currently have any validation on the <code>Product</code> model so let&rsquo;s start by adding one so that the name field is required.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :publisher
+  has_many :categorizations
+  has_many :categories, through: :categorizations
+  validates_presence_of :name
+end
+```
+
+<p>When we try submitting the form now without filling in any of the fields we&rsquo;ll see an error message next to the name field. Notice that SimpleForm has also put an asterisk next to the field&rsquo;s label to indicate that it&rsquo;s required.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1043/original/E234RI06.png" width="800" height="309" alt="The name field now shows an error if no value is entered."/>
+</div>
+
+<p>Now that we have validations we&rsquo;ll add a call to <code>error_notification</code> near the top.  This will display some text in red at the top of the form telling the user. Obviously this can be customized and we can change the text and styling to suit our application.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1044/original/E234RI07.png" width="800" height="309" alt="The form now shows an error notification if any of the fields are invalid."/>
+</div>
+
+<p>One more thing we can add to our template is a call to <code>f.error :base</code>.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for(@product) do |f| %>
+  <%= f.error_notification %>
+  <%= f.input :name %>
+  <%= f.input :price, hint: "price should be in USD" %>
+  <%= f.input :released_on, label: "Release Date" %>
+  <%= f.input :discontinued %>
+  <%= f.input :rating, collection: 1..5, as: :radio_buttons %>
+  <%= f.association :publisher %>
+  <%= f.association :categories, as: :check_boxes %>
+  <%= f.error :base %>
+  <%= f.button :submit %>
+<% end %>
+```
+
+<p>If there&rsquo;s an error message on the <code>base</code> attribute, which is used when an error doesn&rsquo;t apply to any of the other attributes, it will now be shown above the button. This is the last thing we need to add to get the form looking the way we want. We&rsquo;ve reduced the template from over fifty lines of fairly complex view code down to twelve lines of much cleaner code.</p>  
+
+<h3>SimpleForm&rsquo;s Configuration Files</h3>
+
+<p>There&rsquo;s a lot we can configure with SimpleForm if we want to change its default behaviour. We&rsquo;ll start by looking at the <code>simple_form</code> initializer file that was created by the <code>simple_form:install</code> generator. This file is too long to show here as it includes a lot of documentation in comments but you can see it on SimpleForm&rsquo;s <a href="https://github.com/plataformatec/simple_form/blob/master/lib/generators/simple_form/templates/config/initializers/simple_form.rb.tt">Github pages</a>.</p>
+
+<p>The first configuration option in this file defines the default wrapper. Wrappers are a new feature in SimpleForm 2 and they specify how given fields should be generated. We can create as many wrappers as we want to handle different scenarios and its worth reading through this file to see what each of the options in this configuration file does. As an example we&rsquo;ll set the <code>default_input_size</code> option as the default text box length it a little wide for our form.</p>
+
+``` /config/initializers/simple_form.rb
+# Default size for text inputs.
+config.default_input_size = 30
+```
+
+<p>Another file that the generator created for us can be found in the <code>locales</code> directory.</p>
+
+``` /config/locales/simple_form.en.yml
+en:
+  simple_form:
+    "yes": 'Yes'
+    "no": 'No'
+    required:
+      text: 'required'
+      mark: '*'
+      # You can uncomment the line below if you need to overwrite the whole required html.
+      # When using html, text and mark won't be used.
+      # html: '<abbr title="required">*</abbr>'
+    error_notification:
+      default_message: "Some errors were found, please take a look:"
+    # Labels and hints examples
+    # labels:
+    #   password: 'Password'
+    #   user:
+    #     new:
+    #       email: 'E-mail para efetuar o sign in.'
+    #     edit:
+    #       email: 'E-mail.'
+    # hints:
+    #   username: 'User name to sign in.'
+    #   password: 'No special characters, please.'
+```	
+
+<p>This file can be used for internationalization and we can create different versions of this file if we want to make our application&rsquo;s forms multilingual. It can also be used to change some of the configuration such as the way that required fields are marked. We could change the <code>mark</code> key&rsquo;s value so that two asterisks are shown instead of one, for example.</p> 
+
+<p>We&rsquo;ll need to restart our app for any changes to be picked up but one we do we can reload our page and see the changes we&rsquo;ve made.</p> 
+
+<h3>An Alternative Gem</h3>
+
+<p>One alternative to SimpleForm is <a href="https://github.com/justinfrench/formtastic">Formtastic</a>. This works in a similar way, especially in regards to the way the forms are generated so it&rsquo;s fairly easy to switch between these two gems if you need to. One significant difference is that Formtastic includes a stylesheet that we can include to style our forms.</p>
