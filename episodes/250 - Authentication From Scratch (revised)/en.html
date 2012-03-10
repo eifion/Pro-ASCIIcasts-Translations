@@ -1,0 +1,368 @@
+<p>User authentication is required in almost every Rails application, including the blogging application shown below. This app currently has no authentication at all and we want to add some so that users can sign up and then log in to and out of the site.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1015/original/E250RI01.png" width="800" height="463" alt="Our blogging application."/>
+</div>
+
+<p>There are several gems that will help us to add authentication to an app, such as Devise and OmniAuth. Sometimes though we just need simple password-based authentication and in these cases it&rsquo;s not difficult to create it from scratch. We&rsquo;ll do just that in this episode.</p>
+
+<h3>Adding a Signup Form</h3>
+
+<p>The first thing we need to do is to add a sign-up form for creating a new user and then add a link to it. This means that we&rsquo;ll need to generate a <code>User</code> model and a controller to handle the signup process. We&rsquo;ll use the resource generator to do this. This is similar to the scaffold generator but it doesn&rsquo;t fill in all the controller actions. We&rsquo;ll give the <code>User</code> model <code>email</code> and <code>password_digest</code> fields.</p>
+
+``` terminal
+$ rails g resource user email password_digest
+```
+
+<p>Having a <code>password_digest</code> field is important as it&rsquo;s the default name that&rsquo;s used with Rails&rsquo; <code>has_secure_password</code> feature and we&rsquo;ll be using this feature later. This command will generate a <code>User</code> model, a <code>UsersController</code> and a database migration. We&rsquo;ll migrate the database before we continue.</p>
+
+``` terminal
+$ rake db:migrate
+```
+
+<p>Next we&rsquo;ll add <code>has_secure_password</code> to the User model. This was introduced in Rails 3.1 and adds some simple authentication support to the model using that <code>password_digest</code> column.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_secure_password
+end
+```
+
+<p>To get this working in Rails we&rsquo;ll also need to modify the gemfile and uncomment the line that includes the <code>bcrypt-ruby</code> gem as this gem handles hashing the password before its stored in the database.</p>
+
+``` /Gemfile
+# To use ActiveModel has_secure_password
+gem 'bcrypt-ruby', '~> 3.0.0'
+```
+
+<p>We need to run <code>bundle</code> to ensure that this gem is installed and to restart the server for the changes to be picked up.</p> 
+
+<p>Another important change to make in the <code>User</code> model is to call <code>attr_accessible</code> and specify the attributes that can be set by mass assignment and through the form. We&rsquo;ll set <code>email</code>, <code>password</code> and <code>password_confirmation</code> but you can set whatever fields you want to match your signup form.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_secure_password
+  
+  attr_accessible :email, :password, :password_confirmation
+  
+  validates_uniqueness_of :email
+end
+```
+
+<p>Having this in place means that if we add an <code>admin</code> column to the database it won&rsquo;t be possible for a malicious user to make themselves an admin user by sending a request including that value to the <code>UsersController</code>&rsquo;s <code>update</code> action. We&rsquo;ve also added a validation to the model to ensure that the email address is unique and we could add other validations here to validate the format of the email, the length of the password and so on. We don&rsquo;t need to validate the presence of the <code>password</code> and <code>password_confirmation</code> fields, however, as this will be handled by <code>has_secure_password</code>.</p>
+
+<p>Our <code>User</code> model is looking good so let&rsquo;s move on to creating the signup form. We&rsquo;ll do this inside the <code>UsersController</code> that we generated earlier. This is blank by default so we&rsquo;ll need to add a couple of actions to handle creating new users. The code for these is fairly standard.</p>
+
+``` /app/controllers/users_controller.rb
+class UsersController < ApplicationController
+  def new
+    @user = User.new
+  end
+  
+  def create
+    @user = User.new(params[:user])
+    if @user.save
+      redirect_to root_url, notice: "Thank you for signing up!"
+    else
+      render "new"
+    end
+  end
+end
+```
+
+<p>The <code>new</code> action will display the signup form and the <code>create</code> action is called when the form is submitted. This will validate the values from the form and if this passes it will redirect the browser back to the home page and show a message. If the validation fails the signup form will be redisplayed.</p>
+
+<p>The signup form is shown below. Again, this is fairly standard. It uses <code>form_for</code> with the <code>@user</code> instance variable, has a section for displaying any errors and finally three fields for <code>email</code>, <code>password</code> and <code>password_confirmation</code>.</p>
+
+``` /app/views/users/new.html.erb
+<h1>Sign Up</h1>
+
+<%= form_for @user do |f| %>
+  <% if @user.errors.any? %>
+    <div class="error_messages">
+      <h2>Form is invalid</h2>
+      <ul>
+        <% @user.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="field">
+    <%= f.label :email %><br />
+    <%= f.text_field :email %>
+  </div>
+  <div class="field">
+    <%= f.label :password %><br />
+    <%= f.password_field :password %>
+  </div>
+  <div class="field">
+    <%= f.label :password_confirmation %><br />
+    <%= f.password_field :password_confirmation %>
+  </div>
+  <div class="actions"><%= f.submit "Sign Up" %></div>
+<% end %>
+```
+
+<p>Now all we need is a link to this form. We&rsquo;ll put it in the application&rsquo;s layout file.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="user_header">
+  <%= link_to "Sign Up", new_user_path %>
+</div>
+```
+
+<p>When we reload the home page now the &ldquo;Sign Up&rdquo; link is visible and clicking it will take us to our new form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1016/original/E250RI02.png" width="800" height="413" alt="The new sign up form."/>
+</div>
+
+<p>If we fill in this form incorrectly we&rsquo;ll see validation errors as we&rsquo;d expect. Once we&rsquo;ve filled it in successfully we&rsquo;ll be redirected back to the home page and we&rsquo;ll see a flash message that tells us we&rsquo;ve signed up.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1017/original/E250RI03.png" width="800" height="413" alt="Signed up successfully."/>
+</div>
+
+<h3>Logging In And Out</h3>
+
+<p>So far we haven&rsquo;t done any actual authentication, we&rsquo;ve just created a <code>User</code> record. For authentication we need a login form. We&rsquo;ll create that now and also add a &ldquo;Log In&rdquo; link next to the &ldquo;Sign Up&rdquo; one. First we&rsquo;ll create a new <code>SessionsController</code> to handle logging in and give it a <code>new</code> action.</p>
+
+``` terminal
+$ rails g controller sessions new
+```
+
+<p>We&rsquo;ll need to adjust the routes that were generated by this command. The <code>SessionsController</code> is a RESTful-style controller so we&rsquo;ll delete the generated <code>get &quot;sessions/new&quot;</code> route and add a new <code>sessions</code> resource.</p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  
+  resources :sessions
+  resources :users
+
+  root to: 'articles#index'
+  resources :articles
+end
+```
+
+<p>We can leave the new action blank in the controller but we will modify the associated view as this is where the login form will go.</p>
+
+``` /app/views/sessions/new.html.erb
+<h1>Log In</h1>
+
+<%= form_tag sessions_path do %>
+  <div class="field">
+	  <%= label_tag :email %><br />
+	  <%= text_field_tag :email, params[:email] %>
+  </div>
+  <div class="field">
+	  <%= label_tag :password %><br />
+	  <%= password_field_tag :password %>
+  </div>
+  <div class="actions"><%= submit_tag "Log In" %>
+<% end %>
+```
+
+<p>As our <code>SessionsController</code> doesn&rsquo;t have a model behind it we use <code>form_tag</code> for this form. It POSTs to the <code>sessions_path</code> which will trigger the <code>SessionsController</code>&rsquo;s <code>create</code> action and we&rsquo;ll write that action next.</p>
+
+``` /app/controllers/sessions_controller.rb
+def create
+  user = User.find_by_email(params[:email])
+  if user && user.authenticate(params[:password])
+    session[:user_id] = user.id
+    redirect_to root_url, notice: "Logged in!"
+  else
+    flash.now.alert = "Email or password is invalid."
+  end
+end
+```
+
+<p>When the form is submitted we try to find a user by the email address that was entered on the form. If we find one we use <code>authenticate</code> to check that the entered password is correct. This is a method that <code>has_secure_password</code> provides and will return a boolean value. If the password matches we store the user&rsquo;s <code>id</code> in a session variable and redirect to the home page. If either the username or password are incorrect the form is shown again with an error message. We use <code>flash.now</code> here as we need the message to be displayed immediately, not after a redirect.</p>
+
+<p>To finish this feature we just need to add a link next to the &ldquo;Sign Up&rdquo; link.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="user_header">
+  <%= link_to "Sign Up", new_user_path %> or
+  <%= link_to "Log In", new_session_path %>
+</div>
+```
+
+<p>If we reload the home page now we&rsquo;ll see the new &ldquo;Log In&rdquo; link and if we click it we&rsquo;ll be taken to our new form. If we use the email address and password we entered when we signed up we&rsquo;ll be able to log in to the site.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1018/original/E250RI04.png" width="800" height="413" alt="Logged in."/>
+</div>
+
+<p>Even though we&rsquo;ve logged into the site now the &ldquo;Log In&rdquo; link still shows. It would be better if this changed to show that the user is currently logged in. To do this we need a way to fetch the currently logged-in user record and we&rsquo;ll do this in the <code>ApplicationController</code> so that it&rsquo;s available in all controllers.</p> 
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  
+  private
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+end
+```
+
+<p>This current user will look for a <code>User</code> based on the session&rsquo;s user <code>id</code> that was stored when they logged in, if that session variable exists. This method will probably be called many times per request and so it&rsquo;s a good idea to cache it in an instance variable as we have done here. We&rsquo;re going to need to access this method in the views, too, so we&rsquo;ve used <code>helper_method</code> to make it a helper method. We can use this now to change the &ldquo;Sign Up&rdquo; and &ldquo;Log In&rdquo; links when the user is logged in and display a message telling the user that they&rsquo;re logged in and showing their email address.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="user_header">
+  <% if current_user %>
+    Logged in as <%= current_user.email %>.
+  <% else %>
+    <%= link_to "Sign Up", new_user_path %> or
+    <%= link_to "Log In", new_session_path %>
+   <% end %>
+</div>
+```
+
+<p>As we&rsquo;re logged in reloading the page now will display the email address we signed up with. If your authentication setup uses usernames instead you could display that here just as easily.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1019/original/E250RI05.png" width="800" height="413" alt="We now see a status message when we're logged in."/>
+</div>
+
+<h3>Logging Out</h3>
+
+<p>While we can log in now there&rsquo;s no way to log out. We need a new link that shows when we&rsquo;re signed in and we&rsquo;ll need a new action in the <code>SessionsController</code> to handle that behaviour.</p> 
+
+``` /app/controllers/sessions_controller.rb
+def destroy
+  session[:user_id] = nil
+  redirect_to root_url, notice: "Logged out!"
+end
+```
+
+<p>This action is pretty simple. We just clear out the <code>user_id</code> session variable and redirect back to the home page. We could clear the entire session by calling <code>reset_session</code> instead, but clearing the <code>user_id</code> is enough to sign the user out. Now in the layout file we can add a &ldquo;Log Out&rdquo; link. Pointing it to the <code>destroy</code> action can be a little bit tricky because the <code>session_path</code> helper method expects an <code>id</code> to be passed in. We&rsquo;ll just pass &ldquo;current&rdquo; in but we could pass in anything as the controller doesn&rsquo;t read this parameter. We also need to set the <code>method</code> to <code>delete</code> so that the destroy action is triggered.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="user_header">
+  <% if current_user %>
+    Logged in as <%= current_user.email %>.
+    <%= link_to "Log Out", session_path("current"), method: "delete" %>
+  <% else %>
+    <%= link_to "Sign Up", new_user_path %> or
+    <%= link_to "Log In", new_session_path %>
+  <% end %>
+</div>
+```
+
+<p>Reloading the page will now show us the &ldquo;Log Out&rdquo; link and when we click it we&rsquo;ll be logged out.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1020/original/E250RI06.png" width="800" height="413" alt="The log out link now works."/>
+</div>
+
+<h3>Better Routes</h3>
+
+<p>We could make the &ldquo;Sign Up&rdquo; and &ldquo;Log In&rdquo; URLs a little prettier. The login form is currently at <code>/sessions/new</code> but it would better to have <code>/login</code> point to this. We can add a three custom routes to improve the URLs for signing in and logging in and out.</p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  
+  get 'signup', to: 'users#new', as: 'signup'
+  get 'login', to: 'sessions#new', as: 'login'
+  get 'logout', to: 'sessions#destroy', as: 'logout'
+  
+  resources :sessions
+  resources :users
+
+  root to: 'articles#index'
+  resources :articles
+end
+```
+
+<p>One thing to note about the <code>logout</code> path is that we&rsquo;re using <code>get</code>. We might consider using <code>delete</code> instead as technically this action does change user state but as it doesn&rsquo;t do any permanent damage we&rsquo;ll leave this as <code>get</code> here. Now we can update our layout file to use these new routes.</p> 
+
+``` /app/views/layouts/application.html.erb
+<div id="container">
+  <div id="user_header">
+    <% if current_user %>
+      Logged in as <%= current_user.email %>.
+      <%= link_to "Log Out", logout_path %>
+    <% else %>
+      <%= link_to "Sign Up", signup_path %> or
+      <%= link_to "Log In", login_path %>
+    <% end %>
+</div>
+```
+
+<h3>Automatically Logging In New Users</h3>
+
+<p>One loose end that we&rsquo;ve left untied is that when the user signs up they aren&rsquo;t automatically logged in. The user record is created but the new user has to enter their details again to sign in. This is easy to fix by modifying the <code>UsersController</code>&rsquo;s <code>create</code> action and setting the <code>user_id</code> session variable when the new user is saved.</p> 
+
+``` /app/controllers/users_controller.rb
+def create
+  @user = User.new(params[:user])
+  if @user.save
+    session[:user_id] = @user.id
+    redirect_to root_url, notice: "Thank you for signing up!"
+  else
+    render "new"
+  end
+end
+```
+
+<p>If we find that there&rsquo;s duplication in the logic between the <code>SessionsController</code>&rsquo;s logging in behaviour and this behaviour we can abstract this out into some kind of controller method which can be shared between them. Here it&rsquo;s OK to have this small amount of duplication. If we sign up as a new user now we&rsquo;ll be signed in straight away.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1021/original/E250RI07.png" width="800" height="413" alt="We&rsquo;re now signed in straightaway."/>
+</div>
+
+<h3>Basic Authorization</h3>
+
+<p>A common requirement when dealing with authentication is to make sure that they&rsquo;re logged in before giving them access to a specific page. Our application shows a number of articles and each article&rsquo;s page has an &ldquo;Edit&rdquo; link which takes us to a page where we can edit that article. We want our application to only allow logged-in users to edit articles. Since this is such common behaviour we&rsquo;ll define it in the <code>ApplicationController</code> so that we can use it anywhere.</p> 
+
+``` /app/controllers/application_controller.rb
+def authorize
+  redirect_to login_url, alert: "Not authorized" if current_user.nil?
+end
+```
+
+<p>This method will check for a current user and redirect to the login page if it fails to find one with an alert telling them that they aren&rsquo;t authorized. We can now use this method as a <code>before_filter</code> on any controller action we want to protect, such as the <code>ArticlesController</code>&rsquo;s <code>edit</code> and <code>update</code> actions.</p>
+
+``` /app/controllers/articles_controller.rb
+class ArticlesController < ApplicationController
+  
+  before_filter :authorize, only: [:edit, :update]
+  
+  def index
+    @articles = Article.all
+  end
+
+  def show
+    @article = Article.find(params[:id])
+  end
+
+  def edit
+    @article = Article.find(params[:id])
+  end
+
+  def update
+    @article = Article.find(params[:id])
+    if @article.update_attributes(params[:article])
+      redirect_to @article, notice: "Article has been updated."
+    else
+      render "edit"
+    end
+  end
+end
+```
+
+<p>We can still edit an article now when we&rsquo;re logged in but if we log out and try again we&rsquo;ll be redirected.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1022/original/E250RI08.png" width="800" height="413" alt="We&rsquo;re now redirected if we visit a page we're not authorized to view."/>
+</div> 
+
+<p>You could improve this user experience depending on how your application works, but the basic functionality is here. If you have more complex authorization logic than this you could use a gem like <a href="https://github.com/ryanb/cancan">CanCan</a> to help with this.</p> 
+
+<p>Now we have a complete authentication solution built from scratch and there are a variety of ways we could add on to this. For example in UsersController we might want a profile page or a way to update a user&rsquo;s information. We could do this easily by adding show or edit actions to this controller. If we want to store the user&rsquo;s login in a permanent cookie instead of a temporary session take a look at <a href="http://railscasts.com/episodes/274-remember-me-reset-password">episode 274</a> which shows how to add &ldquo;Remember Me&rdquo; functionality and also a way for users to reset their password.</p>
