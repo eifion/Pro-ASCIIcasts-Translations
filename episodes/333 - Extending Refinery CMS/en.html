@@ -1,0 +1,322 @@
+<style type="text/css">.asciicast .imageWrapper { width: 900px; overflow: auto; text-align: center; }</style>
+
+<p>In this episode we&rsquo;re going to continue our look at the Refinery content management system. If you haven&rsquo;t done so already take a look at the <a href="http://railscasts.com/episodes/332-refinery-cms-basics">previous episode</a> before reading this one so that you can see how we&rsquo;ve got to where we are now. In the last episode we used Refinery to create a site for a piano store. This site now has a nice-looking home page and page for displaying information about the store&rsquo;s location. We want to add another section to the site for browsing a list of the pianos that the store sells.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1075/original/E333I01.png" width="1015" height="646" alt="The home page of our piano site."/>
+</div>
+ 
+<p>We don&rsquo;t want to simply list the pianos on a static page. Instead we want to store them in a database and then manage them through Refinery&rsquo;s admin section. So, in addition to the tabs listed by default on the admin pages we want another one for managing piano records. To do this it helps to have an understanding of how Refinery works internally. Each tab in the admin section is implemented in a separate Rails engine which handles the admin side of the information and also the public side of displaying that information to the user. We can see this if we look at <a href="https://github.com/resolve/refinerycms">Refinery&rsquo;s source code</a>. There are several directories here that contain a Rails engine, for example the <code>pages</code>, <code>images</code> and <code>dashboard</code> directories. The authentication directory contains the &ldquo;Users&rdquo; tab while the resources directory contains the &ldquo;Files&rdquo; tab. In each of these directories we&rsquo;ll find a Rails engine.</p>
+
+<h3>Adding Our Own Custom Engine</h3>
+
+<p>This approach makes Refinery very modular and it also means that we can easily extend it by adding our own engine. That&rsquo;s what we&rsquo;re going to do in this episode. We&rsquo;ll create a new section for managing pianos and displaying them to the user. Refinery comes with a generator for doing just this. This is similar to the scaffold generator and we pass it the name of a resource a a list of attributes. We&rsquo;ll use it to create a <code>piano</code> engine.</p>
+
+``` terminal
+$ rails g refinery:engine piano name:string dimensions:string manufactured_on:date upright:boolean photo:image description:text
+``` 
+ 
+<p>The types we pass to the fields will look familiar if you&rsquo;ve ever generated a resource or a scaffold. The only difference here is that we have access to an <code>image</code> type if we want to include an image with each record and Refinery will automatically handle these images for us. This command has generated an engine for us and has placed it under a <code>vendor/extensions/pianos</code> directory. The command has also printed a list of commands that we&rsquo;ll need to run.</p>
+
+``` terminal
+------------------------
+Now run:
+bundle install
+rails generate refinery:pianos
+rake db:migrate
+rake db:seed
+------------------------
+```
+ 
+<p>Before we do that let&rsquo;s take a look at the changes that have been made to the application&rsquo;s gemfile.</p>
+ 
+``` /Gemfile
+gem 'refinerycms-i18n',   '~> 2.0.0'
+#  gem 'refinerycms-blog', '~> 2.0.0'
+#  gem 'refinerycms-inquiries', '~> 2.0.0'
+#  gem 'refinerycms-search', '~> 2.0.0'
+#  gem 'refinerycms-page-images', '~> 2.0.0'
+
+gem 'refinerycms-pianos', :path => 'vendor/extensions'
+``` 
+ 
+<p>There&rsquo;s a new line at the bottom of this file which contains a gem that points to the <code>vendor/extensions</code> path. This is interesting; not only did the command generate an engine it also turned it into a gem which is used in our application. This means that it&rsquo;s easy to take the engine and turn it into a gem that we can use in other applications. There are several commented-out gems in the gemfile which are  basically the same thing. Each one is a separate engine for extending Refinery and can add functionality such as blog, searching and so on.</p>
+
+<p>Since our new extension isn&rsquo;t really part of our Rails application we need to run a few commands to get it set up. First we&rsquo;ll need to run Bundler.</p>
+
+``` terminal
+$ bundle install
+```
+
+<p>Next we&rsquo;ll run the generator that Refiner provides.</p> 
+
+``` terminal
+$  rails generate refinery:pianos
+``` 
+
+<p>This command copies over the migration file for adding the <code>pianos</code> table to the database and adds some content to the seeds file. If we look at this file we&rsquo;ll see the line the generator has added.</p>
+
+``` /db/seeds.rb
+Refinery::Pianos::Engine.load_seed
+``` 
+
+<p>The line that&rsquo;s been added loads the seeds for out <code>pianos</code> engine. This will add a  new page to Refinery for displaying pianos to the user but we can customize the engine and have it load whatever seed data we want. Next we&rsquo;ll migrate the database and load that seed data.</p>
+
+``` terminal
+$ rake db:migrate && rake db:seed
+```
+
+<p>Our engine is now set up. Before we start customizing it let&rsquo;s see what&rsquo;s provided out of the box. After restarting the Rails server and reloading the admin page we&rsquo;ll see a new &ldquo;Pianos&rdquo; tab for managing piano records.</p>
+
+ <div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1076/original/E333I02.png" width="1015" height="366" alt="Our admin site now has a Pianos tab."/>
+</div>
+
+<p>The page for adding a piano includes all the fields we specified in the generator, including the field for adding an image. We can add an image in exactly the same way we added one to a page in the previous episode. The <code>description</code> text field is a complete WYSIWYG editor exactly like the one for adding page content.</p> 
+
+<div class="imageWrapper">
+ <img src="http://asciicasts.com/system/photos/1077/original/E333I03.png" width="1015" height="689" alt="We now have a page for editing pianos."/>
+</div>
+
+<p>We&rsquo;ll fill some records in behind the scenes now so that we have some data to work with. </p>
+
+ <div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1078/original/E333I04.png" width="1015" height="553" alt="The list of piano records that we&rsquo;ve added."/>
+</div>
+
+<p>These are shown in the order we added them but we can easily add reorder them by clicking the &ldquo;Reorder Pianos&rdquo; link on the right and then dragging the records in to the order we want.</p>
+
+<p>There&rsquo;s also a new &ldquo;Pianos&rdquo; page in our application now, along with the &ldquo;About&rdquo; page which reappeared when we seeded the database and which we&rsquo;ll need to delete again. The content of our new page will be handled by the new engine and by default it will show a list of the records that we added. Note that there&rsquo;s also now a link to this page in the banner at the top of the page.</p>
+ 
+ <div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1079/original/E333I05.png" width="1015" height="367" alt="The page that shows the list of pianos."/>
+</div>
+
+<p>Clicking on one of the links will take us to the page for that piano which contains a list of all its attributes along with the full-size image that we uploaded.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1080/original/E333I06.png" width="1015" height="655" alt="The default page that displays a single piano."/>
+</div>
+
+<h3>Customizing Our Engine</h3>
+
+<p>This page obviously needs some work. Let&rsquo;s take a look to see what&rsquo;s involved with customizing our engine. Our application&rsquo;s <code>/vendor/extensions/pianos</code> directory contains a directory structure very similar to that of a Rails application with the usual <code>app</code>, <code>config</code>, <code>db</code>, <code>lib</code>, etc. directories.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1081/original/E333I07.png" width="805" height="406" alt="The directory layout for our engine is similar to that for a Rails application."/>
+</div>
+
+<p>If you&rsquo;re unfamiliar with Rails engines take a look at <a href="http://railscasts.com/episodes/277-mountable-engines">episode 277</a> which covers them in detail. We&rsquo;re just going to focus on the <code>/app/views</code> directory of our engine as it&rsquo;s this that we want to customize. In this directory we&rsquo;ll find a <code>refinery/pianos</code> directory that contains <code>admin</code> and <code>pianos</code> directories. The <code>admin</code> directory contains another <code>pianos</code> directory and while this can all become a little confusing its worth remembering that this directory is for views relating to the admin pages while the <code>refinery/pianos/pianos</code> directory is for the public-facing page. For example the <code>_form.html.erb</code> partial in the <code>admin</code> section contains the view code for the form for adding or editing a piano and we can customize the fields that are shown on this page by editing this code. The <code>show</code> page in the <code>pianos</code> directory contains the code for the page about a single piano that&rsquo;s shown to the end user and it&rsquo;s the public pages that we&rsquo;re going to work on now.</p>
+
+<p>Refinery builds up the content of the page by using <code>content_for</code> blocks then renders a <code>refinery/content_page</code> partial which displays the content of these blocks on the page.</p>
+
+``` app/views/refinery/pianos/pianos/show.html.erb
+<% content_for :body_content_title do %>
+  <%= @piano.name %>
+<% end %>
+
+<% content_for :body_content_left do %>
+  <section>
+    <h1>Name</h1>
+    <p>
+      <%=raw @piano.name %>
+    </p>
+  </section>
+  <section>
+    <h1>Dimensions</h1>
+    <p>
+     <%=raw @piano.dimensions %>
+    </p>
+  </section>
+  <section>
+    <h1>Manufactured On</h1>
+    <p>
+      <%=raw @piano.manufactured_on %>
+    </p>
+  </section>
+  <section>
+    <h1>Upright</h1>
+    <p>
+      <%=raw @piano.upright %>
+    </p>
+  </section>
+  <section>
+    <h1>Photo</h1>
+    <p>
+      <%= image_fu @piano.photo, nil %>
+    </p>
+  </section>
+  <section>
+    <h1>Description</h1>
+    <p>
+      <%=raw @piano.description %>
+    </p>
+  </section>
+<% end %>
+
+<% content_for :body_content_right do %>
+  <aside>
+    <h2><%= t('.other') %></h2>
+    <ul id="pianos">
+      <% @pianos.each do |piano| %>
+        <li>
+          <%= link_to piano.name, refinery.pianos_piano_path(piano) %>
+        </li>
+      <% end %>
+    </ul>
+  </aside>
+<% end %>
+
+<%= render '/refinery/content_page' %>
+```
+ 
+<p>We can stick with this approach but it can be easier to ignore the <code>content_for</code> blocks and the partial and instead to mimic the way that Refinery displays pages. We&rsquo;ll replace all the code in the view template with this code:</p>
+
+``` app/views/refinery/pianos/pianos/show.html.erb
+<section id="body_content">
+  <section id="body">
+    <div id="piano">
+      <%= image_fu @piano.photo, "400x400", class: "image-align-left" %>
+      <h1><%= @piano.name %></h1>
+      <p><b>Dimensions:</b> <%= @piano.dimensions %></p>
+      <p><b>Manufacture Date:</b> <%= @piano.manufactured_on.year %></p>
+      <%= raw @piano.description %>
+      <p class="back"><%= link_to "Back to Pianos", refinery.pianos_pianos_path %></p>
+    </div>
+  </section>
+</section>
+``` 
+
+<p>The two <code>section</code> elements in our new template mimic what Refinery generates in its pages. For the image we use an <code>image_fu</code> method that Refinery provides and which we can use to display the image at a given size. For the <code>description</code> we use the <code>raw</code> method as this contains HTML from the WYSIWYG editor and we don&rsquo;t want this to be escaped. Finally we have a link back to the list of pianos. The path for this is a little cumbersome. The <code>refinery</code> part is the prefix for the Refinery engine while the first <code>pianos</code> is a namespace for this specific engine. The second pianos in the path refers to the <code>pianos</code> controller. There&rsquo;s a lot of namespaces here but every path in this engine needs to be prefixed with <code>refinery.pianos_</code>.</p>
+
+<p>When we reload the page for a single piano now it looks much better.</p>
+
+ <div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1082/original/E333I08.png" width="1015" height="669" alt="The page for a single piano now looks much better."/>
+</div>
+
+<p>Next we&rsquo;ll improve the <code>index</code> template which displays the list of pianos. This template is fairly basic by default and simply lists the pianos in an unordered list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1083/original/E333I09.png" width="1015" height="359" alt="The default index page just shows the piano&rsquo;s names in a list"/>
+</div>
+
+<p>The code for this template looks like this:</p>
+
+``` app/views/refinery/pianos/pianos/index.html.erb
+<% content_for :body_content_left do %>
+  <ul id="pianos">
+    <% @pianos.each do |piano| %>
+      <li>
+        <%= link_to piano.name, refinery.pianos_piano_path(piano) %>
+      </li>
+    <% end %>
+  </ul>
+<% end %>
+
+<%= render '/refinery/content_page' %>
+```
+
+<p>This behaves in a similar way to the <code>show</code> template, using <code>content_for</code> and then rendering a partial. Again we&rsquo;ll replace this with our own code.</p>
+
+``` app/views/refinery/pianos/pianos/index.html.erb
+&lt;section id=&quot;body_content&quot;&gt;
+  &lt;section id=&quot;body&quot;&gt;
+    &lt;div id=&quot;pianos&quot;&gt;
+      &lt;% @pianos.each do |piano| %&gt;
+      &lt;div class=&quot;piano&quot;&gt;
+        &lt;%= image_fu piano.photo, &quot;200x200&quot;, class: &quot;image-align-#{cycle(&quot;left&quot;,&quot;right&quot;)}&quot;%&gt;
+        &lt;h2&gt;&lt;%= piano.name %&gt;&lt;/h2&gt;
+        &lt;%= raw piano.description %&gt;
+        &lt;p class=&quot;more_info&quot;&gt;&lt;%= link_to &quot;More Information&quot;, refinery.pianos_piano_path(piano) %&gt;&lt;/p&gt;
+        &lt;% end %&gt;
+      &lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+&lt;/section&gt;
+``` 
+
+<p>This code in this template is very similar to the code in the <code>show</code> template, but this time it loops through the list of pianos and renders out each one. When we reload this page now it&rsquo;s also improved and we have a nice list of pianos that we can browse through, each with a link to the page for that piano.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1084/original/E333I10.png" width="1015" height="649" alt="The index page looks much better after we&rsquo;ve altered the template."/>
+</div>
+
+<p>Note that each piano image alternates between the left and right side of the page and we get this effect by using the <code>cycle</code> helper method. This isn&rsquo;t specific to Refinery, but is a method that Rails provides for cycling through a list of values in a loop. This method is really useful when you want something to alternate positions.</p>
+
+<h3>Linking To The Page</h3>
+
+<p>There are a few things left to do to polish up our site, for example the &ldquo;Browse Pianos&rdquo; link on the home page. We can fix this by editing the home page in Refinery, selecting the text, clicking &ldquo;Add Link&rsquo; and choosing the pianos page to link to. We want the &ldquo;Pianos&rdquo; page to appear before the &ldquo;Store Location&rdquo; page in the top banner and we can do this in the admin section too by clicking &ldquo;Reorder Pages&rdquo; on the &ldquo;Pages&rdquo; tab and dragging &ldquo;Pianos&rdquo; above &ldquo;Store Location&rdquo;. We also want the text for this page in the banner to say &ldquo;Browse Pianos&rdquo; and we can change this by selecting &ldquo;Advanced Options&rdquo; on the page&rsquo;s editor and setting the &ldquo;Menu title&rdquo; option.</p>
+
+<h3>Overriding Refinery&rsquo;s Functionality</h3>
+
+<p>Our website is almost complete now. We&rsquo;ll finish this episode with a few tips on overriding some of Refinery&rsquo;s functionality. Let&rsquo;s say that there&rsquo;s something in the HTML that Refinery generates that we want to change, for example the way it generates three different CSS files that are loaded separately. We could instead load the <code>formatting</code> and <code>theme</code> files inside the <code>application</code> file through the Rails asset pipeline. If we want to override some of Refinery&rsquo;s functionality the first step is to browse the  source code and file the file we want to override. In this case it&rsquo;s in the <code>app/views/refinery/_head.html.erb</code> partial which contains all the code for the <code>head</code> section of each page. We can override this file by running a Rake command.</p>
+
+``` terminal
+$ rake refinery:override view=refinery/_head
+Copied view template file to app/views/refinery/_head.html.erb
+Copied view template file to app/views/refinery/_header.html.erb
+$ rm app/views/refinery/_header.html.erb
+```
+
+<p>This command has found two files and we don&rsquo;t want to override the <code>header</code> file so we&rsquo;ve removed it. We now have a <code>refinery</code> directory in <code>/app/views</code> that contains the <code>_head</code> file and we can make changes to it here. We&rsquo;ll alter these two lines</p>
+
+``` /app/views/refinery/_head.html.erb
+<%= stylesheet_link_tag "application", "formatting", "theme" %>
+<%= stylesheet_link_tag "home" if home_page? %>
+```
+
+<p>to look like this:</p>
+
+``` /app/views/refinery/_head.html.erb
+<%= stylesheet_link_tag "application" %>
+```
+
+<p>We can add all the files that we&rsquo;ve removed here through the asset pipeline instead by changing the <code>application.css</code> file.</p>
+
+``` /app/assets/stylesheets/application.css
+/*
+ * This is a manifest file that'll be compiled into application.css, which will include all the files
+ * listed below.
+ *
+ * Any CSS and SCSS file within this directory, lib/assets/stylesheets, vendor/assets/stylesheets,
+ * or vendor/assets/stylesheets of plugins, if any, can be referenced here using a relative path.
+ *
+ * You're free to add application-wide styles to this file and they'll appear at the top of the
+ * compiled file, but it's generally better to create a new file per style scope.
+ *
+ *= require formatting
+ *= require theme
+ *= require_self
+ *= require_tree .
+*/
+```
+
+<p>Our website looks the same now but the style sheets are all loaded as part of the <code>application.css</code> file.</p>
+
+<p>Another way to add behaviour to Refinery is through decorators. Our application has an <code>/app/decorators</code> directory and this is designed to extend Refinery&rsquo;s controllers and models. Let&rsquo;s say that we want to add a <code>before_filter</code> to the pages controller that Refinery has. We can do this in a new <code>pages_controller_decorator.rb</code> file.</p>
+
+``` /app/decorators/controllers/refinery/pages_controller_decorator.rb
+Refinery::PagesController.class_eval do
+  before_filter :authorize
+  
+private
+  def authorize
+    render text: &quot;Not authorized&quot;
+  end
+end
+``` 
+
+<p>In this class we add new behaviour to the <code>Refinery::PagesController</code> class through <code>class_eval</code>. We want to add authorization to this controller we can add a <code>before_filter</code> here to do this. Actually adding authorization is beyond the scope of this episode so we just render some text in our <code>authorize</code> method. When we reload the page now we just see &ldquo;Not authorized&rdquo; which shows that our before filter is being called.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1085/original/E333I11.png" width="1015" height="280" alt="Our before filter now stops us from viewing the protected page."/>
+</div>
+
+<h3>Further Steps</h3>
+
+<p>We&rsquo;re nearing the end of this episode now but there&rsquo;s a lot more to Refinery than we&rsquo;ve covered here. Here are a few tips on what to look at next. First of all you should go to your gemfile and uncomment some of the gems listed there. These add some great features to Refinery. You should also take a look at the comments in configuration files as there&rsquo;s a lot you can do to customize Refinery&rsquo;s behaviour here.</p> 
+
+<p>There are lot of goodies in the engine that we generated. Take a look at its  controllers and models to gain some insight into how Refinery works internally. The engine comes with a suite of specs, too, and there are also worth reading through.</p> 
+
+<p>Finally you should take a look at <a href="http://refinerycms.com/">Refinery CMS&rsquo;s website</a>. There are a lot of great resources here including a full list of guides that go into further detail than we have here. There&rsquo;s also a list of downloadable engines that can be used in your applications.</p>
