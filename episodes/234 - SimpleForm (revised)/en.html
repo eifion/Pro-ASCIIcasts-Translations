@@ -120,7 +120,7 @@ $ rails g simple_form:install
 <% end %>
 ```
 
-<p>At the top of the form we&rsquo;ve replaced <code>form_for</code> with <code>simple_form_for</code>. We&rsquo;ve also removed the code that displays the error messages as SimpleForm has a different way of displaying them. Each field in the form has been replaced with a call to <code>f.input</code>, except for the associations which need to be treaded differently. We&rsquo;ve used <code>f.association</code> for these. Finally, for the submit button, we&rsquo;ve used <code>f.button</code>. Our template is now quite a lot smaller.</p>
+<p>At the top of the form we&rsquo;ve replaced <code>form_for</code> with <code>simple_form_for</code>. We&rsquo;ve also removed the code that displays the error messages as SimpleForm has a different way of displaying them. Each field in the form has been replaced with a call to <code>f.input</code>, except for the associations which need to be treated differently. We&rsquo;ve used <code>f.association</code> for these. Finally, for the submit button, we&rsquo;ve used <code>f.button</code>. Our template is now quite a lot smaller.</p>
 
 <p>We&rsquo;ll need to restart the server for the new gem to be picked up. Once we&rsquo;ve done so we can reload the new product page to see what our form now looks like.</p>
 
@@ -310,7 +310,7 @@ en:
 
 <p>This file can be used for internationalization and we can create different versions of this file if we want to make our application&rsquo;s forms multilingual. It can also be used to change some of the configuration such as the way that required fields are marked. We could change the <code>mark</code> key&rsquo;s value so that two asterisks are shown instead of one, for example.</p> 
 
-<p>We&rsquo;ll need to restart our app for any changes to be picked up but one we do we can reload our page and see the changes we&rsquo;ve made.</p> 
+<p>We&rsquo;ll need to restart our app for any changes to be picked up but once we do we can reload our page and see the changes we&rsquo;ve made.</p> 
 
 <h3>An Alternative Gem</h3>
 
