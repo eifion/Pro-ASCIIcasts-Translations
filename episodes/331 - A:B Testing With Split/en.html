@@ -1,0 +1,140 @@
+<p>Security in Rails became a hot topic recently when <a href="https://github.com/blog/1068-public-key-security-vulnerability-and-mitigation">a vulnerability found in Github</a>  allowed a user to gain commit access to the Rails repository. The developers at Github did a remarkable job of fixing this issue but we can learn from it and make sure that we don&rsquo;t have the same mass assignment vulnerability in our own projects.</p>
+
+<h3>Exploiting Insecure Mass Assignment</h3>
+
+<p>First we&rsquo;ll show you how this vulnerability is exploited. Below is a user profile page from a Rails application.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1055/original/E026RI01.png" width="800" height="377" alt="The User Profile page."/>
+</div>
+
+<p>If we click the &ldquo;Edit Profile&rdquo; link we&rsquo;ll be taken to another page where we can edit some of the user&rsquo;s information. We want to play the role of a hacker so we&rsquo;ll change this user&rsquo;s name to &ldquo;Hacker&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1056/original/E026RI02.png" width="800" height="309" alt="Editing the name of a user."/>
+</div>
+
+<p>A user can also become an admin, but our hacker isn&rsquo;t currently one. If we look at the database schema for this application we&rsquo;ll see that a user is marked as an admin through a simple boolean field in the <code>users</code> table.</p>
+
+``` /db/schema.rb
+ActiveRecord::Schema.define(:version => 20120308190940) do
+
+  create_table "projects", :force => true do |t|
+    t.integer  "user_id"
+    t.string   "name"
+    t.datetime "created_at", :null => false
+    t.datetime "updated_at", :null => false
+  end
+
+  create_table "users", :force => true do |t|
+    t.string   "name"
+    t.boolean  "admin",      :default => false, :null => false
+    t.datetime "created_at",                    :null => false
+    t.datetime "updated_at",                    :null => false
+  end
+
+end
+```
+
+<p>When the user edits their profile there&rsquo;s no field in the form for changing the <code>admin</code> field so we should be safe from malicious users who want to make themselves administrators, yes? Well, no, the user can send anything they want to the server and with most modern browsers offering developer tools which make it easy to alter the current page it&rsquo;s easy to change the name of the form field so that instead of modifying the name field is modifies a different one. We&rsquo;ll change the name of the text field so that it&rsquo;s <code>user[admin]</code> instead of <code>user[name]</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1057/original/E026RI03.png" width="801" height="400" alt="We can change the name of the text field with the browser&rsquo;s development tools."/>
+</div>
+
+<p>If we enter a value of <code>1</code> in this field now and update the user they are now an administrator.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1058/original/E026RI04.png" width="800" height="423" alt="Our user is now an admin."/>
+</div>
+
+<p>How is this possible? This issue is related to how the controller assigns attributes to the model. If we look at the update action, which is triggered when the form is submitted, we&rsquo;ll see that it calls <code>update_attributes</code>.</p>
+
+
+``` /app/controllers/users_controller.rb
+def update
+  @user = User.find(params[:id])
+  if @user.update_attributes(params[:user])
+    redirect_to @user, notice: "Profile has been updated."
+  else
+    render "edit"
+  end
+end
+```
+
+<p>This method passes all the attributes from the form into the <code>User</code> instance. This is known as mass assignment and while it&rsquo;s convenient it means that a user can set any attribute on the <code>User</code> model that they want.</p>
+
+<h3>Protecting Our Application</h3>
+
+<p>There are many ways that we can protect ourselves from this vulnerability. One option is to modify the model and user <code>attr_protected</code> to define the attributes that we don&rsquo;t want to be settable through mass assignment, in this case <code>admin</code>.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :projects
+  attr_protected :admin
+end
+```
+
+<p>We use <code>attr_protected</code> to define a black list of attributes that can&rsquo;t be set by mass assignment. We can test this now by reloading the edit user form, changing the name of the text field to <code>user[admin]</code> again then setting the value in the textbox to <code>0</code> and submitting the form. When we do this we get a MassAssignmentSecurity::Error as we&rsquo;ve tried to modify a protected attribute.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1059/original/E026RI05.png" width="800" height="552" alt="Attempting to modify a protected attribute now throws an error."/>
+</div>
+
+<h3>A Better Approach</h3>
+
+<p>We&rsquo;ve successfully protected our application from this attack now so using <code>attr_protected</code> seems to have worked in protecting the <code>admin</code> attribute. We shouldn&rsquo;t really be protecting out models in this way, however, as it&rsquo;s easy to miss attributes that need protecting. For example a user has many <code>projects</code> and this <code>has_many</code> association adds an attribute to <code>User</code> called <code>project_ids</code>. We can try changing the name of the text field to this and see if we can modify something we shouldn&rsquo;t be able to this way. This field expects an array of values so we&rsquo;ll need to add empty square brackets after the name to make it <code>user[project_ids][]</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1060/original/E026RI06.png" width="800" height="448" alt="We can modify the name of the text field again to alter the user's projects."/>
+</div>
+
+<p>If we enter the <code>id</code> of a project into the text field now and submit it we&rsquo;ll see that we now own a project that used to be assigned to another user.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com//system/photos/1061/original/E026RI07.png" width="801" height="400" alt="The malicious user now owns a project which isn&rsquo;t theirs."/>
+</div>
+
+<p>We&rsquo;ve now successfully taken over someone else&rsquo;s project and this should be enough to convince us not to use <code>attr_protected</code>. Instead we should use <code>attr_accessible</code> which behaves like a whitelist and lets us specify the attributes we want to be able to be set through mass assignment.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :projects
+  attr_accessible :name
+end
+```
+
+<p>We&rsquo;re now safe from malicious users setting the admin attribute, the <code>project_ids</code> or any attribute on User apart from name. To make our application secure we should go through all its models that are updated by mass assignment and use <code>attr_accessible</code> in each one to define the attributes that can be modified. It&rsquo;s easy to miss a model when we do this and it would be nice if there was a way to ensure that it was set in every one. In recent versions of Rails there&rsquo;s a commented-out line in the <code>application.rb</code> file called <code>active_record.whitelist_attributes</code>. Setting its value to true this will protect us from having models without <code>attr_accessible</code> set.</p>
+
+``` /config/application.rb
+# Enforce whitelist mode for mass assignment.
+# This will create an empty whitelist of attributes available for mass-assignment for all models
+# in your app. As such, your models will need to explicitly whitelist or blacklist accessible
+# parameters by using an attr_accessible or attr_protected declaration.
+config.active_record.whitelist_attributes = true
+```
+
+<p>We&rsquo;ll need to restart the server for this change to be picked up. Once we&rsquo;ve done any model that doesn&rsquo;t have <code>attr_accessible</code> set will not be able to use mass assignment. If we try creating a new <code>Project</code> now we&rsquo;ll see an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1062/original/E026RI08.png" width="800" height="448" alt="Trying to modify any model that doesn&rsquo;t have attr_accessor set will now throw an error."/>
+</div>
+
+<p>We haven&rsquo;t set <code>attr_accessible</code> on <code>Project</code> and so now we can&rsquo;t set its <code>name</code> attribute. To fix this we just need to add it.</p>
+
+``` /app/models/project.rb
+class Project < ActiveRecord::Base
+  belongs_to :user
+  attr_accessible :name
+end
+```
+
+<p>We&rsquo;ll need to test our application thoroughly now to make sure that each model has a call to <code>attr_accessible</code>.</p>
+
+<p>There&rsquo;s another configuration option related to this in recent version of Rails. In the development config file there&rsquo;s an option called <code>mass_assignment_sanitizer</code>. By default this is set to <code>strict</code> which means that an exception is raised when mass assignment fails. Earlier versions of Rails would just ignore these errors and fail silently which made these issues hard to debug. This option is also set to <code>strict</code> in test mode but not in production. These errors fail silently in production which is generally the behaviour we want. The protection still happens but no exception will be raised if there&rsquo;s an error.</p>
+
+<h3>Making attr_accessible Dynamic</h3>
+
+<p>There&rsquo;s often a requirement to make <code>attr_accessible</code> dynamic depening upon the current user. For example we might want the admin field to be set through the form but only if the current user is an administrator. This was covered in <a href="http://railscasts.com/episodes/237-dynamic-attr-accessible">episode 237</a> so if you need to do that take a look at that episode.</p>
+
+ 
