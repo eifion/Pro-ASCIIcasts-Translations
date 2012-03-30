@@ -1,0 +1,316 @@
+<p>下の図はボードゲームの販売管理用のアプリケーションの画面です。</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1038/original/E234RI01.png" width="800" height="500" alt="ボードゲームアプリケーション"/>
+</div>
+
+<p>ゲームを新規作成あるいは編集するためのフォームはかなり複雑です。そこには、テキストボックス、選択リスト、チェックボックス、ラジオボタンという複数種類の入力フィールドがあります。</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1039/original/E234RI02.png" width="800" height="624" alt="ゲーム編集用フォーム"/>
+</div>
+
+<p>これらの中には関連モデル用のフィールドも含まれます。<code>Product</code>は<code>Publisher</code>に属しており、これのための選択メニューがあります。また、<code>Category</code>とは多対多の関係を持っており、一連のチェックボックスで表現されています。およそ想像がつきますが、このフォームのビューテンプレートには多くのコードが含まれます。</p> 
+
+``` /app/views/products/_form.html.erb
+<%= form_for(@product) do |f| %>
+  <% if @product.errors.any? %>
+    <div class="error_messages">
+      <h2><%= pluralize(@product.errors.count, "error") %>  prohibited this product from being saved:</h2>
+
+      <ul>
+      <% @product.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+      </ul>
+    </div>
+  <% end %>
+ <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="field">
+    <%= f.label :price %><br />
+    <%= f.text_field :price %>
+  </div>
+  <div class="field">
+    <%= f.label :released_on %><br />
+    <%= f.date_select :released_on %>
+  </div>
+  <div class="field">
+    <%= f.check_box :discontinued %>
+    <%= f.label :discontinued %>
+  </div>
+  <div class="field">
+    <%= f.label :rating %><br />
+    <%= f.radio_button :rating, 1 %>  1
+    <%= f.radio_button :rating, 2 %> 2
+    <%= f.radio_button :rating, 3 %> 3
+    <%= f.radio_button :rating, 4 %> 4
+    <%= f.radio_button :rating, 5 %> 5
+  </div>
+  <div class="field">
+    <%= f.label :publisher_id %><br />
+    <%= f.collection_select :publisher_id, Publisher.all, :id, :name, include_blank: true %>
+  </div>
+  <div class="field">
+    <%= hidden_field_tag "product[category_ids][]", nil %>
+    <% Category.all.each do |category| %>
+      <%= check_box_tag "product[category_ids][]", category.id, @product.category_ids.include?(category.id), id: dom_id(category) %>
+      <%= label_tag dom_id(category), category.name %><br />
+    <% end %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>ここにある大量のマークアップでフォームが生成されていますが、今回のエピソードでは<a href="https://github.com/plataformatec/simple_form">SimpleForm</a>というgemを使って、フォームのビューテンプレートを大幅に削減する方法を紹介します。SimpleFormは複雑なフォームの作成を簡単にするためのフォームビルダーを提供します。そのために必要な作業は、<code>form_for</code>を<code>simple_form_for</code>に変えて、<code>input</code>メソッドを使うだけで、渡された属性のタイプに適したフォームを生成します。今回のエピソードではこのgemを使ってテンプレートのコード量を減らします。</p>
+
+<h3>アプリケーションにSimpleFormを追加する</h3>
+
+<p>SimpleFormをインストールするためにgemfileにgemを追加して<code>bundle</code>コマンドを実行します。</p>
+
+``` /Gemfile
+source 'https://rubygems.org'
+
+gem 'rails', '3.2.2'
+
+# Bundle edge Rails instead:
+# gem 'rails', :git => 'git://github.com/rails/rails.git'
+
+gem 'sqlite3'
+
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer'
+
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'simple_form'
+```
+
+<p>gemがインストールされたらSimpleFormの<code>install</code>ジェネレータを実行します。</p>
+
+``` terminal
+$ rails g simple_form:install
+```
+
+<p>このアプリケーションで、<a href="http://railscasts.com/episodes/329-more-on-twitter-bootstrap">エピソード329</a>のようにTwitter Bootstrapを使用している場合は、ここで<code>--bootstrap</code>オプションを指定します。このジェネレータがいくつかの設定ファイルとscaffoldジェネレータのフォームテンプレートのオーバーライドを生成します。設定ファイルについてはエピソードの後半で詳しく見ていきます。テンプレートの整理を始めるために、まずSimpleFormに切り替えます。変更後のコードは次のようになります。</p>
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for(@product) do |f| %>
+  <%= f.input :name %>
+  <%= f.input :price %>
+  <%= f.input :released_on %>
+  <%= f.input :discontinued %>
+  <%= f.input :rating %>
+  <%= f.association :publisher %>
+  <%= f.association :categories %>
+  <%= f.button :submit %>
+<% end %>
+```
+
+<p>フォームの最初の部分で、<code>form_for</code>を<code>simple_form_for</code>に置き換えました。エラーメッセージを表示するコードについても、SimpleFormは違う方法をとるため、削除しました。フォーム上の各フィールドは、違う処理が必要な関連のものを除いて、<code>f.input</code>の呼び出しに置き換えられました。関連用には<code>f.association</code>を使用しました。最後に送信ボタン用に<code>f.button</code>を使用しました。これでテンプレートはかなり小さくなりました。</p>
+
+<p>新しいgemを有効化させるためにサーバを再起動します。productの新規作成ページをリロードすると、変更されたフォームが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1040/original/E234RI03.png" width="800" height="446" alt="SimpleFormが出力したフォーム"/>
+</div>
+
+<h3>スタイルを追加する</h3>
+
+<p>フォームはきれいとは言えませんがスタイルを設定することで大幅に改善できます。新しく<code>forms.css.scss</code>を作成し、そこに少しCSSを追加します。</p>
+
+``` /app/assets/stylesheets/forms.css.scss
+.simple_form {
+  $indent: 120px;
+  label {
+    float: left;
+    width: $indent - 20px;
+    text-align: right;
+    margin: 2px 10px;
+    &.radio, &.checkbox {
+      float: none;
+      margin: 0;
+      width: auto;
+      text-align: left;
+    }
+    &.checkbox {
+      display: block;
+      margin-left: $indent;
+    }
+    &.radio { margin-right: 10px; }
+  }
+  div.input { margin-bottom: 10px;}
+  input.radio_buttons, input.check_boxes {
+    margin-right: 5px;
+  }
+  .btn { margin-left: $indent; }
+  .alert-error {
+    color: #D00;
+    margin-bottom: 10px;
+    font-weight: bold;
+  }
+  .hint, .error {
+    clear: left;
+    margin-left: $indent;
+    font-size: 12px;
+    color: #D00;
+    display: block;
+  }
+  .hint {
+    color: #555;
+    font-style: italic;
+  }
+}
+```
+
+<p>もちろんこのCSSを自分の好みに合うように変更することができます。フォームをリロードすると、ずっときれいになっています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1041/original/E234RI04.png" width="800" height="519" alt="スタイル適用後のフォーム"/>
+</div>
+
+<p>SimpleFormが、属性のタイプによって違う種類のフォームフィールドを使用しているのがわかります。文字列の値の場合にはテキストフィールド、数値には数字フィールド、日付には選択リスト、ブール値の場合はチェックボックスが、それぞれ使われています。関連についても正しく処理されていて、<code>Publisher</code>との<code>belongs_to</code>の関係は選択リストで表現され、<code>Category</code>との多対多の関係は複数選択ができるようになっています。</p>
+
+<h3>フィールドをカスタマイズする</h3>
+
+<p><a href="http://simple-form.plataformatec.com.br/#mappings-inputs-available">ドキュメント</a>を見ると、各種のデータ型がそれぞれ違うフォームフィールドのタイプに対応づけられていることがわかります。しかし、あるデータ型に対していつもデフォルトのフォームフィールドを設定したいとは限りません。その場合はどうすればいいでしょうか? 例えば、categoryで複数選択フィールドではなくチェックボックスを使用したいとします。この場合は<code>as</code>オプションを使用します。</p> 
+
+``` /app/views/products/_form.html.erb
+<%= f.association :categories, as: :check_boxes %>
+```
+
+<p><code>input</code>と<code>association</code>に対して多くの種類のオプションを指定することが可能です。例えば<code>released_on</code>フィールドの横に表示されているラベルを変更したいとします。その場合は<code>label</code>オプションを使用します。</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :released_on, label: "Release Date" %>
+```
+
+<p>もう一つの便利なオプションが<code>hint</code>です。例えば価格フィールドにヒントを追加して、フィールドにどの通貨単位で入力すればいいかを伝えます。</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :price, hint: "price should be in USD" %>
+```
+
+<p>ページをリロードすると、変更を確認できます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1042/original/E234RI05.png" width="800" height="528" alt="フォームウィジェットを変更した後のフォーム"/>
+</div>
+
+<p>次に少し進んだ使い方を試します。レーティングフィールドは、今は数値フィールドとして表示されていますが、5つのラジオボタンとして表示するように変更して商品を1から5でレーティングできるようにします。この変更は簡単です。<code>collection</code>オプションと一緒に配列か範囲を指定します。</p> 
+
+``` /app/views/products/_form.html.erb
+<%= f.input :rating, collection: 1..5 %>
+```
+
+<p>レーティングフィールドは1から5を選択できるリストとして表示されるように変更されました。ラジオボタンに変更したい場合、その方法はおそらく推測できるでしょう。</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.input :rating, collection: 1..5, as: :radio_buttons %>
+```
+
+<p>レーティングが5つのラジオボタンとして表示されました。</p> 
+
+<h3>入力チェック(Validation)</h3>
+
+<p>入力エラーはどうすればいいでしょうか? 今は<code>Product</code>モデルには入力チェックがないので、まず名前フィールドを必須入力に設定してみましょう。</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :publisher
+  has_many :categorizations
+  has_many :categories, through: :categorizations
+  validates_presence_of :name
+end
+```
+
+<p>フィールドに何も入力せずにフォームを送信しようとすると、名前フィールドの横にエラーメッセージが表示されます。SimpleFormがフィールドの横に必須入力であることを示すアスタリスクを表示していることにも注目してください。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1043/original/E234RI06.png" width="800" height="309" alt="名前フィールドに値が入力されていないとエラーが表示される"/>
+</div>
+
+<p>入力チェックを設定できたので、画面上部に<code>error_notification</code>の呼び出しを追加します。これによって、フォームの上部にユーザに対する赤いテキストが表示されます。これはカスタマイズできるようなので、テキストの内容とスタイルをアプリケーションに合うように変更します。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1044/original/E234RI07.png" width="800" height="309" alt="フィールドのいずれかが無効だった場合にフォームにエラーが表示される"/>
+</div>
+
+<p>最後にもう一つ、テンプレートに<code>f.error :base</code>の呼び出しを追加します。</p> 
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for(@product) do |f| %>
+  <%= f.error_notification %>
+  <%= f.input :name %>
+  <%= f.input :price, hint: "price should be in USD" %>
+  <%= f.input :released_on, label: "Release Date" %>
+  <%= f.input :discontinued %>
+  <%= f.input :rating, collection: 1..5, as: :radio_buttons %>
+  <%= f.association :publisher %>
+  <%= f.association :categories, as: :check_boxes %>
+  <%= f.error :base %>
+  <%= f.button :submit %>
+<% end %>
+```
+
+<p><code>base</code>属性にエラーがある場合、これはエラーがそれ以外の属的に該当しない場合のことですが、ボタンの上の部分に表示されます。これが、フォームを希望通りの見た目にするために行う最後の修正です。テンプレートを50行以上のかなり複雑なコードからずっとすっきりした12行のコードに減らしました。</p>  
+
+<h3>SimpleFormの設定ファイル</h3>
+
+<p>SimpleFormのデフォルトの振る舞いを変えたい場合は、設定ファイルで変更できる部分がたくさんあります。まず最初に、<code>simple_form:install</code>ジェネレータによって生成された<code>simple_form</code>初期化ファイルを見てみましょう。このファイルは、コメント部分に大量のドキュメントが含まれており長すぎてすべてをここに表示することはできないので、SimpleFormの<a href="https://github.com/plataformatec/simple_form/blob/master/lib/generators/simple_form/templates/config/initializers/simple_form.rb.tt">Githubページ</a>を参照してください。</p>
+
+<p>このファイルの最初の設定オプションはデフォルトのラッパーを定義しています。ラッパーはSimpleForm 2の新機能で、あるフィールドがジェネレータでどう生成されるかを規定します。複数のシナリオに対応するためにラッパーをいくつでも作成することができますが、この設定ファイルの各オプションが何をおこなうのかを理解するためにこのファイルを通して読むことをお勧めします。例として、デフォルトのテキストボックスの長さはここで作ろうとしているフォームには広すぎるので<code>default_input_size</code>オプションを設定します。</p>
+
+``` /config/initializers/simple_form.rb
+# Default size for text inputs.
+config.default_input_size = 30
+```
+
+<p>ジェネレータが自動的に作成したもう一つのファイルが<code>locales</code>ディレクトリにあります。</p>
+
+``` /config/locales/simple_form.en.yml
+en:
+  simple_form:
+    "yes": 'Yes'
+    "no": 'No'
+    required:
+      text: 'required'
+      mark: '*'
+      # You can uncomment the line below if you need to overwrite the whole required html.
+      # When using html, text and mark won't be used.
+      # html: '<abbr title="required">*</abbr>'
+    error_notification:
+      default_message: "Some errors were found, please take a look:"
+    # Labels and hints examples
+    # labels:
+    #   password: 'Password'
+    #   user:
+    #     new:
+    #       email: 'E-mail para efetuar o sign in.'
+    #     edit:
+    #       email: 'E-mail.'
+    # hints:
+    #   username: 'User name to sign in.'
+    #   password: 'No special characters, please.'
+```	
+
+<p>このファイルは国際化のために使用され、フォームを多言語対応させるためにこのファイルの別バージョンを作成します。またこのファイルは必須フィールドに付ける印を変える場合などにも使うことができます。例えば<code>mark</code>キーの値を変更することでアスタリスクを1つではなく2つ表示されるように変更することができます。</p> 
+
+<p>変更を有効化するためにアプリケーションを再起動し、ページをリロードすると変更箇所を確認することができます。</p> 
+
+<h3>代替のgem</h3>
+
+<p>SimpleFormの代替の一つが<a href="https://github.com/justinfrench/formtastic">Formtastic</a>です。このgemも同じような働きをします。特にフォームが生成される方法は似ているので、必要であればこれら2つのgemを切り替えて使用することも可能でしょう。大きな違いは、Formtasticにはフォームにスタイルを設定するためにインクルードするスタイルシートが含まれているという点です。</p>
