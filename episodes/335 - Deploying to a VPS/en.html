@@ -1,0 +1,646 @@
+<p>We all know how easy it is to create a Rails application but when it&rsquo;s time to share it with the world is it as easy to deploy one? The <a href="http://rubyonrails.org/deploy">deployment page on the official Rails site</a> says &ldquo;Deploying Ruby on Rails is easy&rdquo; and it&rsquo;s certainly become easier over the years but the process can be rather overwhelming as there are so many techniques and methods to choose from. One option is to deploy to our application to the cloud with a service like <a href="http://www.heroku.com/">Heroku</a> and while these services are great sometimes we need more control over how the server is set up. In these cases it&rsquo;s better to deploy to a Virtual Private Server through a service such as <a href="http://www.linode.com/">Linode</a> or <a href="http://webbynode.com/">Webbynode</a>. For a reasonable monthly amount these services give us a decently-sized server that should be perfectly adequate for hosting a small to medium-sized Rails application. The tricky part with these services is that you&rsquo;re pretty much on your own. You&rsquo;re provided with a blank server and it&rsquo;s up to you to set it up from scratch. In this episode we&rsquo;ll show you how to do just that.</p>
+
+<h3>Our Production Stack</h3>
+
+<p>First we&rsquo;ll go over the production stack that our application will run on. For the operating system we&rsquo;ll be using <a href="http://www.ubuntu.com/ubuntu">Ubuntu 10.04</a>. While you can choose a different Linux distribution if you prefer some of the commands we&rsquo;ll be using in this episode will be different if you do. We&rsquo;ll use <a href="http://nginx.com/">Nginx</a> as the web server but alternatively you could use Apache instead. To serve the Rails application we&rsquo;ll use <a href="http://unicorn.bogomips.org/">Unicorn</a>, although you could use <a href="http://www.modrails.com/">Phusion Passenger</a>. Both Unicorn and Nginx were covered in more details in <a href="http://railscasts.com/episodes/293-nginx-unicorn">episode 293</a>. Our application will store its data in a <a href="http://www.postgresql.org/">PostgreSQL</a> database. This has had a lot of attention recently in the Rails world, but <a href="http://www.mysql.com/">MySQL</a> is also an option. To manage and install Ruby on the server we&rsquo;ll use <a href="https://github.com/sstephenson/rbenv">rbenv</a> but we could instead use <a href="https://rvm.beginrescueend.com/">rvm</a> or compile Ruby from source. We&rsquo;ll be hosting our application on a Linode VPS, although any VPS service should serve as well. Note that although Railscasts is sponsored by Linode, this isn&rsquo;t a factor in choosing to use them here.</p>
+
+<h3>Creating an Application to Deploy</h3>
+
+<p>Before we can deploy a Rails application we need to create one so we&rsquo;ll create an app called blog and use the <code>-d</code> option to configure to use PostgreSQL as its database.</p>
+
+``` terminal
+$ rails new blog -d postgresql
+```
+
+<p>If we have an existing Rails app that uses Sqlite that we want to switch over to MySQL or PostgreSQL we just need to alter the <code>database.yml</code> file to use the appropriate database settings then modify the gemfile to include the relevant gem.</p> 
+
+<p>We&rsquo;ll generate some scaffolding for this application so that we have some dynamic content to test our application after we&rsquo;ve deployed it. We&rsquo;ll create an <code>article</code> scaffold with name and content fields.</p>
+
+``` terminal
+$ rails g scaffold article name content:text
+```
+
+<p>Now that we have our basic application set up it&rsquo;s time to set up our server so that we can deploy it.</p>
+
+<h3>Configuring a Linode VPS</h3>
+
+<p>We&rsquo;ve already purchased a Linode server and signed in to the website. We&rsquo;ll start by rebuilding our server, selecting the default Ubuntu 10.04 LTS distribution and entering a root password.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1089/original/E335I01.png" width="944" height="537" alt="Selecting the OS and setting a password for our VPS on the Linode dashboard."/>
+</div>
+
+Once our server has been rebuilt we can click &ldquo;Boot&rdquo; on the dashboard to start it up.
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1090/original/E335I02.png" width="944" height="527" alt="Booting up our VPS."/>
+</div>
+
+<p>When we click on the &ldquo;Remote Access&rdquo; tab we&rsquo;ll see an <code>ssh</code> command for logging into our server. Once our server has booted we can use this to log in.</p>
+
+``` terminal
+$ ssh root@178.xxx.xxx.xxx
+```
+
+<p>We&rsquo;ll need to type in the root password we entered when we set our server up. Once we&rsquo;ve done so we&rsquo;ll be logged in to our VPS. The first command we should run on our new server is <code>apt-get update</code>. This will update all the packages on the server to the latest version.</p> 
+
+``` terminal
+root@li349-144:~# apt-get update
+```
+
+<p>Once this has finished we&rsquo;ll install a few packages that will come in useful later.</p>
+
+``` terminal
+root@li349-144:~# apt-get -y install curl git-core python-software-properties
+```
+
+<p>The last of these packages is installed so that we can easily add new repositories to Apt. Next we&rsquo;ll install Nginx. We could use <code>apt-get</code> to do this but this will install quite an old version. One way of getting a more recent version is to add a new repository and we can do that by running this command:</p>
+
+``` terminal
+root@li349-144:~# add-apt-repository ppa:nginx/stable
+```
+
+<p>After this new repository has been added we&rsquo;ll need to run <code>apt-get update</code> again. When that command has finished we can install Nginx.</p>
+
+``` terminal
+root@li349-144:~# apt-get update
+root@li349-144:~# apt-get -y install nginx
+```
+
+<p>We can now start Nginx up.</p>
+
+``` terminal
+root@li349-144:~# service nginx start
+Starting nginx: nginx.
+```
+
+<p>We can check that this is working by opening up a browser and visit our server&rsquo;s IP address.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1091/original/E335I03.png" width="800" height="309" alt="Checking that our nginx server is running."/>
+</div>
+
+<p>If we see &ldquo;Welcome to nginx!&rdquo; then our server is working.</p>
+
+<h3>Installing PostgreSQL</h3>
+
+<p>We&rsquo;ll install PostgreSQL next. We want the latest version of this, too, so we&rsquo;ll add another repository first.</p> 
+
+``` terminal
+root@li349-144:~# add-apt-repository ppa:pitti/postgresql
+```
+
+<p>We&rsquo;ll need to run <code>apt-get</code> update again and then we can install PostgreSQL along with the libpq-dev package which will help us to build the Postgres gem.</p>
+
+``` terminal
+root@li349-144:~# apt-get update
+root@li349-144:~# apt-get install postgresql libpq-dev
+```
+
+<p>This may take a minute to install but once it&rsquo;s finished we&rsquo;ll have Postgres set up under a separate user account. To access Postgres through the command line we run the <code>psql</code> command which we need to do through <code>sudo</code>.</p>
+
+``` terminal
+root@li349-144:~# sudo -u postgres psql
+```
+
+<p>It&rsquo;s a good idea to set a password for the <code>postgres</code> user and we can do so with the <code>\password</code> command.</p>
+
+``` terminal
+postgres=# \password
+Enter new password: 
+Enter it again:
+```
+
+<p>While we&rsquo;re in the Postgres command line we&rsquo;ll create a user and database for our Rails application.</p>
+
+``` terminal
+postgres=# create user blog with password 'secret';
+CREATE ROLE
+postgres=# create database blog_production owner blog;
+CREATE DATABASE
+```
+
+<p>Postgres is now set up on our server. We quit out of <code>psql</code> of it by running <code>\quit</code>.</p>
+
+<h3>Postfix and Node.js</h3>
+
+<p>If we want to send email from our application we can install Postfix. </p>
+
+``` terminal
+root@li349-144:~# apt-get install postfix
+```
+
+<p>As this installs it will bring up a dialog box that let&rsquo;s us choose the configuration type. We&rsquo;ll stick with the default of &ldquo;Internet Site&rdquo; and keep the default &ldquo;System mail name&rdquo; on the next page.</p>
+
+<p>There&rsquo;s one more thing we want to install through Apt: node.js. You might wonder why we need this but it includes a great way to execute JavaScript and this will help us with the asset pipeline in our application. We need to add another repository before we can do this.</p>
+
+``` terminal
+root@li349-144:~# add-apt-repository ppa:chris-lea/node.js
+root@li349-144:~# apt-get update
+root@li349-144:~# apt-get -y install nodejs
+```
+
+<h3>Installing Ruby </h3>
+
+<p>We&rsquo;re more than half way through setting up our VPS now. The main thing left to do is to install Ruby. Before we do that we&rsquo;ll set up a new user account. We&rsquo;ve been running everything as root so we&rsquo;ll create a new user called <code>deployer</code>.</p>
+
+``` terminal
+root@li349-144:~# adduser deployer --ingroup admin
+Adding user `deployer' ...
+Adding new user `deployer' (1000) with group `admin' ...
+Creating home directory `/home/deployer' ...
+Copying files from `/etc/skel' ...
+Enter new UNIX password: 
+Retype new UNIX password: 
+passwd: password updated successfully
+Changing the user information for deployer
+Enter the new value, or press ENTER for the default
+	Full Name []: 
+	Room Number []: 
+	Work Phone []: 
+	Home Phone []: 
+	Other []: 
+Is the information correct? [Y/n] Y
+```
+
+<p>We add this user to the admin group so that they have sudo privileges. We&rsquo;ll need to give this user a password but we can leave all the other fields at their defaults. We can now switch to that user then move to its home directory.</p>
+
+``` terminal
+root@li349-144:~# su deployer
+To run a command as administrator (user "root"), use "sudo <command>".
+See "man sudo_root" for details.
+
+deployer@li349-144:/root$ cd ~
+```
+
+<p>Next we&rsquo;ll install Ruby with rbenv. To make this easier we&rsquo;ll use a script called <a href="https://github.com/fesplugas/rbenv-installer">rbenv-installer</a> which is much more convenient than running all the commands by hand. We need to have Git and Curl installed to run it but as we did that earlier we&rsquo;re ready to go.</p>
+
+``` terminal
+deployer@li349-144:~$ curl -L https://raw.github.com/fesplugas/rbenv-installer/master/bin/rbenv-installer | bash
+```
+
+<p>When this command finishes it will tell us us add some lines to load rbenv. To do this we&rsquo;ll add them to the <code>.bashrc</code> file.</p>
+
+``` terminal
+if [ -d \$HOME/.rbenv ]; then
+  export PATH="$HOME/.rbenv/bin:$PATH"
+  eval "$(rbenv init -)"
+fi
+```
+
+<p>To edit the file we&rsquo;ll use Vim.</p>
+
+``` terminal
+$ vim ~/.bashrc
+```
+
+<p>There&rsquo;s already quite a lot in this file but we need to pay attention to this line:</p>
+
+``` ~/.bashrc
+# If not running interactively, don't do anything
+[ -z "$PS1" ] && return
+```
+
+<p>This tells the file to stop running if it&rsquo;s not in an interactive shell. It&rsquo;s important to load rbenv before this line so that it will work with Capistrano deployments, like this:</p>
+
+``` ~/.bashrc
+if [ -d $HOME/.rbenv ]; then
+  export PATH="$HOME/.rbenv/bin:$PATH"
+  eval "$(rbenv init -)"
+fi
+
+# If not running interactively, don't do anything
+[ -z "$PS1" ] && return
+```
+
+<p>Once we&rsquo;ve saved <code>.bashrc</code> we&rsquo;ll need to reload it.</p>
+
+``` terminal
+deployer@li349-144:~$ . ~/.bashrc
+```
+
+<p>We now have the <code>rbenv</code> command available but before we use it to install Ruby it&rsquo;s important to run this command first.</p>
+
+``` terminal
+deployer@li349-144:~$ rbenv bootstrap-ubuntu-10-04
+```
+
+<p>This installs some packages that Ruby depends on. We&rsquo;re ready to install Ruby itself now and we&rsquo;ll install the latest version, currently <code>1.9.3-p125</code>.</p>
+
+``` terminal
+deployer@li349-144:~$ rbenv install 1.9.3-p125
+```
+
+<p>This command will take a good while to run so it&rsquo;s a good time now to go and make a cup of tea. When it finally does finish we can make it the default Ruby version with <code>rbenv global</code>.</p>
+
+``` terminal
+deployer@li349-144:~$ rbenv global 1.9.3-p125
+deployer@li349-144:~$ ruby -v
+ruby 1.9.3p125 (2012-02-16 revision 34643) [i686-linux]
+```
+<p>Next we&rsquo;ll install Bundler, then run <code>rbenv rehash</code> so that we can access the bundle executable.</p>
+
+``` terminal
+deployer@li349-144:~$ gem install bundler --no-ri --no-rdoc
+deployer@li349-144:~$ rbenv rehash
+deployer@li349-144:~$ bundle -v
+Bundler version 1.1.3
+```
+
+<h3>Preparing Our Application</h3>
+
+<p>Now that our VPS is set up it&rsquo;s time to prepare our Rails application for deployment. We&rsquo;ll need to publish its source code somewhere so that our local development machine and the server can both access it. We&rsquo;ll use Github for this so we&rsquo;ll attempt an ssh connection to github.com  on our server so that it&rsquo;s known as a host.</p>
+
+``` terminal
+deployer@li349-144:~$ ssh git@github.com
+The authenticity of host 'github.com (207.97.227.239)' can't be established.
+RSA key fingerprint is 16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48.
+Are you sure you want to continue connecting (yes/no)? yes
+Warning: Permanently added 'github.com,207.97.227.239' (RSA) to the list of known hosts.
+Permission denied (publickey).
+```
+
+<p>Now when we deploy through Capistrano we won&rsquo;t run any snags with it being unknown. We haven&rsquo;t yet added our application to Github. To do so we just need to visit github.com, sign in, click &ldquo;New Repository&rdquo; then enter a name for our project. We&rsquo;ll call it &ldquo;blog&rdquo; and make it private.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1092/original/E335I04.png" width="834" height="574" alt="Creating a new Github repository."/>
+</div>
+
+<p>When we click &ldquo;Create repository&rdquo; we&rsquo;ll see instructions for setting our application up with Github. Our application&rsquo;s source code isn&rsquo;t get in a Git repository so we&rsquo;ll need to do this first. Even though our application isn&rsquo;t in a Git repository a <code>.gitignore</code> file will have been created when we created our app. We&rsquo;ll edit this now and add the <code>database.yml</code> file to the list of ignored files. We want to configure this file manually on the server and we don&rsquo;t want to put the database&rsquo;s password in the repository.</p>
+
+``` /.gitignore
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+#
+# If you find yourself ignoring temporary files generated by your text editor
+# or operating system, you probably want to add a global ignore instead:
+#   git config --global core.excludesfile ~/.gitignore_global
+
+# Ignore bundler config
+/.bundle
+
+# Ignore the default SQLite database.
+/db/*.sqlite3
+
+# Ignore all logfiles and tempfiles.
+/log/*.log
+/tmp
+
+/config/database.yml
+```
+
+<p>To make it easier to configure the <code>database.yml</code> file on the server we&rsquo;ll create an example configuration file that we can edit.</p>
+
+``` terminal
+$ cp config/database.yml config/database.example.yml
+```
+
+<p>We&rsquo;re ready to create our repository now. We&rsquo;ll add all the application&rsquo;s files to it and then commit them.</p>
+
+``` terminal
+$ git init
+Initialized empty Git repository in /Users/eifion/blog/.git/
+$ git add .
+$ git commit -m "Initial commit"
+```
+
+<p>Now we can follow the instructions that Github provided to push our application to it.</p>
+
+``` terminal
+$ git remote add origin git@github.com:eifion/blog.git
+$ git push origin master
+Counting objects: 86, done.
+Delta compression using up to 2 threads.
+Compressing objects: 100% (74/74), done.
+Writing objects: 100% (86/86), 30.02 KiB, done.
+Total 86 (delta 2), reused 0 (delta 0)
+To git@github.com:eifion/blog.git
+ * [new branch]      master -> master
+``` 
+ 
+<p>Our project is now hosted on Github.</p>
+
+<h3>Deploying With Capistrano</h3>
+
+<p>We&rsquo;ll use Capistrano to handle the deployment. We&rsquo;ll need to add its gem to our gemfile and as it&rsquo;s already included in the file, but commented out, we&rsquo;ll just need to uncomment the relevant line. As we&rsquo;ll be using Unicorn too we&rsquo;ll uncomment the line that references that gem too. As ever we&rsquo;ll need to run bundle to install the gems afterwards.</p>
+
+``` /Gemfile
+# Use unicorn as the app server
+gem 'unicorn'
+
+# Deploy with Capistrano
+gem 'capistrano'
+```
+
+<p>Next we&rsquo;ll run the <code>capify</code> command to set up Capistrano in our application.</p>
+
+``` terminal
+$ capify .
+[add] writing './Capfile'
+[add] writing './config/deploy.rb'
+[done] capified!
+```
+
+<p>This command creates a <code>Capfile</code> and a <code>config/deploy.rb</code> file. We&rsquo;ll need to edit both of these. We&rsquo;ll start with the <code>Capfile</code>.</p>
+
+``` /Capfile
+load 'deploy'
+# Uncomment if you are using Rails' asset pipeline
+load 'deploy/assets'
+Dir['vendor/gems/*/recipes/*.rb','vendor/plugins/*/recipes/*.rb'].each { |plugin| load(plugin) }
+load 'config/deploy' # remove this line to skip loading any of the default tasks
+```
+
+<p>The second line in this file tells us to uncomment the line below if we&rsquo;re using the asset pipeline. We are and so we&rsquo;ve made that change. Next we&rsquo;ll paste our Capistrano recipe in to  <code>deploy.rb</code>. This is rather long, but we&rsquo;ll briefly walk through what it does.</p>
+
+``` /config/deploy.rb
+require "bundler/capistrano"
+
+server "178.xxx.xxx.xxx", :web, :app, :db, primary: true
+
+set :application, "blog"
+set :user, "deployer"
+set :deploy_to, "/home/#{user}/apps/#{application}"
+set :deploy_via, :remote_cache
+set :use_sudo, false
+
+set :scm, "git"
+set :repository, "git@github.com:eifion/#{application}.git"
+set :branch, "master"
+
+default_run_options[:pty] = true
+ssh_options[:forward_agent] = true
+
+after "deploy", "deploy:cleanup" # keep only the last 5 releases
+
+namespace :deploy do
+  %w[start stop restart].each do |command|
+    desc "#{command} unicorn server"
+    task command, roles: :app, except: {no_release: true} do
+      run "/etc/init.d/unicorn_#{application} #{command}"
+    end
+  end
+
+  task :setup_config, roles: :app do
+    sudo "ln -nfs #{current_path}/config/nginx.conf /etc/nginx/sites-enabled/#{application}"
+    sudo "ln -nfs #{current_path}/config/unicorn_init.sh /etc/init.d/unicorn_#{application}"
+    run "mkdir -p #{shared_path}/config"
+    put File.read("config/database.example.yml"), "#{shared_path}/config/database.yml"
+    puts "Now edit the config files in #{shared_path}."
+  end
+  after "deploy:setup", "deploy:setup_config"
+
+  task :symlink_config, roles: :app do
+    run "ln -nfs #{shared_path}/config/database.yml #{release_path}/config/database.yml"
+  end
+  after "deploy:finalize_update", "deploy:symlink_config"
+
+  desc "Make sure local git is in sync with remote."
+  task :check_revision, roles: :web do
+    unless `git rev-parse HEAD` == `git rev-parse origin/master`
+      puts "WARNING: HEAD is not the same as origin/master"
+      puts "Run `git push` to sync changes."
+      exit
+    end
+  end
+  before "deploy", "deploy:check_revision"
+end
+```
+
+<p>At the top of this file we set our server up with roles for the web app and database. We then set the <code>deployer</code> user as the user that Capistrano will use and then set the directory that the application will be deployed to. Below that we configure the settings for Git and Github. Further down the file, in the <code>deploy</code> namespace are a number of commands for stopping and starting the server and also for setting up the server and configuring it. There are also a task for setting symlinks when the application is deployed and one for checking that we didn&rsquo;t forget to push changes up to Github when we deployed.</p> 
+
+<p>We&rsquo;ve run through this file pretty quickly but there&rsquo;ll be a future episode on Capistrano that will explain all this in better detail. However, we&rsquo;re not done yet. We still need to set up and configure Nginx and Unicorn for our Rails application. To do this we&rsquo;ll create a new file called <code>nginx.conf</code> in the config directory.</p>
+
+``` /config/nginx.conf
+upstream unicorn {
+  server unix:/tmp/unicorn.blog.sock fail_timeout=0;
+}
+
+server {
+  listen 80 default deferred;
+  # server_name example.com;
+  root /home/deployer/apps/blog/current/public;
+
+  location ^~ /assets/ {
+    gzip_static on;
+    expires max;
+    add_header Cache-Control public;
+  }
+
+  try_files $uri/index.html $uri @unicorn;
+  location @unicorn {
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $http_host;
+    proxy_redirect off;
+    proxy_pass http://unicorn;
+  }
+
+  error_page 500 502 503 504 /500.html;
+  client_max_body_size 4G;
+  keepalive_timeout 10;
+}
+```
+
+<p>The code in this file is similar to what we used in <a href="http://railscasts.com/episodes/293-nginx-unicorn">episode 293</a> and there are further details on what this code does there. The only difference here is that we we&rsquo;re using gzip for the files under the assets directory. Next we&rsquo;ll add a file for configuring Unicorn.</p> 
+
+``` /config/unicorn.rb
+root = "/home/deployer/apps/blog/current"
+working_directory root
+pid "#{root}/tmp/pids/unicorn.pid"
+stderr_path "#{root}/log/unicorn.log"
+stdout_path "#{root}/log/unicorn.log"
+
+listen "/tmp/unicorn.blog.sock"
+worker_processes 2
+timeout 30
+```
+
+<p>This file sets various paths and the number of worker processes to use. You&rsquo;ll probably want to change these values for your own applications. We need to add one more new file which will start up Unicorn with a shell script. This is another long file but all the variables that we might need to change are defined at the top of this file so these should be the only parts of the file that need to be changed if you use this on your own applications.</p>
+
+``` /config/unicorn_init.sh
+#!/bin/sh
+set -e
+
+# Feel free to change any of the following variables for your app:
+TIMEOUT=${TIMEOUT-60}
+APP_ROOT=/home/deployer/apps/blog/current
+PID=$APP_ROOT/tmp/pids/unicorn.pid
+CMD="cd $APP_ROOT; bundle exec unicorn -D -c $APP_ROOT/config/unicorn.rb -E production"
+AS_USER=deployer
+set -u
+
+OLD_PIN="$PID.oldbin"
+
+sig () {
+  test -s "$PID" && kill -$1 `cat $PID`
+}
+
+oldsig () {
+  test -s $OLD_PIN && kill -$1 `cat $OLD_PIN`
+}
+
+run () {
+  if [ "$(id -un)" = "$AS_USER" ]; then
+    eval $1
+  else
+    su -c "$1" - $AS_USER
+  fi
+}
+
+case "$1" in
+start)
+  sig 0 && echo >&2 "Already running" && exit 0
+  run "$CMD"
+  ;;
+stop)
+  sig QUIT && exit 0
+  echo >&2 "Not running"
+  ;;
+force-stop)
+  sig TERM && exit 0
+  echo >&2 "Not running"
+  ;;
+restart|reload)
+  sig HUP && echo reloaded OK && exit 0
+  echo >&2 "Couldn't reload, starting '$CMD' instead"
+  run "$CMD"
+  ;;
+upgrade)
+  if sig USR2 && sleep 2 && sig 0 && oldsig QUIT
+  then
+    n=$TIMEOUT
+    while test -s $OLD_PIN && test $n -ge 0
+    do
+      printf '.' && sleep 1 && n=$(( $n - 1 ))
+    done
+    echo
+
+    if test $n -lt 0 && test -s $OLD_PIN
+    then
+      echo >&2 "$OLD_PIN still exists after $TIMEOUT seconds"
+      exit 1
+    fi
+    exit 0
+  fi
+  echo >&2 "Couldn't upgrade, starting '$CMD' instead"
+  run "$CMD"
+  ;;
+reopen-logs)
+  sig USR1
+  ;;
+*)
+  echo >&2 "Usage: $0 <start|stop|restart|upgrade|force-stop|reopen-logs>"
+  exit 1
+  ;;
+esac
+```
+
+<p>This script will need to be marked as executable and we can use <code>chmod</code> to do this.</p>
+
+``` terminal
+$ chmod +x config/unicorn_init.sh
+```
+
+<p>With all these new files in place we&rsquo;ll add them now to our Git repository and commit then push them.</p>
+
+``` terminal
+$ git add .
+$ git commit -m "Deployment config files"
+$ git push origin master
+```
+
+<p>Now we can cross our fingers and run <code>cap deploy:setup</code> to deploy our application. You might need to prefix this command with <code>bundle exec</code>, depending on how your shell is set up. This command will log in to the server as the deployer user.</p>
+
+``` terminal
+$ cap deploy:setup
+```
+
+<p>This setup script did a number of things. First it created a few directories on the server for the application to do into. Our recipe then links a few files for the Nginx and Unicorn configuration to place them in the proper locations on the server. It then uploads the <code>database.yml</code> file so that we can edit the configuration on the server. We&rsquo;ll do that now by logging in to the server again as the deployer user.</p>
+
+``` terminal
+$ ssh deployer@178.xxx.xxx.xxx
+```
+
+<p>Now on the server we&rsquo;ll edit our <code>database.yml</code> file.</p>
+
+``` terminal
+deployer@li349-144:~$ cd apps/blog/shared/config/
+deployer@li349-144:~/apps/blog/shared/config$ vim database.yml
+```
+
+<p>We only need the production environment configuration in this file so we&rsquo;ll delete everything else. We&rsquo;ll need to set the <code>password</code> option to the password we created for our database user earlier. With PostgreSQL it&rsquo;s necessary to set the <code>host</code> option to <code>localhost</code> too so that we don&rsquo;t get any errors when logging in through the Postgres adapter.</p>
+
+``` /apps/blog/shared/config/database.yml
+production:
+  adapter: postgresql
+  encoding: unicode
+  database: blog_production
+  pool: 5
+  host: localhost
+  username: blog
+  password: secret
+```  
+  
+<p>The database file was the only thing we needed to configure on the server so we can log out from it now.</p>
+
+<h3>Logging Into The Server Automatically</h3>
+
+<p>Each time we use <code>ssh</code> to log in to the server we need to enter a password and it can become annoying to have to do this each time we deploy our application. The command below will copy the contents of the public RSA file into the <code>deployers</code> authorized keys. You&rsquo;ll have this public key already if you&rsquo;ve set Github up.</p>
+
+``` terminal
+cat ~/.ssh/id_rsa.pub | ssh deployer@178.xxx.xxx.xxx 'cat >> ~/.ssh/authorized_keys'
+```
+
+<p>After we&rsquo;ve run this command and entered the password for the last time we can now <code>ssh</code> into the server without entering a password. Another thing we have to run regarding ssh is <code>ssh-add</code>. This will get SSH Agent working. In the Capistrano deployment file one line we didn&rsquo;t mention was this:</p>
+
+``` /config/deploy.rb
+ssh_options[:forward_agent] = true
+```
+
+<p>This line tells Capistrano to use the local keys instead of the keys on the server. Using it with <code>ssh-add</code> means that we give our server access to our Github repository when we&rsquo;re SSH&rsquo;d into it. This means that we don&rsquo;t have to set up a deploy key on Github to authorize the server.</p>
+
+<p>On Mac OSX we can run this command with a <code>-K</code> option which will add the passphrase to our keychain.</p>
+
+``` terminal
+$ ssh-add -K
+```
+
+<p>We&rsquo;re ready to deploy our application now.</p>
+
+``` terminal
+$ cap deploy:cold
+```
+
+<p>A cold deploy like this will run the database migrations and perform a server start instead of a restart. This has worked successfully for this application but we&rsquo;ll often see errors the first time to run it. Fixing these means reading through the output to find out what the error is. Running the failed command directly on the server can often help in working out what has failed and how to fix it.</p>
+
+<h3>Configuring Nginx</h3>
+
+<p>If we visit our server&rsquo;s IP address in a web browser we still just see the &ldquo;Welcome to nginx&rdquo; message. This is because the default site is still enabled. To fix this we can SSH into the server, remove the default site then restart Nginx.</p>
+
+``` terminal
+deployer@li349-144:~$ sudo rm /etc/nginx/sites-enabled/default 
+[sudo] password for deployer: 
+deployer@li349-144:~$ sudo service nginx restart
+Restarting nginx: nginx.
+```
+
+<p>The first line only removed a symbolic link so there&rsquo;s no need to worry that we might be deleting something important. While we&rsquo;re on the server there&rsquo;s one more command we&rsquo;ll run so that Unicorn starts up properly when our server restarts.</p> 
+
+``` terminal
+sudo update-rc.d unicorn_blog defaults
+```
+
+<p>We pass this command the name of the service, which in our case is <code>unicorn_blog</code>,  then pass <code>defaults</code> as the next argument to get this all set up. Now for the moment of truth. When we browse to our server now we see the Rails welcome page and if we visit the articles page we&rsquo;ll see that the dynamic content works too. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1093/original/E335I05.png" width="800" height="309" alt="Our site has been successfully deployed."/>
+</div>
+
+<p>To deploy a change to our site we just need to make our changes, commit them,  push them up to Github and then run <code>cap deploy</code> again.</p>
+
+``` terminal
+$ git commit -am “Fixing a typo”
+$ git push
+$ cap deploy
+```
+
+<p>When we reload the page now our changes will show.</p> 
