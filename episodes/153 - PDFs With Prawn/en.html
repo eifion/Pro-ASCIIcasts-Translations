@@ -104,9 +104,9 @@ class OrderPdf < Prawn::Document
   end
 end
 ```
-<p>Note that the class name is <code>OrderPdf</code> rather than <code>OrderPDF</code> as this makes it easier for Rails to find it. If this bothers you you can choose an alternative name, say <code>OrderDocument</code>. Our class inherits from <code>Prawn::Document</code> but if don&rsquo;t like using inheritance you can delegate off to a separate Prawn document that you instantiate here instead. Using inheritance makes it easier to use <code>Prawn::Document</code>&rsquo;s methods, however.</p> 
+<p>Note that the class name is <code>OrderPdf</code> rather than <code>OrderPDF</code> as this makes it easier for Rails to find it. If this bothers you you can choose an alternative name, say <code>OrderDocument</code>. Our class inherits from <code>Prawn::Document</code> but if you don&rsquo;t like using inheritance you can delegate off to a separate Prawn document that you instantiate here instead. Using inheritance makes it easier to use <code>Prawn::Document</code>&rsquo;s methods, however.</p> 
 
-<p>In the <code>initialize</code> method we need to call <cdoe>super</cdoe> and after that we can render out anything we want, though we just have some placeholder text. In the <code>OrdersController</code> we&rsquo;ll can now create a new <code>OrderPdf</code> instead of a plain <code>Prawn::Document</code>.</p>
+<p>In the <code>initialize</code> method we need to call <cdoe>super</cdoe> and after that we can render out anything we want, though we just have some placeholder text. In the <code>OrdersController</code> we can now create a new <code>OrderPdf</code> instead of a plain <code>Prawn::Document</code>.</p>
 
 ```/app/controllers/orders_controller.rb
 def show
@@ -219,7 +219,7 @@ end
   <img src="http://asciicasts.com/system/photos/819/original/E153I06.png" width="813" height="374" alt="Each item is now rendered."/>
 </div>
 
-<p>We can customize the way the table looks by passing a block to the <code>table</code> method. The block can take a <code>table</code> object but if we don&rsquo;t pass one in it will use <code>instance_eval</code> and <code>instance_eval</code> all method calls to that table object. In the block we use the <code>row</code> and <code>column</code> methods to scope the cells whose appearance we want to change. We&rsquo;ll make the first row bold and all columns except the first right-aligned. To set the background colour of each row we use <code>row_colors</code>. We pass this an array of colours and it will loop through this to set the colour of each row. Finally, as the first row of our table contains header information it&rsquo;s a good idea to set <code>header</code> to <code>true</code>. This means that the row will be repeated if the table overflows onto another page.</p>
+<p>We can customize the way the table looks by passing a block to the <code>table</code> method. The block can take a <code>table</code> object but if we don&rsquo;t pass one in it will use <code>instance_eval</code> and <code>instance_eval_all</code> method calls to that table object. In the block we use the <code>row</code> and <code>column</code> methods to scope the cells whose appearance we want to change. We&rsquo;ll make the first row bold and all columns except the first right-aligned. To set the background colour of each row we use <code>row_colors</code>. We pass this an array of colours and it will loop through this to set the colour of each row. Finally, as the first row of our table contains header information it&rsquo;s a good idea to set <code>header</code> to <code>true</code>. This means that the row will be repeated if the table overflows onto another page.</p>
 
 ``` /app/pdfs/order_pdf.rb
 def line_items
@@ -278,7 +278,7 @@ end
   <img src="http://asciicasts.com/system/photos/821/original/E153I08.png" width="813" height="374" alt="The prices are now fomatted correctly."/>
 </div>
 
-<p>There&rsquo;s one more thing we&rsquo;ll add to our PDF to make it complete and that is a the total price. We&rsquo;ll create a simple <code>total_price</code> method to generate this and call it in the initializer.</p>
+<p>There&rsquo;s one more thing we&rsquo;ll add to our PDF to make it complete and that is the total price. We&rsquo;ll create a simple <code>total_price</code> method to generate this and call it in the initializer.</p>
 
 ``` /app/pdfs/order_pdf.rb
 def total_price

@@ -1,0 +1,302 @@
+<p>RailsアプリケーションでPDFを生成する必要がある場合、<a href="http://prawn.majesticseacreature.com/">Prawn</a>は優れたソリューションです。PrawnToと呼ばれるプラグインがPrawnをRailsアプリケーションに統合する作業を簡略化してくれますが、Railsの最新版では動作せず、最近はメンテナンスされていません。幸いなことにPrawnを直接追加するのはそれほど難しくはないので、今回のエピソードではその方法を紹介します。</p>
+
+<h3>PDFの注文票を作成する</h3>
+
+<p>下の画面はオーダーされた注文の詳細を表示するRailsアプリケーションです。このオーダー情報のPDF版を提供してユーザが自分のオーダーをダウンロードあるいは印刷できるようにするため、Prawnを利用します。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/814/original/E153I01.png" width="803" height="474" alt="HTMLによるオーダーの概要"/>
+</div>
+
+<p>Prawnはgemとして提供されているので、インストールするには<code>Gemfile</code>に追加して<code>bundle</code>コマンドを実行します。</p>
+
+```/Gemfile
+source 'http://rubygems.org'
+
+gem 'rails', '3.1.1'
+
+gem 'sqlite3'
+
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.1.4'
+  gem 'coffee-rails', '~> 3.1.1'
+  gem 'uglifier', '>= 1.0.3'
+end
+
+gem 'jquery-rails'
+gem 'prawn'
+```
+
+<p>PDFを生成できるようにするためには、Railsに対してPDF MIMEタイプの情報を与えます。このために<code>mime_types</code>初期化ファイルにタイプを追加します。(これはアプリケーションにすでに存在しているはずですが、もしなければただ追加すればOKです。) これによってRailsがPDFリクエストにどう応答すべきかわかっていることが保証されます。</p>
+
+```/config/initializers/mime_types.rb
+# Be sure to restart your server when you modify this file.
+
+# Add new mime types for use in respond_to blocks:
+Mime::Type.register "application/pdf", :pdf
+```
+
+<p>次にPDF版を作りたいコントローラアクションに、PDFデータを返す<code>respond_to</code>ブロックを追加します。今のところは、Prawnを利用して「Hello World」とのみ書かれた簡単なPDFドキュメントを生成するようにします。</p>
+
+```/app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = Prawn::Document.new
+      pdf.text "Hello World"
+      send_data pdf.render
+    end
+  end
+end
+```
+
+<p>Railsサーバの再起動後、オーダー情報ページのURLに<code>.pdf</code>を追加することでPDFドキュメントにアクセスできるはずです。<code>http://localhost:3000/orders/1.pdf</code>を開くとブラウザがPDFドキュメントを表示するかダウンロードします。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/815/original/E153I02.png" width="803" height="356" alt="最初の簡単なPDFドキュメント"/>
+</div>
+
+<p>このドキュメントのファイル名がもう少し内容を表すものであれば便利でしょう。上で使用している<code>send_data</code>メソッドはいくつかのオプションをとりますが、その中の一つである<code>filename</code>を使えばそれが可能です。それに合わせて<code>type</code>オプションを設定してデフォルトを<code>application/octet-stream</code>とし、<code>disposition</code>を<code>inline</code>に設定して、デフォルトではPDFがダウンロードされるのではなくブラウザ内で表示されるようにします。</p>
+
+``` /app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = Prawn::Document.new
+      pdf.text "Hello World"
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                              type: "application/pdf",
+                              disposition: "inline"
+
+    end
+  end
+end
+```
+
+<p>ブラウザでPDFのURLにアクセスするとファイルがブラウザ内で表示されます。 </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/816/original/E153I03.png" width="803" height="474" alt="PDFがブラウザ内に表示される"/>
+</div>
+
+<p>最終的にはPDFにオーダーに関する情報を表示させたいのですが、その前にHTMLのオーダーページにリンクを追加して、ユーザがいちいちブラウザにURLを入力しなくても済むようにします。これをshowテンプレートの最後に追加します。</p>
+
+```/app/views/orders/show.html.erb
+<p><%= link_to "Printable Receipt (PDF)", order_path(@order, format: "pdf") %></p>
+```
+
+<p>リンクはそれ自体が含まれているアクションを指すので、<code>order_path</code>を使用して現在のオーダーを渡します。リンクがPDF版を指すように<code>format</code>オプションを使用します。</p>
+
+<h3>PDFにオーダー情報を追加する</h3>
+
+<p>次にPDFファイルの内容を修正することに集中して、ファイルの中にオーダー情報を含めます。これはすべて<code>OrdersController</code>の中でおこなえますが、PDFを別の独立したクラスで生成するようにしたらコードがよりすっきりするでしょう。PDFを生成するコードを、新規に作成した<code>/app/pdfs</code>ディレクトリの中の<code>order_pdf.rb</code>ファイル の中に入れます。</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize
+    super
+    text "Order goes here"
+  end
+end
+```
+
+<p>クラス名が<code>OrderPDF</code>ではなく<code>OrderPdf</code>であることに注意してください。これによってRailsがそれを探しやすくなります。もしこれが気に入らなければ、例えば<code>OrderDocument</code>のような別の名前を選ぶこともできます。このクラスは<code>Prawn::Document</code>を継承しますが、もし継承を使いたくなければ代わりにここでインスタンス化する独立したPrawnドキュメントに委譲することも可能です。しかし、継承を使えば<code>Prawn::Document</code>のメソッドを使用するのが簡単になります。</p> 
+
+<p><code>initialize</code>メソッドの中で<cdoe>super</cdoe>を呼び出せば、その後は何でも出力できますが、ここでは単にダミーのテキストを置きます。<code>OrdersController</code>でシンプルな<code>Prawn::Document</code>の代わりに新規の<code>OrderPdf</code>を作成できます。</p>
+
+```/app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = OrderPdf.new
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                            type: "application/pdf",
+                            disposition: "inline"
+    end
+  end
+end
+```
+
+<p>OrderPdfクラスを認識させるためにサーバを再起動し、ページをリロードすると「Order goes here」の表示を確認できます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/817/original/E153I04.png" width="803" height="280" alt="PDFが新しいクラスから生成された"/>
+</div>
+
+<p>この文字をオーダー情報に置き換えるのですが、Prawnがサポートするコマンドをどうやって調べればいいでしょうか? Prawnには2つの優れたドキュメントがあります。<a href="http://prawn.majesticseacreature.com/docs/0.11.1/Prawn.html">APIドキュメント</a>は利用できるメソッドとクラスのリファレンスで、<a href="http://prawn.majesticseacreature.com/manual.pdf">self-documenting manual</a>はサンプルとPrawnでできることの詳細情報を含んだPDFファイルです。このマニュアルはダウンロードして読んでみる価値が十分あります。これらの情報源があれば、簡単にPDFドキュメントの中に何でも作ることができるでしょう。 </p>
+
+<p>ではこれからダミーテキストを実際のオーダー情報に置き換えていきます。まずオーダー番号を追加します。<code>OrderPdf</code>クラスはコントローラ内の現在のオーダーにアクセスすることができないので、initializerを介して渡す必要があります。しかしこれをbaseクラスには渡したくないので、<code>super</code>の呼び出しを修正して、代わりに他のドキュメントオプションを渡すのに使います。</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    text "Order \##{@order.order_number}"
+  end
+end
+```
+
+<p><code>OrdersController</code>で、<code>OrderPdf</code>オブジェクトに対して現在のオーダーを渡します。</p>
+
+``` /app/controllers/orders_controller.rb
+def show
+  @order = Order.find(params[:id])
+  respond_to do |format|
+    format.html
+    format.pdf do
+      pdf = OrderPdf.new(@order)
+      send_data pdf.render, filename: "order_#{@order.order_number}",
+                            type: "application/pdf",
+                            disposition: "inline"
+    end
+  end
+end
+```
+
+<p>ページをリロードするとオーダー番号が表示されています。</p>
+
+<p><code>OrderPdf</code>クラスを整理された状態にするために、各パートの生成を別のメソッドに分けることにして、まず最初にオーダー番号を生成するコードを移動します。オーダー番号を今よりも大きくしたいので、オプションの<code>size</code>と<code>bold</code>を用いてこれをおこないます。</p>
+
+``` /app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    order_number
+  end
+  
+  def order_number
+    text "Order \##{@order.order_number}", size: 30, style: :bold
+  end
+end
+```
+
+<p>PDFをリロードするとオーダー番号はずっと大きくなっています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/818/original/E153I05.png" width="803" height="280" alt="オーダー番号が表示された"/>
+</div>
+
+<p>次に明細行を出力します。それをおこなうコードは次の通りです。</p>
+
+```/app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order)
+    super(top_margin: 70)
+    @order = order
+    order_number
+    line_items
+  end
+  
+  def order_number
+    text "Order \##{@order.order_number}", size: 30, style: :bold
+  end
+  
+  def line_items
+    move_down 20
+    table line_item_rows
+  end
+  
+  def line_item_rows
+    [["Product", "Qty", "Unit Price", "Full Price"]] +
+    @order.line_items.map do |item|
+      [item.name, item.quantity, item.unit_price, item.full_price]
+    end
+  end
+end
+```
+
+<p>オーダー番号と項目行の間に少しスペースを作るために、<code>move_down</code>を使ってドキュメントを下方向に20ポイント移動させます。項目を表形式で表示したいので、そのためにPrawnの<code>table</code>メソッドを使用します。これは引数として2次元の配列をとるので、<code>table [[1,2],[3,4]]</code>を呼び出したらそれらの値を持った2行2列のテーブルが表示されます。この配列を生成するコードを<code>line_item_rows</code>メソッドの中に置いたことと、最初の行にヘッダ情報が含まれていることに注目してください。</p>
+
+<p>PDFファイルをリロードすると以下の内容が表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/819/original/E153I06.png" width="813" height="374" alt="各項目が出力される"/>
+</div>
+
+<p><code>table</code>メソッドにブロックを渡すことによって表の見え方をカスタマイズできます。ブロックは引数として<code>table</code>オブジェクトをとることができますが、もしそれを渡さなかったら、<code>table</code>オブジェクトに対して<code>instance_eval</code>と<code>instance_eval_all</code>のメソッド呼び出しを使用します。ブロックでは<code>row</code>と<code>column</code>の各メソッドを使って、外観を変更したいセルを指定します。最初の行をボールドにして、最初の列以外をすべて右揃えにします。<code>row_colors</code>を使用して各行の背景色を設定します。これに色の配列を渡すと、この中でループして各行の色を設定します。最後に、このテーブルにはヘッダ情報が含まれるので、<code>header</code>を<code>true</code>に設定するのがいいでしょう。これによって、テーブルが次のページにあふれた場合にはヘッダが繰り返し表示されます。</p>
+
+``` /app/pdfs/order_pdf.rb
+def line_items
+  move_down 20
+  table line_item_rows do
+    row(0).font_style = :bold
+    columns(1..3).align = :right
+    self.row_colors ["DDDDDD", "FFFFFF"]
+    self.header = true
+  end
+end
+```
+
+<p>再度ページをリロードするとこれらの変更が反映されています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/820/original/E153I07.png" width="813" height="374" alt="行に色がついた"/>
+</div>
+
+<p>オーダーフォームはきれいになりましたが、価格に通貨記号が表示されておらず、小数点以下2桁を表示するよう統一されてもいません。もしビューヘルパーにアクセスできたら、<code>number_to_currency</code>を呼び出して価格を正しくフォーマットすることができます。クラスからはアクセスできませんが、コントローラからview_contextを渡すことができます。 </p>
+
+``` /app/controllers/orders_controller.rb
+pdf = OrderPdf.new(@order, view_context)
+```
+
+<p>これを<code>OrderPdf</code>クラスの中で使用して、コンストラクタで<code>@view</code>インスタンス変数を設定してクラスの中からアクセスできるようにします。設定ができたら新たに正しくフォーマットされた価格を返す<code>price</code>メソッドを定義して、価格を表示する場所で使用します。</p>
+
+```/app/pdfs/order_pdf.rb
+class OrderPdf < Prawn::Document
+  def initialize(order, view)
+    super(top_margin: 70)
+    @order = order
+    @view = view 
+    order_number
+    line_items
+  end
+  
+  # Other methods omitted.
+  
+  def line_item_rows
+    [["Product", "Qty", "Unit Price", "Full Price"]] +
+    @order.line_items.map do |item|
+      [item.name, item.quantity, price(item.unit_price), price(item.full_price)]
+    end
+  end
+  
+  def price(num)
+    @view.number_to_currency(num)
+  end
+end
+```
+
+<p>価格が希望通りにフォーマットされました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/821/original/E153I08.png" width="813" height="374" alt="価格が正しくフォーマットされた"/>
+</div>
+
+<p>PDFを完成させるために最後にもう一つ、合計価格を追加します。これを生成するために簡単な<code>total_price</code>メソッドを作成し、初期化ファイルから呼び出します。</p>
+
+``` /app/pdfs/order_pdf.rb
+def total_price
+  move_down 15
+  text "Total Price: #{price(@order.total_price)}", size: 16, style: :bold
+end
+```
+
+<p>これでオーダーフォームが完成しました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/822/original/E153I09.png" width="813" height="442" alt="合計が表示される"/>
+</div>
+
+<h3>Prawnの代替</h3>
+
+<p>Prawnに関する今回のエピソードは以上です。RailsアプリケーションでPDFを生成する方法は他にもいくつかあります。例えばPDFKitを使えばHTMLからPDFドキュメントを作成できますが、これについては<a href="http://railscasts.com/episodes/220-pdfkit">エピソード220</a>で紹介しました。</p>
