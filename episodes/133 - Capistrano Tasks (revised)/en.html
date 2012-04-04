@@ -1,0 +1,346 @@
+<p>Capistrano can be quite puzzling when you first start using it. It&rsquo;s easy to take a basic deployment recipe and fill in the blanks with the relevant settings but it&rsquo;s harder to write a script from scratch or to know what&rsquo;s going on behind the scenes when a script runs. If this sounds familiar then this is the episode for you.</p>
+
+<p>Things won&rsquo;t really start to click unless you know what Capistrano is all about. It&rsquo;s based on tasks though this isn&rsquo;t always apparent when we look at the typical deployment recipe. We&rsquo;ll start off with a simple task but first we&rsquo;ll need a Rails application to work with.</p>
+
+``` terminal
+$ rails new store
+```
+
+<p>Next we&rsquo;ll uncomment the reference to the Capistrano gem in our new application&rsquo;s gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+# Deploy with Capistrano
+gem 'capistrano'
+```
+
+<p>To set up Capistrano in our application we need to run the <code>capify</code> command.</p>
+
+``` terminal
+$ capify .
+[add] writing './Capfile'
+[add] writing './config/deploy.rb'
+[done] capified!
+```
+
+<p>This command generates a <code>deploy.rb</code> file in the <code>config</code> directory and we can customize the way the deployment works by modifying this file.</p> 
+
+<h3>Our First Capistrano Task</h3>
+
+<p>By default <code>deploy.rb</code> comes with some initial settings and comments but we&rsquo;ll remove these and start with something simple so that we can demonstrate tasks. Creating a Capistrano task is similar to creating a Rake task, except that we use a <code>task</code> method.</p>
+
+``` /config/deploy.rb
+task :hello do
+  puts "Hello World"
+end
+```
+
+<p>To run this task we call cap and pass in the name of the task.</p>
+
+``` terminal
+$ cap hello
+  * executing `hello'
+Hello World
+```
+
+<p>Depending on how your shell environment is set up you might need to prefix this command with <code>bundle exec</code>. Tasks are often chained together. To demonstrate this we&rsquo;ll create a new goodbye task. If we want it to run after <code>hello</code> we can call it like a method.</p>
+
+``` /config/deploy.rb
+task :hello do
+  puts "Hello World"
+  goodbye
+end
+
+task :goodbye do
+  puts "Goodbye World"
+end
+```
+
+<p>When we run <code>cap hello</code> again this will run the <code>hello</code> task followed by the goodbye task.</p>
+
+``` terminal
+$ cap hello
+  * executing `hello'
+Hello World
+  * executing `goodbye'
+Goodbye World
+```
+
+<p>Another way to do this is to use callbacks. Instead of calling goodbye directly from <code>hello</code> we can make a callback by using the <code>after</code> method.</p>
+
+``` /config/deploy.rb
+task :hello do
+  puts "Hello World"
+end
+
+task :goodbye do
+  puts "Goodbye World"
+end
+
+after :hello, :goodbye
+```
+
+<p>When we run <code>cap hello</code> now we see the same output as before.</p> 
+
+<p>Tasks can also have settings. To create a setting we use set. We can then access the setting in any task.</p>
+
+``` /config/deploy.rb
+set :recipient, "Ruby"
+
+task :hello do
+  puts "Hello #{recipient}"
+end
+
+task :goodbye do
+  puts "Goodbye #{recipient}"
+end
+
+after :hello, :goodbye
+```
+
+<p>Another way to access a setting is to use <code>fetch</code>. The advantage of this approach is that we can pass in a default value as a second argument.</p>
+
+``` /config/deploy.rb
+set :recipient, "Ruby"
+
+task :hello do
+  puts "Hello #{fetch(:recipient, "World")}"
+end
+```
+
+<p>If the <code>recipient</code> setting isn&rsquo;t defined the task will now use the default value of &ldquo;World&rdquo;. </p>
+
+<h3>Running Commands on The Server</h3>
+
+<p>So far we&rsquo;ve been executing code on our local machine but Capistrano is designed to run commands remotely. To do this we&rsquo;ll need to specify a server, which we do by calling <code>server</code>. We need to pass this the address of a server and a role. We&rsquo;ll explain roles later; for now we&rsquo;ll just set this to <code>web</code>. We also need to set the user the script should connect to the server as and we&rsquo;ll set this to the <code>deployer</code> user.</p> 
+
+``` /config/deploy.rb
+server "178.xx.xxx.xxx", :web
+set :user, "deployer"
+
+set :recipient, "Ruby"
+
+task :hello do
+  puts "Hello #{fetch(:recipient, "World")}"
+  run "echo 'Hello World' > ~/hello"
+end
+
+task :goodbye do
+  puts "Goodbye #{recipient}"
+end
+after :hello, :goodbye
+```
+
+<p>We can run a command on the remote server by calling <code>run</code> in a task and passing it a command. We&rsquo;ve done it this now in our <code>hello</code> task where we echo the text &ldquo;Hello World&rdquo; into a file in the <code>deployer</code>&rsquo;s home directory. We&rsquo;ve already set up a server with this user and there&rsquo;s more information about this in <a href="http://railscasts.com/episodes/335-deploying-to-a-vps">episode 335</a>. When we run <code>cap hello</code> now it will SSH into the server and execute that command there.</p>
+
+``` terminal
+$ cap hello
+  * executing `hello'
+Hello Ruby
+  * executing "echo 'Hello World' > ~/hello"
+    servers: ["178.xxx.xxx.xxx"]
+    [178.xxx.xxx.xxx] executing command
+    [178.xxx.xxx.xxx] sh -c 'echo '\''Hello World'\'' > ~/hello'
+    command finished in 815ms
+    triggering after callbacks for `hello'
+  * executing `goodbye'
+Goodbye Ruby
+```
+
+<p>We can check to see if this has worked by logging in to the server and checking the contents of that file.</p>
+
+``` terminal
+$ ssh deployer@178.xxx.xxx.xxx 'cat ~/hello'
+Hello World
+```
+
+<p>If we need to run a command as the root user we can do so. Let&rsquo;s say that we want to copy the file that we&rsquo;ve created to the server&rsquo;s root directory. We need to run this command under <code>sudo</code> and we can do this in Capistrano by prefixing the command with <code>#{sudo}</code>, like this:</p>
+
+``` /config/deploy.rb
+task :hello do
+  puts "Hello #{fetch(:recipient, "World")}"
+  run "#{sudo} cp ~/hello /hello"
+end
+```
+
+<p>There&rsquo;s a potential problem here. If we want the password input to work properly then we might need to use the <code>default_run_options</code> command in our script.</p>
+
+``` /config/deploy.rb
+server "178.xxx.xxx.xxx", :web
+set :user, "deployer"
+
+set :recipient, "Ruby"
+
+default_run_options[:pty] = true
+
+task :hello do
+  puts "Hello #{fetch(:recipient, "World")}"
+  run "#{sudo} cp ~/hello /hello"
+end
+```
+
+<p>With this in place if the server requests a password this request will be passed on to the client machine&rsquo;s shell. We can see this if we run <code>cap hello</code> again.</p>
+
+``` terminal
+$ cap hello
+  * executing `hello'
+Hello Ruby
+  * executing "sudo -p 'sudo password: ' cp ~/hello /hello"
+    servers: ["178.xxx.xxx.xxx"]
+    [178.xxx.xxx.xxx] executing command
+    [178.xxx.xxx.xxx] sh -c 'sudo -p '\''sudo password: '\'' cp ~/hello /hello'
+Password: 
+ ** [out :: 178.xxx.xxx.xxx] 
+    command finished in 5740ms
+    triggering after callbacks for `hello'
+  * executing `goodbye'
+Goodbye Ruby
+```
+
+<h3>Working With Multiple Servers</h3>
+
+<p>Capistrano is designed to work with multiple servers. We can specify more than one server with the <code>server</code> command and if we do so each run command will run its command on each server listed. If we have multiple servers we generally want to run different commands on each one and this is where roles come in. For example let&rsquo;s say that our <code>hello</code> task deals with a separate database server. We can set the roles that the task should run for so we&rsquo;ll set it to run for just db servers.</p>
+
+``` /config/deploy.rb
+server "178.xxx.xxx.xxx", :web
+set :user, "deployer"
+
+set :recipient, "Ruby"
+
+default_run_options[:pty] = true
+
+task :hello, roles: :db do
+  puts "Hello #{fetch(:recipient, "World")}"
+  run "#{sudo} cp ~/hello /hello"
+end
+```
+
+<p>As we haven&rsquo;t defined a server with a <code>db</code> role we&rsquo;ll see an error when we run <code>cap hello</code> now and the command won&rsquo;t be run.</p>
+
+``` terminal
+$ cap hello
+  * executing `hello'
+Hello Ruby
+  * executing "sudo -p 'sudo password: ' cp ~/hello /hello"
+`hello' is only run for servers matching {:roles=>:db}, but no servers matched
+```
+
+<p>We&rsquo;ll need to add the <code>db</code> role to our server for the command to be executed.</p>
+
+``` /config/deploy.rb
+server "178.xxx.xxx.xxx", :web, :db
+```
+
+<p>Capistrano uses three different roles: <code>web</code>, <code>app</code> and <code>db</code>. The <code>web</code> role is for an Apache or Nginx server, <code>app</code> is where our application is hosted and <code>db</code> is for the server that hosts our MySQL or PostgreSQL database. We aren&rsquo;t limited to just these three roles, though. We might have a queueing server, a caching server or any other server our application&rsquo;s deployment requires and we can specify our own role names for these. One important thing about the database role is we should pass the <code>primary</code> option and set it to <code>true</code>. This marks it as the primary database server and therefore the one that database migrations will be run against.</p>
+
+``` /config/deploy.rb
+server "178.xxx.xxx.xxx", :web, :db, primary: true
+```
+
+<p>There&rsquo;s another way to define server roles. Instead of using <code>server</code> we can use a <code>role</code> method like this:</p>
+
+``` /config/deploy.rb
+role :web, "178.xxx.xxx.xxx"
+role :app, "178.xxx.xxx.xxx"
+role :db, "178.xxx.xxx.xxx", primary: true
+```
+
+<p>Here we pass the name of the role and the server and list each one individually. The server method is more concise but you&rsquo;re free to choose the approach that you prefer. </p>
+
+<h3>Capistrano&rsquo;s Built-in Tasks</h3>
+
+<p>Now that we know the basic concepts of Capistrano we can get a better idea of what&rsquo;s going on when we use it to deploy an application. To show this we&rsquo;ll take a look at Capistrano&rsquo;s source code. Under its <code>lib/capistrano/recipes</code> directory there&rsquo;s a <a href="https://github.com/capistrano/capistrano/blob/master/lib/capistrano/recipes/deploy.rb"><code>deploy.rb</code></a> file. This contains all the deployment-related recipes and these are the tasks that are provided by Capistrano out of the box. These are all defined under a <code>deploy</code> namespace and they include a <code>default</code> task which is the one that runs when we run <code>cap deploy</code>.</p>
+
+``` /lib/capistrano/recipes/deploy.rb
+namespace :deploy do
+  task :default do
+    update
+    restart
+  end
+
+  # Other tasks omitted.
+end
+```
+
+<p>This task triggers two others, update and restart. These are defined in the same file. Let&rsquo;s look at update.</p>
+
+``` /lib/capistrano/recipes/deploy.rb
+namespace :deploy do
+  task :update do
+    transaction do
+      update_code
+      create_symlink
+    end
+  end
+end
+```
+
+<p>This task starts by creating a new transaction. We haven&rsquo;t discussed transactions in this episode but they provide a way of rolling back changes if a task fails. The update task then calls two others called update_code and create_symlink. This removes the application&rsquo;s current path, if it exists, then re-symlinks it based on the latest release path.</p>
+
+``` /lib/capistrano/recipes/deploy.rb
+namespace :deploy do
+  task :create_symlink, :except => { :no_release => true } do
+    on_rollback do
+      if previous_release
+        run "rm -f #{current_path}; ln -s #{previous_release} #{current_path}; true"
+      else
+        logger.important "no previous release to rollback to, rollback of symlink skipped"
+      end
+    end
+
+    run "rm -f #{current_path} && ln -s #{latest_release} #{current_path}"
+  end
+end
+```
+
+<p>So what we have is a chain of tasks which do various things and it&rsquo;s easy to see here exactly what happens when we run <code>cap deploy</code>. You might wonder where values like <code>previous_release</code> and <code>latest_release</code> come from. They&rsquo;re defined at the top of the file through a method called <code>_cset</code> which sets default values for these and a other settings if they haven&rsquo;t already been defined.</p>
+
+``` /lib/capistrano/recipes/deploy.rb
+_cset(:releases_path)     { File.join(deploy_to, version_dir) }
+_cset(:shared_path)       { File.join(deploy_to, shared_dir) }
+_cset(:current_path)      { File.join(deploy_to, current_dir) }
+_cset(:release_path)      { File.join(releases_path, release_name) }
+```
+
+<p>The <code>current_path</code> setting is defined with a block that dynamically sets the value based on the <code>deploy_to</code> setting and the current directory. </p>
+
+<p>Let&rsquo;s take a look at the deploy recipe that we used in the last episode. At the top of this we set a number of values that are used by Capistrano&rsquo;s internal deployment tasks. </p>
+
+``` /config/deploy.rb
+require "bundler/capistrano"
+
+server "178.xxx.xxx.xxx", :web, :app, :db, primary: true
+
+set :application, "blog"
+set :user, "deployer"
+set :deploy_to, "/home/#{user}/apps/#{application}"
+set :deploy_via, :remote_cache
+set :use_sudo, false
+
+set :scm, "git"
+set :repository, "git@github.com:eifion/#{application}.git"
+set :branch, "master"
+
+default_run_options[:pty] = true
+ssh_options[:forward_agent] = true
+
+after "deploy", "deploy:cleanup" # keep only the last 5 releases
+```
+
+<p>We also call <code>after</code> to make a callback that runs the <code>deploy:cleanup</code> task after the application is deployed which is a task that Capistrano provides. Further down the file we define a couple of tasks, one to restart the server which overrides the default <code>restart</code> task and another to do some extra symlinking after the <code>deploy:finalize_update</code> task is called.</p>
+
+``` /config/deploy.rb
+namespace :deploy do
+  task :restart, roles: :app do
+    run "touch #{current_path}/tmp/restart.txt"
+  end
+  
+  task :symlink_config, roles: :app do
+    run "ln -nfs #{shared_path}/config/database.yml #{release_path}/config/database.yml"
+  end
+  after "deploy:finalize_update", "deploy:symlink_config"
+end
+```
+
+<p>Now with a better understanding of Capistrano&rsquo;s internal behaviour we can add and override more tasks to configure and customize it to work the way we need to in our deployment scenario.</p>
+
+<p>For more information on Capistrano take a look at the Github wiki3. There&rsquo;s some good documentation here, especially in the reference section which documents the various methods and variables that we can use. To see the various tasks that are available we can run <code>cap -T</code>. We can also run <code>cap -e</code> and supply the name of a task to get full documentation for that task.</p> 
