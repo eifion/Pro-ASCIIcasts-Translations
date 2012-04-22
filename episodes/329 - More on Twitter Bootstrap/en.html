@@ -8,7 +8,7 @@
   <img src="http://asciicasts.com/system/photos/1032/original/E329I01.png" width="800" height="493" alt="Our Store application."/>
 </div>
 
-<p>One of these issues is that flash messages aren&rsquo;t being shown. It we update a product through the edit form there&rsquo;s no flash message saying that the product was updated. If we take a look at the components section of the documentation we&rsquo;ll see that there&rsquo;s <a href="http://twitter.github.com/bootstrap/components.html#alerts">a section on alerts</a> and these work perfectly for displaying flash messages to the user. The default options to let us display three types of alert: success, information and warning. To display the update message we simply need to wrap the flash message in a <code>div</code> with a CSS class of <code>alert-success</code>.</p>
+<p>One of these issues is that flash messages aren&rsquo;t being shown. If we update a product through the edit form there&rsquo;s no flash message saying that the product was updated. If we take a look at the components section of the documentation we&rsquo;ll see that there&rsquo;s <a href="http://twitter.github.com/bootstrap/components.html#alerts">a section on alerts</a> and these work perfectly for displaying flash messages to the user. The default options to let us display three types of alert: success, information and warning. To display the update message we simply need to wrap the flash message in a <code>div</code> with a CSS class of <code>alert-success</code>.</p>
 
 <p>We&rsquo;ll add the flash messages to the application&rsquo;s layout file, inside the <code>container</code> but above the content.</p>
 
@@ -231,7 +231,7 @@ body { padding-top: 60px; }
 
 <p>One important distinction here is that we&rsquo;re setting the variables before loading <code>bootstrap</code> due to differences between the way SASS and LESS work. After it has loaded we can override any CSS that we want to change.</p>
 
-<p>In the <code>application.js</code> file we need to require bootstrap instead of <code>twitter/bootstrap</code>. As before we can load each individual file separately if we want to select specific plugins to load. The bootstrap-sass <a href="https://github.com/thomas-mcdonald/bootstrap-sass/blob/master/README.md">README</a> has an example of how to this. If we reload our application now it looks exactly like it did before but we&rsquo;re now using SASS instead of LESS.</p>
+<p>In the <code>application.js</code> file we need to require bootstrap instead of <code>twitter/bootstrap</code>. As before we can load each individual file separately if we want to select specific plugins to load. The bootstrap-sass <a href="https://github.com/thomas-mcdonald/bootstrap-sass/blob/master/README.md">README</a> has an example of how to do this. If we reload our application now it looks exactly like it did before but we&rsquo;re now using SASS instead of LESS.</p>
 
 <div class="imageWrapper">
   <img src="http://asciicasts.com/system/photos/1037/original/E329I06.png" width="800" height="403" alt="The application now looks just the same even though it&rsquo;s using SASS."/>
