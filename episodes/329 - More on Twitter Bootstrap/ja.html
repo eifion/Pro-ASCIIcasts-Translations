@@ -1,0 +1,241 @@
+<p>前回のエピソードでは、Twitter BootstrapをRailsで使用する方法を紹介しました。今回は、前回作成したプロジェクトにさらに機能を追加します。Simple Formを用いてフォームを改善する方法、LESSを用いてTwitter Bootstrapをカスタマイズする方法、SASSを利用したい場合の変更方法を紹介します。</p>
+
+<h3>ユーザ体験を改善する</h3>
+
+<p>前回作成したものを以下に示します。まずはこのアプリケーションのユーザ体験に関する問題にフォーカスします。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1032/original/E329I01.png" width="800" height="493" alt="ストアアプリケーション"/>
+</div>
+
+<p>問題の1つ目は、フラッシュメッセージが表示されないという点です。編集フォームから商品情報を更新しても、更新されたことを知らせるフラッシュメッセージは表示されません。ドキュメントのcomponentsセクションを見ると、<a href="http://twitter.github.com/bootstrap/components.html#alerts">alertについてのセクション</a>があり、これがユーザに対してフラッシュメッセージを表示するのに役に立ちます。3種類の警告を表示するためのデフォルトのオプションは、success、information、warningです。更新メッセージを表示するためには、単にフラッシュメッセージを<code>alert-success</code>というCSSクラスを持った<code>div</code>でラップします。</p>
+
+<p>アプリケーションのレイアウトファイルにフラッシュメッセージを追加します。位置は<code>container</code>の中で、かつコンテンツの上です。</p>
+
+``` /app/views/layouts/application.html.erb
+<div class="container">
+  <% flash.each do |name, msg| %>
+    <div class="alert alert-<%= name == :notice ? "success" : "error" %>">
+      <%= msg  %>
+    </div>
+  <% end %>
+  <!-- Rest of content -->
+</div>
+```
+
+<p>ここで複数のメッセージをループして、それぞれを表示します。各メッセージを<code>div</code>でラップして、フラッシュメッセージの名前を使用してsuccessのアラートとerrorのアラートのどちらとして表示するかを決定します。商品情報を更新するとフラッシュメッセージが表示されるようになりました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1033/original/E329I02.png" width="800" height="405" alt="商品情報を更新するとフラッシュメッセージが表示される"/>
+</div>
+
+<p>Twitter Bootstrapを使うと、コードを1行追加するだけでアラートに簡単に「閉じる」ボタンを追加できます。</p>
+
+``` /app/views/layouts/application.html.erb
+<div class="container">
+  <% flash.each do |name, msg| %>
+    <div class="alert alert-<%= name == :notice ? "success" : "error" %>">
+      <a class="close" data-dismiss="alert">
+      <%= msg  %>
+    </a></div>
+  <% end %>
+  <!-- Rest of content -->
+</div>
+```
+
+<p>商品情報を更新すると‘x’ボタンが表示され、クリックするとアラートが閉じられます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1034/original/E329I03.png" width="800" height="405" alt="アラートに「閉じる」ボタンが付いた"/>
+</div>
+
+<p>この機能はJavaScriptによって処理されます。Bootstrapが提供するJavaScriptについてこれまであまり触れてきませんでしたが、便利なjQueryプラグインが多く含まれています。これらを使って、モーダルダイアログ、ドロップダウン、タブ、ツールチップ、ユーザがカーソルをホバーした時に情報を表示するポップオーバーなど、多くの部品を作成することができます。これらのプラグインはすべてすでに今回のRailsアプリケーションに含まれています。<code>application.js</code>ファイルの中を見てみると、<code>twitter/bootstrap</code>ファイルがインクルードされていて、これがすべてのプラグインをロードしています。<code>bootstrap.js</code>というファイルもあり、これがプラグイン機能の一部を有効化しています。</p>
+
+``` /app/assets/javascripts/bootstrap.js.coffee
+jQuery ->
+  $("a[rel=popover]").popover()
+  $(".tooltip").tooltip()
+  $("a[rel=tooltip]").tooltip()
+```  
+
+<h3>データ検証</h3>
+
+<p>今回のRailsアプリケーションでもう一箇所ユーザ体験を改善できる部分は、フォームの特にデータ検証機能です。<code>Product</code>モデルにはまだデータ検証機能を設定していないので、まずここから始めます。</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  validates_presence_of :name, :price
+end
+```
+
+<p>商品情報を編集してフィールドの1つをブランクのままにすると、フォームに戻されますが何が悪かったかを示すエラーメッセージが表示されません。Twitter Bootstrapにはフォームにエラーメッセージを表示させる方法が含まれており、無効な入力が行なわれたフィールドに色をつけてくれるので、<code>Product</code>フォームでこれを利用します。これの問題は、現状のままではフォームのマークアップがかなり複雑だということです。そこにデータ検証のロジックを組み込もうとしたら、ページはすぐに乱雑になってしまうでしょう。</p>
+
+``` /app/views/products/_form.html.erb
+<%= form_for @product, :html => { :class => 'form-horizontal' } do |f| %>
+  <fieldset>
+    <legend><%= controller.action_name.capitalize %>  Product</legend>
+
+    <div class="control-group">
+      <%= f.label :name, :class => 'control-label' %>
+      <div class="controls">
+        <%= f.text_field :name, :class => 'text_field' %>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <%= f.label :price, :class => 'control-label' %>
+      <div class="controls">
+        <%= f.text_field :price, :class => 'text_field' %>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <%= f.submit nil, :class => 'btn btn-primary' %>
+      <%= link_to 'Cancel', products_path, :class => 'btn' %>
+    </div>
+  </fieldset>
+<% end %>
+```
+
+<p>そこでフォーム出力用のgemを利用することにします。<a href="http://blog.plataformatec.com.br/tag/simple_form/">SimpleForm</a>は最近Bootstrapサポートを追加しました。<a href="https://github.com/mjbellantoni/formtastic-bootstrap">Formtastic Bootstrap gem</a>を使って<a href="https://github.com/justinfrench/formtastic">Formtastic</a>を利用することもできますが、ここではSimpleFormを使ってみます。そのためにはgemfileにgemを追加してbundleコマンドを実行します。</p>
+
+``` /Gemfile
+gem 'simple_form'
+```
+
+<p>次にSimpleFormのインストール用ジェネレータを実行します。そのときに、<code>--bootstrap</code>オプションを指定してTwitter Bootstrap版が使用されるようにします。</p>
+
+``` terminal
+$  rails g simple_form:install --bootstrap
+```
+
+<p>これでSimpleFormを使ってフォームを修正できるようになりました。フォームの最初の部分で<code>form_for</code>を<code>simple_form_for</code>に置き換え、SimpleFormのinputメソッドを使用して名称と価格の各フィールドを定義します。</p>
+
+``` /app/views/products/_form.html.erb
+<%= simple_form_for @product, :html => { :class => 'form-horizontal' } do |f| %>
+  <fieldset>
+    <legend><%= controller.action_name.capitalize %>  Product</legend>
+
+    <%= f.input :name %>
+    <%= f.input :price %>
+
+    <div class="form-actions">
+      <%= f.submit nil, :class => 'btn btn-primary' %>
+      <%= link_to 'Cancel', products_path, :class => 'btn' %>
+    </div>
+  </fieldset>
+<% end %>
+```
+
+<p>SimpleFormの仕組みがわからない場合は、<a href="http://railscasts.com/episodes/234-simple-form-revised">エピソード234</a>に詳しい説明があるので参照してください。では商品フォームを確認してみます。フォームをリロードして、名称を入力せずに商品情報を更新しようとすると、名称フィールドにエラーメッセージが表示されます。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1035/original/E329I04.png" width="800" height="403" alt="無効なフィールドの枠が赤くなりエラーメッセージが表示される"/>
+</div>
+
+<h3>スタイルをカスタマイズする</h3>
+
+<p>我々のアプリケーションは前よりもずっとよくなりましたが、さらにカスタマイズしてユニークなものにしたい場合はどうでしょうか? 例えばリンクやボタンの色やヘッダの外観を変えるにはどうすればいいでしょうか? ドキュメントの<a href="http://twitter.github.com/bootstrap/less.html">LESSを使用する</a>のセクションを見ると、サイトの外観をカスタマイズするために変更できる変数のリストがあります。色やサイズなどを変更することが可能です。ただし、このページはすべての変数をリストアップしていません。すべてを見るためにはソースコードを確認する必要があります。</p>
+
+<p>これらの変数は<code>variables.less</code>ファイルで定義されていて、そこにあるものの一部はドキュメントに記載されていません。これらの変数を<code>bootstrap_and_overrides.css.less</code>ファイルの中で設定します。ここで気をつけなくてはいけないのは、最初にある<code>bootstrap</code>ファイルをインポートしている行の後で設定を行なうということです。<code>iconSpritePath</code>と<code>iconWhiteSpritePath</code>の2つの変数はこのファイルですでに設定されており、ファイルにはその他のいくつかの変数を設定するための説明があります。</p> 
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+@import "twitter/bootstrap/bootstrap";
+
+body { padding-top: 60px; }
+
+@import "twitter/bootstrap/responsive";
+
+// Set the correct sprite paths
+@iconSpritePath: asset-path('twitter/bootstrap/glyphicons-halflings.png');
+@iconWhiteSpritePath: asset-path('twitter/bootstrap/glyphicons-halflings-white.png');
+
+// Your custom LESS stylesheets goes here
+//
+// Since bootstrap was imported above you have access to its mixins which
+// you may use and inherit here
+//
+// If you'd like to override bootstrap's own variables, you can do so here as well
+// See http://twitter.github.com/bootstrap/less.html for their names and documentation
+//
+// Example:
+// @linkColor: #ff0000;
+```
+
+<p>例として、ヘッダの色を少し明るくしたいとします。そのために以下のように変数を設定します。</p>
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+@navbarBackground: #555;
+@navbarBackgroundHighlight: #888;
+@navbarText: #eee;
+@navbarLinkColor: #eee;
+```
+
+<p>ここでサイトのページをリロードすると、ヘッダは明るい灰色になりました。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1036/original/E329I05.png" width="800" height="403" alt="ヘッダの背景色が変わった"/>
+</div>
+
+<p>しかし、変数で簡単に変更できないものもあります。例えばヘッダ内のブランド名のテキストを設定したいとしましょう。この色を定義しているCSSは<code>navbar.less</code>ファイルの中にあり、このヘッダを定義している<code>brand</code>クラスを見てみると、<code>@white</code>変数の値に基づいた色が設定されていることがわかります。この変数の値を変更することもできますが、そうすることで希望しない他の部分に影響が出てしまいます。この1箇所の色だけを変更したいだけなので、変数を介しての操作は制限が多すぎます。しかしこれは大した問題ではありません。CSSに対して作業をおこなっているので、デフォルトのスタイルを<code>bootstrap_and_overrides</code>でオーバーライドすることが可能です。</p> 
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+.navbar .brand {
+  color: #FAFFB8;
+}
+```
+
+<p>ブランド名のテキストは今は淡黄色ですが、あまりいいデザインではないので、思いついたスタイルで好きなようにオーバーライドしてみましょう。</p>
+
+<h3>何をインクルードするかをカスタマイズする</h3>
+
+<p>アプリケーションが出来上がるにつれて、Twitter Bootstrapの一部の部品を使用していないことに気づくかも知れません。そのような場合は、これらを削除してクライアントに送信されるコード量を減らした方がいいでしょう。Twitter Bootstrapのサイトには<a href="http://twitter.github.com/bootstrap/download.html">便利なページ</a>があり、インクルードしたい部品を選んでカスタマイズ版をダウンロードすることが可能になっています。ただしこれによって静的ファイルがダウンロードされるのですが、今回はLESSを使っているので、これは我々が求めるものではありません。そうではなく、Railsアプリケーションにインポートされるファイルをカスタマイズするのがいいでしょう。<code>bootstrap_and_overrides</code>ファイルは<code>twitter/bootstrap/bootstrap</code>をインポートしますが、そのインポートされたファイルのソースコードを見てみると、それがまた多数の他のファイルをインポートしていて、これを使ってどのファイルをインポートするかを決めることができます。</p>
+
+<p>そのためには、<code>bootstrap_and_overrides</code>の最初の行の<code>@import "twitter/bootstrap/bootstrap";</code>を、この<a href="https://github.com/twitter/bootstrap/blob/master/less/bootstrap.less"><code>bootstrap.less</code>ファイル</a>の内容と置き換えます。これはデフォルトでは同じ動作をしますが、これによってBootstrapのどの部品をインクルードするかを選択できるようになります。JavaScriptについても同じようなことが可能です。<a href="https://github.com/seyhunak/twitter-bootstrap-rails/blob/master/vendor/assets/javascripts/twitter/bootstrap.js"><code>bootstrap.js</code>ファイル</a>はBootstrapが提供するすべてのjQueryプラグインをrequireするので、<code>application.js</code>ファイルで <code>//=require twitter/bootstrap</code> の行をそのファイルの内容と置き換え、インクルードしたいものを選択します。</p>
+
+<h3>LESSの代わりにSASSを使用する</h3>
+
+<p>今回のエピソードを終わる前に、LESSの代わりにSASSを使いたい場合の設定方法を紹介します。LESSではなくSASSを選択する意味はどこにあるのでしょうか? Twitter Bootstrapのスタイルを大きく修正しようとする場合にはSASSを使うことを検討するべきで、その理由はless-railsとless-rails-bootstrapのgemの作者であるKen Collinsの<a href="http://metaskills.net/2012/02/27/too-less-should-you-be-using-sass/">最近のブログ記事</a>に挙げられています。</p> 
+
+<p>asset pipelineによって、同じアプリケーション内でSASSとLESSの両方を使用することが可能です。例えばCSSで何か(今回修正したナビゲーションバーのブランド名など)をオーバーライドする場合、これを<code>.css.scss</code>ファイルに移動できますが、必ず<code>bootstrap_and_overrides</code>が先にロードされている必要があります。この方法の制限は、Twitter Bootstrapが使用する変数やmix-inとやりとりができないという点で、これはそれらがLESSのコードで定義されていることによります。</p>
+
+<p>SASSを使用して変数とmix-inとやりとりしたい場合は、<a href="https://github.com/thomas-mcdonald/bootstrap-sass"><code>bootstrap-sass</code> gem</a>を使用することを検討するべきです。これにはSASSで書かれたTwitter Bootstrapが含まれるため、変数をやり取りしたり、オーバーライドすることも可能です。アプリケーションで、LESSを使用する<code>twitter-bootstrap-rails</code> gemから<code>bootstrap-sass</code>に切り替える方法を紹介します。まずgemfileの古いgemを置き換えて、再度<code>bundle</code>コマンドを実行します。</p>
+
+``` /Gemfile
+gem 'bootstrap-sass'
+```
+
+<p>次に<code>bootstrap_and_overrides.css.less</code>ファイルの拡張子を<code>.scss</code>に変更します。そしてファイルの中身を同じ内容の対応するSASSコードに置き換えます。 </p>
+
+``` /app/assets/stylesheets/bootstrap_and_overrides.css.less
+// Set the correct sprite paths
+$iconSpritePath: image-path('glyphicons-halflings.png');
+$iconWhiteSpritePath: image-path('glyphicons-halflings-white.png');
+
+$navbarBackground: #555;
+$navbarBackgroundHighlight: #888;
+$navbarText: #eee;
+$navbarLinkColor: #eee;
+
+@import "bootstrap";
+
+body { padding-top: 60px; }
+
+@import "bootstrap-responsive";
+
+.navbar .brand {
+  color: #FAFFB8;
+}
+```
+
+<p>ここでひとつ重要な違いは、<code>bootstrap</code>をロードする前に変数を設定している点で、これはSASSとLESSの動作のしくみが異なることによります。ロードされたら、変更したいCSSを自由にオーバーライドできるようになります。</p>
+
+<p><code>application.js</code>ファイルで、<code>twitter/bootstrap</code>ではなくbootstrapをrequireします。前と同じように、特定のプラグインを選択してロードしたい場合には、各個別のファイルをばらばらにロードできます。bootstrap-sassの<a href="https://github.com/thomas-mcdonald/bootstrap-sass/blob/master/README.md">README</a>にはこのやり方の例があります。ここでアプリケーションをリロードすると、外観は前と変わりませんが、LESSではなくSASSが使われています。</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1037/original/E329I06.png" width="800" height="403" alt="アプリケーションの外観は同じだがSASSが使われている"/>
+</div>
+
+
+
+
