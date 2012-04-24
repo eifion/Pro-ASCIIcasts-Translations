@@ -1,0 +1,211 @@
+<p>Below is a page from an application which has some static text at the top. We want to translate this text into other languages and allow the user to select the language they want to view it in and there&rsquo;s a placeholder in the top righthand corner of the page where the language options will be displayed.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1100/original/E138RI01.png" width="800" height="400" alt="The home page of our store application showing the static text at the top."/>
+</div>
+
+<p>This is known as internationalization (or i18n for short). To make this page display text in different languages we&rsquo;re going to have to find the static text we want to internationalize in our view template and extract it out so that it can be loaded dynamically based on the user&rsquo;s selected language. This is easy to do in Rails by replacing each piece of static text with a call to the <code>t</code> method and passing in a unique key to identify that text. We&rsquo;ll give our heading the key <code>products.title</code>.</p>
+
+``` /app/views/products/index.html.erb
+<h1><%= t "products.title" %></h1>
+
+<em>Thank you for visiting our store. Now take out your wallet and buy something.</em>
+```
+
+<p>If we reload the page now the page heading will just say &ldquo;Title&rdquo; and if we look at the source we&rsquo;ll see that there&rsquo;s a <code>span</code> element with a class of <code>translation_missing</code>.</p>
+
+``` html
+<h1><span class="translation_missing" title="translation missing: en.products.title">Title</span></h1>
+```
+
+<p>The span&rsquo;s <code>title</code> attribute tells us that the translation is missing for the <code>en.products.title</code> key. We need to add a translation for this key. By default translations are stored in YAML files under the application&rsquo;s <code>config/locales</code> directory and in a there&rsquo;s already one for English. There&rsquo;s a default &ldquo;Hello World&rdquo; translation in this file; we&rsquo;ll remove this and replace it with our products title. Note that the full stop in the key is represented with nesting in the YAML file.</p>
+
+``` /config/locales/en.yml
+# Sample localization file for English. Add more files in this directory for other locales.
+# See https://github.com/svenfuchs/rails-i18n/tree/master/rails%2Flocale for starting points.
+
+en:
+  products:
+    title: "Browse Products"
+```	
+
+<p>When we reload the page now the title has returned to &ldquo;Browse Products&rdquo;.</p>
+
+<p>If the text we want to translate is unique to a template we can start the key with a full stop and we&rsquo;ll do that now to the title and description on the page.</p>
+
+``` /app/views/products/index.html.erb
+<h1><%= t ".title" %></h1>
+
+<em><%= t ".description" %></em>
+```
+
+<p>This key will be prefixed with the path to the template so the key for the description will become <code>products.index.description</code>. We&rsquo;ll need to move the key for these items now so that they&rsquo;re nested under <code>en.products.index</code>.</p>
+
+``` /config/locales/en.yml
+en:
+  products:
+    index:
+      title: "Browse Products"
+      description: "Thank you for visiting our store. Now take out your wallet and buy something."
+```	  
+	  
+<h3>Adding Other Languages</h3>
+
+<p>Now both pieces of text come from the YAML file and we can easily  display this text in more languages by adding new YAML files. Before we do this we&rsquo;ll add links at the top of the page for changing the current language by replacing the placeholder text in the layout file with links from swapping the language between English and Wookieespeak. We&rsquo;ll use the locale code <code>wk</code> for Wookieespeak.</p>
+
+``` /app/views/layouts/application.html.erb
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Store</title>
+    <%= stylesheet_link_tag    "application", media: "all" %>
+    <%= javascript_include_tag "application" %>
+    <%= csrf_meta_tag %>
+  </head>
+  <body>
+    <div id="container">
+      <div id="nav">
+        <%= link_to_unless_current "English", locale: "en" %>
+        <%= link_to_unless_current "Wookieespeak", locale: "wk" %>
+      </div>
+      <% flash.each do |name, msg| %>
+        <%= content_tag :div, msg, id: "flash_#{name}" %>
+      <% end %>
+      <%= yield %>
+    </div>
+  </body>
+</html>
+```
+
+<p>Reloading the page now shows the two links and clicking one of them will set the locale in the URL&rsquo;s querystring.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1101/original/E138RI02.png" width="800" height="400" alt="The page now has links for setting the language."/>
+</div>
+
+<p>We need to check for this parameter and set the language based on it&rsquo;s value. We&rsquo;ll do this in a before filter in our <code>ApplicationController</code> so that it happens before each action. </p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  before_filter :set_locale
+  
+  private
+  def set_locale
+    I18n.locale = params[:locale] if params[:locale].present?
+  end
+end
+```
+
+<p>In this action we set the current language by setting <code>I18n.locale</code> and we set this to the value in the <code>locale</code> parameter, if that parameter is present. There are other ways that we can use to determine the user&rsquo;s locale. If our application allows users to login we could add a locale property to the <code>User</code> model and use something like <code>current_user.locale</code> to fetch the locale. Alternatively we could use a different subdomain for each locale and set the locale from that with <code>request.subdomain</code>. We could also use the user&rsquo;s preferred language from their browser by reading <code>request.env[&quot;HTTP_ACCEPT_LANGUAGE&quot;]</code> or determine it from the remote IP address using a Geolocation service. Once we&rsquo;ve set the locale Rails will look for a matching YAML file. We&rsquo;ll need to create a new <code>wk.yml</code> file for Wookieespeak with the same keys as the English one.</p>
+
+``` /config/locales/wk.yml
+wk:
+  products:
+    index:
+      title: "Wyaaaaaa Ruh"
+      description: "Huwaa muaa mumwa. Wua ga ma ma ahuma ooma."
+```	  
+	  
+<p>We&rsquo;ll need to restart our application for the new file to be picked up. When we do then reload the page and click the &ldquo;Wookieespeak&rdquo; link we&rsquo;ll see the translated text.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1102/original/E138RI03.png" width="800" height="400" alt="The localized text is now shown in Wookieespeak."/>
+</div>
+
+<h3>Persisting The Selected Language</h3>
+
+<p>The <code>locale</code> parameter won&rsquo;t persist between page requests so if we visit another page then click back the language reverts back to the default. We can persist the selected language in a number of ways, for example by storing it in a cookie, but in this episode we&rsquo;ll persist it in the URL and make the first part of the domain&rsquo;s path hold the language. This means that the page above in Wookieespeak would have a path of <code>/wk/products</code>. Changing anything to do with URLs generally means modifying the routes file and that&rsquo;s what we&rsquo;ll do here. Our routes files currently defines two routes: a <code>products</code> resource and root route that points to the <code>ProductsController</code>&rsquo;s <code>index</code> action.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  resources :products
+  root to: 'products#index'
+end
+```
+<p>We&rsquo;ll use the scope method to scope the locale parameter in before these routes. </p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  scope ":locale" do
+    resources :products
+    root to: 'products#index'
+  end
+end
+```
+
+<p>Each route will now be prefixed with a locale scope. If we visit <code>/wk/products</code> now, though, we&rsquo;ll get a routing error.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1103/original/E138RI04.png" width="800" height="400" alt="Trying to visit the products page with wk in the URL now shows an error."/>
+</div>
+
+<p>Our application seems to be trying to visit the show page for a product and failing. The problem is that the product is being passed in as the <code>locale</code> option. There&rsquo;s a method that we can define in the <code>ApplicationController</code> to help with this called <code>default_url_options</code>. Rails will call this method to determine the default options that should be passed in to URL generators. We need to set the <code>locale</code> option so that this is automatically set whenever a URL is generated.</p>
+
+``` /app/controllers/application_controller.rb
+def default_url_options(options = {})
+  {locale: I18n.locale}
+end
+```
+
+<p>When we reload the page now it works as we expect it to as it no longer has a problem generating the URLs for the links for each product. The current locale is now correctly added to each generated URL and so the selected locale persists across pages. If we try visiting a page without entering a locale in the URL the localized text doesn&rsquo;t display correctly as our application thinks that the first part of the path, in this case <code>/products</code>, is the locale and so it tries to find a <code>products.yml</code> file and fails.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1104/original/E138RI05.png" width="800" height="400" alt="Visiting /products now makes our application look for a products.yml file."/>
+</div>
+
+<p>We need to make this <code>:locale</code> option more restrictive and we can do so by making sure that it matches one of a given set of values. We could hard-code a list of locales here but that would mean that we&rsquo;d need to change the routes file each time we add a new language but instead we can use <code>I18n.available_locales</code>. This will return an array so we&rsquo;ll need to join its values with a pipe to generate the correct regular expression.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  scope ":locale", locale: /#{I18n.available_locales.join("|")}/ do
+    resources :products
+    root to: 'products#index'
+  end
+end
+```
+
+<p>When we visit <code>/products</code> now we&rsquo;ll be redirected to <code>/en/product</code>s as this is the default locale. </p>
+
+<h3>Localizing Model Attributes</h3>
+
+<p>There&rsquo;s some text on the page that we haven&rsquo;t translated yet, for example the word &ldquo;Price&rdquo; next to the price of each item. We&rsquo;ll translate this now and while we could use the <code>t</code> method again there&rsquo;s a better way to do this. As we&rsquo;re translating the name of a model&rsquo;s attribute, in this case the <code>Product</code> model&rsquo;s <code>price</code> we can use <code>human_attribute_name</code>.</p>
+
+``` /app/views/products/index.html.erb
+<div class="details">
+  <%= Product.human_attribute_name(:price) %>
+  <%= number_to_currency(product.price) %>
+</div>
+```
+
+<p>This will provide an English default but still allow us to override this text in other languages. We&rsquo;ll need to provide the Wookieespeak for &ldquo;Price&rdquo; in the <code>wk.yml</code> file as as we&rsquo;re localizing an ActiveRecord attribute we&rsquo;ll need to nest this text under a different location. It needs to go under <code>activerecord</code>, <code>attributes</code> followed by the name of the model and the attribute.</p>
+
+``` /config/locales/wk.yml
+wk:
+  products:
+    index:
+      title: "Wyaaaaaa Ruh"
+      description: "Huwaa muaa mumwa. Wua ga ma ma ahuma ooma."
+  activerecord:
+    attributes:
+      product:
+        price: "Aurhaa"
+```		
+
+<p>When we reload the page now we should see the translated text.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1105/original/E138RI06.png" width="800" height="400" alt="The translated text for the price attribute now shows."/>
+</div>
+
+<p>The nice thing about this is that it will show up anywhere we display the attribute so if we go to edit a product now we&rsquo;ll see that the label for the price field is already translated.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1106/original/E138RI07.png" width="800" height="400" alt="The translated attribute is shown in the edit form too."/>
+</div>
+
+<h3>Example YAML Files For Common Translations</h3>
+
+<p>There are many examples of what we can do with locale files inside the <a href="https://github.com/svenfuchs/rails-i18n/tree/master/rails%2Flocale">Github project</a> that&rsquo;s linked to in the comments at the top of the en.yml file. Here we&rsquo;ll find a long list of example locale files that make a great starting point. These include useful translations for date and month names along with time formats, error messages, number and currency formatting and much more.</p>
+
+<p>Sometimes managing translations through YAML files can be a pain. In these cases  it would be good to have an alternative back end with a nice UI to manage it. There are a number of tools that do this such a Copycopter which we demonstrated in <a href="http://railscasts.com/episodes/336-copycopter">episode 336</a>. If you&rsquo;d rather make your own backend and admin interface take a look at <a href="http://railscasts.com/episodes/256-i18n-backends">episode 256</a>.One thing we haven&rsquo;t shown in this episode is how to translate the text in the database such as the name of each product. The Globalize3 gem, covered in <a href="http://railscasts.com/episodes/338-globalize3">episode 338</a>, demonstrates how to do this. Finally you should take a look at the <a href="http://guides.rubyonrails.org/i18n.html">internationalization section of the Rails Guides</a> which covers a lot of details that we haven&rsquo;t shown here.</p>

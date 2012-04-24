@@ -1,0 +1,220 @@
+<p>Below is a page from an application that lists tasks. There are two lists, one each for tasks that are due today and tomorrow. This application has a bug, however: the &ldquo;Meet Yoda&rdquo; task shows up under today&rsquo;s (April 15th) tasks, even though this task isn&rsquo;t due until April 16th at 5am.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1112/original/E054RI01.png" width="800" height="689" alt="Our tasks application with the &lsquo;Meet Yoda&rsquo; task showing on the wrong day."/>
+</div>
+
+<p>Why is this task showing up under today&rsquo;s list when it&rsquo;s not due until tomorrow morning? In this episode we&rsquo;ll find out why by using the Ruby debugger then fix this problem.</p>
+
+<h3>The Code That&rsquo;s at Fault</h3>
+
+<p>Let&rsquo;s dive into the code and see how this page works. The code for this action is in the <code>TasksController</code> and it looks like this:</p>
+
+``` /app/controllers/tasks_controller.rb
+class TasksController < ApplicationController
+  def index
+    @today_tasks = Task.due_on(Date.today)
+    @tomorrow_tasks = Task.due_on(Date.tomorrow)
+  end
+end
+```
+
+<p>In this action we fetch the tasks for today and tomorrow by using a custom class method called <code>due_on</code> on the <code>Task</code> model which we pass a date. Let&rsquo;s take a look at that model.</p>
+
+``` /app/models/task.rb
+class Task < ActiveRecord::Base
+  attr_accessible :due_at, :name
+
+  def self.due_on(date)
+    range = date.to_time...(date+1).to_time
+    where(due_at: range)
+  end
+end
+```
+
+<p>In <code>due_on</code> we create a range. This range has a start value of the date that&rsquo;s passed in and an end value set to the passed in date plus one day, both converted to times with <code>to_time</code>. We then search for tasks that have a <code>due_at</code> value within this range. For some reason this code is finding tasks that fall outside the day that&rsquo;s passed in to <code>due_on</code> so we&rsquo;ll use a Ruby debugger to determine what&rsquo;s causing this error.</p>
+
+<h3>Using The Ruby Debugger</h3>
+
+<p>First we&rsquo;ll need to add a debugger to the gemfile. At the bottom of a Rails 3 application&rsquo;s gemfile there&rsquo;s a commented-out gem called <code>ruby-debug19</code>. This gem doesn&rsquo;t work well under Ruby 1.9.3, which is what we&rsquo;re running our Rails application on, so we can&rsquo;t use it here. Fortunately there&rsquo;s a fork of this gem called <code>debugger</code> which does work so we&rsquo;ll use that instead. We&rsquo;ll use the <code>group</code> option with this gem so that it&rsquo;s only installed in the development and test environments. As always when adding a gem to a Rails application we&rsquo;ll need to run <code>bundle</code> to install it and restart the Rails server if it&rsquo;s running.</p>
+
+``` /Gemfile
+# To use debugger
+# gem 'ruby-debug19', :require => 'ruby-debug'
+gem 'debugger'. group: [:development, :test]
+```
+
+<p>Now we can add a breakpoint anywhere in our code by making a call to <code>debugger</code>. We&rsquo;ll add one at the top of the <code>TaskController</code>&rsquo;s <code>index</code> action.</p> 
+
+``` /app/controllers/tasks_controller.rb
+class TasksController < ApplicationController
+  def index
+    debugger
+    @today_tasks = Task.due_on(Date.today)
+    @tomorrow_tasks = Task.due_on(Date.tomorrow)
+  end
+end
+```
+
+<p>When we reload our tasks page now the browser will appear to hang. This is because our Rails application has been interrupted by the debugger. We can see this if we look in the terminal where we started the server.</p>
+
+``` terminal
+$ rails s
+=> Booting WEBrick
+=> Rails 3.2.3 application starting in development on http://0.0.0.0:3000
+=> Call with -d to detach
+=> Ctrl-C to shutdown server
+[2012-04-15 02:41:15] INFO  WEBrick 1.3.1
+[2012-04-15 02:41:15] INFO  ruby 1.9.3 (2012-02-16) [x86_64-linux]
+[2012-04-15 02:41:15] INFO  WEBrick::HTTPServer#start: pid=6160 port=3000
+/Users/eifion/todo/app/controllers/tasks_controller.rb:4
+@today_tasks = Task.due_on(Date.today)
+(rdb:1)
+```
+
+<p>The last line here is the debugger prompt. If we&rsquo;re unsure what to do here we can type help to get a list of the commands it supports.</p>
+
+``` terminal
+(rdb:1) help
+ruby-debug help v1.1.1
+Type 'help <command-name>' for help on a specific command
+
+Available commands:
+backtrace  delete   enable  help  list    ps       save    step       var  
+break      disable  eval    info  method  putl     set     thread     where
+catch      display  exit    irb   next    quit     show    trace    
+condition  down     finish  jump  p       reload   skip    undisplay
+continue   edit     frame   kill  pp      restart  source  up       
+```
+
+<p>To get more information about that command we can type <code>help</code> and pass in its name. We can view the code around the breakpoint by running <code>list</code> but as most commands have an abbreviated version we can use <code>l</code> instead.</p>
+
+``` terminal
+(rdb:1) l
+[-1, 8] in /home/eifion/todo/app/controllers/tasks_controller.rb
+   1  class TasksController < ApplicationController
+   2    def index
+   3      debugger
+=> 4      @today_tasks = Task.due_on(Date.today)
+   5      @tomorrow_tasks = Task.due_on(Date.tomorrow)
+   6    end
+   7  end
+```   
+
+<p>The arrow points to the line of code that will be executed next. If we run <code>next</code> that line of code will be processed and the debugger will stop at the next line. We can inspect variables with the <code>pp</code> command and we&rsquo;ll do this now to see what the value of <code>@today_tasks</code> is.</p>
+
+``` terminal
+(rdb:1) next
+/home/eifion/todo/app/controllers/tasks_controller.rb:5
+@tomorrow_tasks = Task.due_on(Date.tomorrow)
+(rdb:1) pp @today_tasks
+[#<Task id: 1, name: "Buy some droids", due_at: "2012-04-15 11:50:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">, #<Task id: 2, name: "Meet Obi-Wan", due_at: "2012-04-15 14:20:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">, #<Task id: 3, name: "Find a ship", due_at: "2012-04-15 16:55:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">, #<Task id: 4, name: "Save the princess", due_at: "2012-04-15 19:30:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">, #<Task id: 5, name: "Destroy the the Death Star", due_at: "2012-04-15 21:45:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">, #<Task id: 6, name: "Meet Yoda", due_at: "2012-04-16 05:00:00", created_at: "2012-04-15 08:59:06", updated_at: "2012-04-15 08:59:06">]
+```
+
+<p>We can run any Ruby code we want here so we&rsquo;ll use map to get a list of the times the tasks are due at.</p>
+
+``` terminal
+(rdb:1) pp @today_tasks.map(&:due_at)
+[Sun, 15 Apr 2012 11:50:00 UTC +00:00,
+ Sun, 15 Apr 2012 14:20:00 UTC +00:00,
+ Sun, 15 Apr 2012 16:55:00 UTC +00:00,
+ Sun, 15 Apr 2012 19:30:00 UTC +00:00,
+ Sun, 15 Apr 2012 21:45:00 UTC +00:00,
+ Mon, 16 Apr 2012 05:00:00 UTC +00:00]
+``` 
+
+<p>The April 16th task is showing up in the list so we&rsquo;re able to reproduce our error. Let&rsquo;s try to determine why. We can step into methods with the <code>step</code> command so we&rsquo;ll do that now then run <code>list</code> again to see where we are.</p>
+
+``` terminal
+(rdb:1) step
+/usr/local/lib/ruby/gems/1.9.1/gems/activesupport-3.2.3/lib/active_support/core_ext/date/calculations.rb:36
+::Date.current.tomorrow
+(rdb:1) list
+[31, 40] in /usr/local/lib/ruby/gems/1.9.1/gems/activesupport-3.2.3/lib/active_support/core_ext/date/calculations.rb
+   31        ::Date.current.yesterday
+   32      end
+   33  
+   34      # Returns a new Date representing the date 1 day after today (i.e. tomorrow's date).
+   35      def tomorrow
+=> 36        ::Date.current.tomorrow
+   37      end
+   38  
+   39      # Returns Time.zone.today when <tt>Time.zone</tt> or <tt>config.time_zone</tt> are set, otherwise just returns Date.today.
+   40      def current
+```   
+   
+<p>It looks like we&rsquo;re in the <code>Date</code> class&rsquo;s <code>tomorrow</code> method. This is great as it means that we can walk through and look at Ruby code that isn&rsquo;t our own. We&rsquo;ll skip over this and run <code>next</code> and <code>list</code> again. This takes us in to the <code>due_on</code> method in the <code>Task</code> model.</p>
+
+``` terminal
+(rdb:1) next
+/home/eifion/todo/app/models/task.rb:5
+range = date.to_time...(date+1).to_time
+(rdb:1) list
+[0, 9] in /home/eifion/todo/app/models/task.rb
+   1  class Task < ActiveRecord::Base
+   2    attr_accessible :due_at, :name
+   3  
+   4    def self.due_on(date)
+=> 5      range = date.to_time...(date+1).to_time
+   6      where(due_at: range)
+   7    end
+   8  end
+```  
+
+<p>The debugger is now at the line of code that sets the range and this is probably the source of our problem. Let&rsquo;s take a look at the <code>range</code> variable.</p> 
+
+``` terminal
+(rdb:1) next
+/home/eifion/todo/app/models/task.rb:6
+where(due_at: range)
+(rdb:1) pp range
+2012-04-16 00:00:00 -0700...2012-04-17 00:00:00 -0700
+```
+
+<p>This is the range for tomorrow&rsquo;s tasks and the start and end date do look to be correct so why isn&rsquo;t our code working correctly? We can run <code>irb</code> to switch to a Ruby shell in the debugger and this way we can debug code directly and inspect any variable that we want to. We&rsquo;ll use this to look at the SQL that&rsquo;s used when we search for Tasks by their <code>due_at</code> time.</p>
+
+``` terminal
+(rdb:1) irb
+irb(Task):001:0> puts where(due_at: range).to_sql
+SELECT "tasks".* FROM "tasks"  WHERE ("tasks"."due_at" >= '2012-04-16 07:00:00.000000' AND "tasks"."due_at" < '2012-04-17 07:00:00.000000')
+```
+
+<p>The SQL that runs finds the tasks that are due from 7am on the date passed in to 7am the day after, which is why our early morning &ldquo;Meet Yoda&rdquo; task is appearing on the wrong day. This offset is due to a time zone issue. The server that our app is running on is in the USA and is set to Pacific Standard Time which is seven hours behind UTC. When Rails converts a time to an SQL query it converts it to UTC time and midnight in PST is 7am in UTC. We can call <code>date.to_time_in_current_zone</code> to return the time in the zone that Rails is set at and handle the conversion properly.</p>
+
+
+``` terminal
+irb(Task):004:0> date.to_time
+=> 2012-04-16 00:00:00 -0700
+irb(Task):005:0> date.to_time_in_current_zone
+=> Mon, 16 Apr 2012 00:00:00 UTC +00:00
+```
+
+<p>There are other methods that Rails adds to date that will make it more convenient to generate the range variable. Instead of converting the time into the correct zone we can do this:</p>
+
+``` terminal
+irb(Task):006:0> range = date.beginning_of_day..date.end_of_day
+=> Mon, 16 Apr 2012 00:00:00 UTC +00:00..Mon, 16 Apr 2012 23:59:59 UTC +00:00
+```
+
+<p>This converts both times to UTC and so the SQL query will now have the correct times in it when it&rsquo;s created. The line of code above will set the value of the <code>range</code> variable in our code so when we exit out of irb here that value will be used and not the one that was set in the code earlier. We quit out of irb by running <code>exit</code> and then we can exit out of the debugger and have it carry on processing the request by running <code>continue</code>. When we do this the response in the browser is interesting. The &ldquo;Meet Yoda&rdquo; task is now in both lists.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1113/original/E054RI02.png" width="800" height="735" alt="&ldquo;Meet Yoda&rsquo; now shows on both days&rsquo; tasks."/>
+</div>
+
+<p>This is because the list for today was generated before we altered the range in the debugger and so still has the bug in it. We fixed the range before the list for tomorrow was rendered so this is showing the correct items. Now we can go and fix the code in the <code>Task</code> model.</p>
+
+``` /app/models/task.rb
+def self.due_on(date)
+  range = date.beginning_of_day..date.end_of_day
+  where(due_at: range)
+end
+```
+
+<p>We&rsquo;ll remove the call to <code>debugger</code> in the <code>index</code> action too. When we reload the page now both lists are correct.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1114/original/E054RI03.png" width="800" height="689" alt="The task is now shown on the correct day."/>
+</div>
+
+<p>When you run into an error in your Rails application now, instead of adding <code>puts</code> statements everywhere you should consider using the debugger instead. For an alternative to debugger take a look at the <a href="https://github.com/Mon-Ouie/pry_debug">pry_debug</a> plugin. Pry was covered in <a href="http://railscasts.com/episodes/280-pry-with-rails">episode 280</a>.</p>

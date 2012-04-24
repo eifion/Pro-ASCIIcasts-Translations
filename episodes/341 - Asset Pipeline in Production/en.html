@@ -1,0 +1,387 @@
+<p>Below is a screenshot from a simplified version of the Raliscasts site. The design is made up from several images and CSS files and these files are managed using the asset pipeline. This makes it convenient to work with SASS and CoffeeScript but it can be a pain point, especially in production and that&rsquo;s what we&rsquo;ll focus on in this episode. If you&rsquo;re new to the asset pipeline first watch <a href="http://railscasts.com/episodes/279-understanding-the-asset-pipeline">episode 279</a> which covers the basics.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1119/original/E341I01.png" width="800" height="500" alt="The simplified Railscasts site."/>
+</div>
+
+<p>The first thing we want to do is try to run the application in the production environment on our local machine. This will give us a better understanding of how the asset pipeline works in a production application. </p>
+
+``` terminal
+$ rails s -e production
+```
+
+<p>When we try reloading the page now we get an error message. If we look at the production log we&rsquo;ll see what the error was.</p>
+
+``` terminal
+Started GET "/" for 127.0.0.1 at 2012-04-22 20:31:59 +0100
+Processing by HomeController#index as HTML
+  Rendered home/index.html.erb within layouts/application (2.0ms)
+Completed 500 Internal Server Error in 40ms
+
+ActionView::Template::Error (application.css isn't precompiled):
+    2: <html>
+    3:   <head>
+    4:     <title>Ruby on Rails Screencasts - RailsCasts</title>
+    5:     <%= stylesheet_link_tag    "application", media: "all" %>
+    6:     <%= javascript_include_tag "application" %>
+    7:     <%= csrf_meta_tags %>
+    8:   </head>
+  app/views/layouts/application.html.erb:5:in `_app_views_layouts_application_html_erb__4503618850121487729_70317726904360'
+```  
+  
+<p>The error message tells us that <code>application.css isn&#x27;t precompiled</code>. Production mode works differently from development and doesn&rsquo;t generate assets dynamically, instead expecting them to be precompiled. There&rsquo;s a Rake task which does this and we need to run it before running the application in production mode.</p>
+
+``` terminal
+$ rake assets:precompile
+```
+
+<p>This command compiles the assets into the <code>public/assets</code> directory and we can see them all if we list this directory&rsquo;s contents.</p>
+
+``` terminal
+$ ls public/assets
+application-30939899585cf2854059a1905b2feb91.js
+application-30939899585cf2854059a1905b2feb91.js.gz
+application-f8fc873a94b16acbbf6f7ae162bb5593.css
+application-f8fc873a94b16acbbf6f7ae162bb5593.css.gz
+application.css
+application.css.gz
+application.js
+application.js.gz
+icons
+manifest.yml
+railscasts_logo-46d331662a9cfa9012688c4d587d5a52.png
+railscasts_logo.png
+```
+
+<p>Each asset has a couple of variations, one with an MD5 digest in its name and a gzip version. We&rsquo;ll explain these and how they work later on in this episode. Now that we&rsquo;ve precompiled the assets we&rsquo;ll try starting up the server in production mode again. When we do and reload the page we don&rsquo;t get a 500 error but it looks as if the assets aren&rsquo;t loading correctly.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1123/original/E341I02.png" width="800" height="500" alt="The site&rsquo;s assets appear to be missing."/>
+</div>
+
+<p>If we look at the log files again we&rsquo;ll see routing errors. It looks like our application is trying to process each asset path instead of serving up the precompiled static file. This is another important distinction between development and production. If we look at the middleware for the development environment we&rsquo;ll see at the top of the list a piece of middleware called <code>ActionDispatch::Static</code> which serves up static files from the <code>public</code> directory. If we look at the middleware for the production environment, however, we won&rsquo;t find it listed. For performance reasons Rails doesn&rsquo;t handle serving static files in production but expects these to be handled by a web server, usually Apache or Nginx. For more information on Rack Middleware take a look at <a href="http://railscasts.com/episodes/319-rails-middleware-walkthrough">episode 319</a>. As we&rsquo;re just trying out the production environment on our local machine we can change a setting in our production config file called <code>serve_static_assets</code> to <code>true</code>.</p>
+
+``` /config/environments/production.rb
+# Disable Rails's static asset server (Apache or nginx will already do this)
+  config.serve_static_assets = true
+```  
+
+<p>We can either do this temporarily or set up a new environment as was covered back in <a href="http://railscasts.com/episodes/72-adding-an-environment">episode 72</a>. Now we can start up our application in production mode one more time and this time when we reload the page the assets all load properly as our Rails app now serves static files. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1120/original/E341I03.png" width="800" height="500" alt="Our application now serves static assets correctly."/>
+</div>
+
+<h3>The Asset Pipeline and Capistrano</h3>
+
+<p>Now that we know how to get production mode working on our local system let&rsquo;s see what part the asset pipeline plays in deployment with Capistrano. We&rsquo;ll first need to uncomment the Capistrano gem in the gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile 
+# Deploy with Capistrano
+gem 'capistrano'
+```
+
+<p>When Bundler finishes we&rsquo;ll run <code>capify</code> to generate the Capistrano-related files.</p>
+
+``` terminal
+$ capify .
+[add] writing './Capfile'
+[add] writing './config/deploy.rb'
+[done] capified!
+```
+
+<p>We now have a capfile at the root of our project and there is a comment in there telling us to uncomment the line below it if we&rsquo;re using the asset pipeline. We are so we&rsquo;ll do this.</p>
+
+``` /Capfile
+load 'deploy'
+# Uncomment if you are using Rails' asset pipeline
+load 'deploy/assets'
+Dir['vendor/gems/*/recipes/*.rb','vendor/plugins/*/recipes/*.rb'].each { |plugin| load(plugin) }
+load 'config/deploy' # remove this line to skip loading any of the default tasks
+```
+
+<p>We mentioned this in <a href="http://railscasts.com/episodes/335-deploying-to-a-vps">episode 335</a> but we&rsquo;ll go into more detail here and show exactly what the <code>deploy/assets</code> file does. We can find this file in the <a href="https://github.com/capistrano/capistrano/blob/master/lib/capistrano/recipes/deploy/assets.rb">Capistrano source code on Github</a>. Nothing magical happens inside this file: it defines a few Capistrano variables and tasks to add the asset pipeline behaviour to Capistrano deployment. The variables are defined at the top of the file and they include a <code>RAILS_GROUPS=assets</code> setting  which specifies the gem group to use when compiling the assets.</p>
+
+``` assets.rb
+load 'deploy' unless defined?(_cset)
+
+_cset :asset_env, "RAILS_GROUPS=assets"
+_cset :assets_prefix, "assets"
+_cset :assets_role, [:web]
+
+_cset :normalize_asset_timestamps, false
+
+before 'deploy:finalize_update', 'deploy:assets:symlink'
+after 'deploy:update_code', 'deploy:assets:precompile'
+# Rest of file omitted.
+```
+
+<p>If we look at our application&rsquo;s gemfile we&rsquo;ll see the <code>assets</code> group. The gems in this group are only loaded when the assets are precompiled as normally these gems are not loaded in in the production environment.</p>
+
+``` /Gemfile
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer', :platform => :ruby
+
+  gem 'uglifier', '>= 1.0.3'
+end
+```
+
+<p>Let&rsquo;s take a look at some of the tasks that are defined in the <code>assets</code> Capistrano recipe. The first is a <code>deploy:assets:symlink</code> task. This is used internally and is run automatically before the <code>deploy:finalize_update</code> task.</p>
+
+``` assets.rb
+before 'deploy:finalize_update', 'deploy:assets:symlink'
+after 'deploy:update_code', 'deploy:assets:precompile'
+
+namespace :deploy do
+  namespace :assets do
+    desc <<-DESC
+      [internal] This task will set up a symlink to the shared directory \
+      for the assets directory. Assets are shared across deploys to avoid \
+      mid-deploy mismatches between old application html asking for assets \
+      and getting a 404 file not found error. The assets cache is shared \
+      for efficiency. If you cutomize the assets path prefix, override the \
+      :assets_prefix variable to match.
+    DESC
+    task :symlink, :roles => assets_role, :except => { :no_release => true } do
+      run <<-CMD
+        rm -rf #{latest_release}/public/#{assets_prefix} &&
+        mkdir -p #{latest_release}/public &&
+        mkdir -p #{shared_path}/assets &&
+        ln -s #{shared_path}/assets #{latest_release}/public/#{assets_prefix}
+      CMD
+    end
+    # Other tasks omitted.
+  end
+end
+```
+
+<p>This task symlinks the shared assets path to the public assets path on each release so all the assets are actually stored under the shared directory on the server. The next task is called <code>precompile</code> and this triggers the <code>assets:precompile</code> Rake task that we ran earlier to prepare the assets for production.</p>
+
+``` assets.rb
+desc <<-DESC
+  Run the asset precompilation rake task. You can specify the full path \
+  to the rake executable by setting the rake variable. You can also \
+  specify additional environment variables to pass to rake via the \
+  asset_env variable. The defaults are:
+
+    set :rake,      "rake"
+    set :rails_env, "production"
+    set :asset_env, "RAILS_GROUPS=assets"
+DESC
+task :precompile, :roles => assets_role, :except => { :no_release => true } do
+  run "cd #{latest_release} && #{rake} RAILS_ENV=#{rails_env} #{asset_env} assets:precompile"
+end
+```
+
+<p>This task is also run automatically during the deployment process so we don&rsquo;t have  to think about preparing the server for the asset pipeline; it will happen  automatically when we deploy. There&rsquo;s one more task defined in this file called <code>clean</code>.</p>
+
+``` assets.rb
+desc <<-DESC
+  Run the asset clean rake task. Use with caution, this will delete \
+  all of your compiled assets. You can specify the full path \
+  to the rake executable by setting the rake variable. You can also \
+  specify additional environment variables to pass to rake via the \
+  asset_env variable. The defaults are:
+
+    set :rake,      "rake"
+    set :rails_env, "production"
+    set :asset_env, "RAILS_GROUPS=assets"
+DESC
+task :clean, :roles => assets_role, :except => { :no_release => true } do
+  run "cd #{latest_release} && #{rake} RAILS_ENV=#{rails_env} #{asset_env} assets:clean"
+end
+```
+
+<p>This removes the assets and isn&rsquo;t run automatically so we&rsquo;ll need to trigger it manually if we want it to run.</p>
+
+<h3>Deploying Our Application</h3>
+
+<p>Now that we know what&rsquo;s going on behind the scenes let&rsquo;s try deploying this application. We&rsquo;ve already set up a server and prepared this application and you can watch <a href="http://railscasts.com/episodes/335-deploying-to-a-vps">episodes 335</a> and <a href="http://railscasts.com/episodes/337-capistrano-recipes">337</a> for more information on how to do this. We&rsquo;ve done everything up to the point of running <code>cap deploy:cold</code> so let&rsquo;s run this to deploy our application. This command will check out our application from a Git repository, run <code>bundle install</code> to install any gems, run the migrations then run <code>rake assets:precompile</code> to compile any assets. When we run this command we&rsquo;ll see a lot of output but at the end we&rsquo;ll get an error. The <code>assets:precompile</code> task fails to run and if we look further up the file we&rsquo;ll see the error <code>Could not find a JavaScript runtime</code>. Some of the assets, including CoffeeScript require JavaScript to compile but a bare Ubuntu setup such as we have doesn&rsquo;t include a JavaScript runtime by default so we&rsquo;ll have to install one. Normally when setting up a server we install node.js but we&rsquo;ve purposely left that step out here so that you can see what the error message looks like. If installing node.js on the server isn&rsquo;t an option another way to solve this problem is to use a gem called <code>therubyracer</code>. This is shown commented out in the gemfile so we just need to uncomment it and run <code>bundle</code> again.</p>
+
+``` /Gemfile
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  gem 'therubyracer', :platform => :ruby
+
+  gem 'uglifier', '>= 1.0.3'
+end
+```
+
+<p>We&rsquo;ll need to commit this change to our Git repository before we can try deploying our application again and push the change up to Github.</p>
+
+``` terminal
+$ git commit -am "adding therubyracer."
+$ git push origin master
+```
+
+<p>This time when we run <code>cap deploy:cold</code> we don&rsquo;t see any errors so let&rsquo;s try looking at our application in a browser. Now it works and all our application&rsquo;s assets are loaded properly.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1121/original/E341I04.png" width="800" height="500" alt="Our application assets are now served correctly on the live server, too."/>
+</div>
+
+<h3>Caching</h3>
+
+<p>If we look at the network activity for the request we&rsquo;ll see all the requests for assets that were made. Note that each of them has the MD5 digest at the end of the filename. This is a unique fingerprint based on the contents of the file and this means that if the file itself changes the name will change as well. This means that we can cache this file, knowing that if it changes, its name will change too.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1122/original/E341I05.png" width="801" height="400" alt="The MD5 digest in each asset&rsquo;s filename can be seen in the network inspector."/>
+</div>
+
+<p>Our Nginx server configuration file looks is shown below. Take a look at the <code>location</code> section which focuses on everything under the <code>/assets</code> directory.</p>
+
+``` /config/recipes/templates/nginx_unicorn.erb
+upstream unicorn {
+  server unix:/tmp/unicorn.<%= application %>.sock fail_timeout=0;
+}
+
+server {
+  listen 80 default deferred;
+  # server_name example.com;
+  root <%= current_path %>/public;
+
+  location ^~ /assets/ {
+    gzip_static on;
+    expires max;
+    add_header Cache-Control public;
+  }
+
+  try_files $uri/index.html $uri @unicorn;
+  location @unicorn {
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $http_host;
+    proxy_redirect off;
+    proxy_pass http://unicorn;
+  }
+
+  error_page 500 502 503 504 /500.html;
+  client_max_body_size 4G;
+  keepalive_timeout 10;
+}
+```
+
+<p>One of the options here is <code>expires</code> and this is set to <code>max</code> which means that the browser should cache the files that come from this directory for as long as possible. If we look at the response headers for one of these files we&rsquo;ll see that the <code>Cache-Control</code> header has the <code>max-age</code> set to a very high number which means that the file will be cached in the browser for a long time.</p>
+
+``` headers
+Date: Mon, 23 Apr 2012 16:09:30 GMT
+Connection: close
+Last-Modified: Tue, 10 Apr 2012 07:15:23 GMT
+Server: nginx/1.0.14
+Cache-Control: max-age=315360000, public
+Expires: Thu, 31 Dec 2037 23:55:55 GMT
+```
+
+<p>The site feels much faster when assets are served through the cache but this wouldn&rsquo;t be possible without the digest in the name as otherwise the browser wouldn&rsquo;t know when the browser had changed and so wouldn&rsquo;t know that it had to update the cache. As the file&rsquo;s name changes every time its contents change the new version is always requested from the server. For more information on HTTP caching see <a href="http://railscasts.com/episodes/321-http-caching">episode 321</a>. One side effect of this behaviour is that we always need to use helper methods when referencing an asset. For example we have to use <code>image_tag</code> to add an image instead of using a static path. In SASS files we can use the <code>image-url</code> function to reference an image and this will add the correct digest.</p> 
+
+<p>Not only does the asset pipeline help with caching it also tries to make the content of each asset as small as possible. JavaScript files, for example, are minimized to reduce the file size. In addition to this a gzipped version of each JavaScript and CSS file is generated and we take advantage of this in our Nginx configuration file by setting <code>gzip_static</code> to on. This means that Nginx will look for a gzipped version and send that to the user when it can. If we&rsquo;re ever unsure if gzip is working we can use this <a href="http://www.whatsmyip.org/http-compression-test/">HTTP compression test</a>. All we need to do is pass the URL to an asset and it will tell us if it&rsquo;s served with gzip compression or not.</p>
+
+<p>Hopefully this has given you an understanding of why the asset pipeline works in the way it does. It might seem that it jumps through a lot of hoops but if it gives a better and faster experience to the user then it&rsquo;s worth it. </p>
+
+<p>The default asset pipeline behaviour is good and it&rsquo;s recommended that you stick with it if you can. This behaviour doesn&rsquo;t fit everyone&rsquo;s needs, however, and it&rsquo;s customizable as we can see in the production configuration file. For example we can choose to turn off JavaScript and CSS compression by setting <code>config.assets.compress</code> to <code>false</code>.</p> 
+
+``` /config/environments/production.rb
+# Compress JavaScripts and CSS
+config.assets.compress = false
+```
+
+<p>This can be useful for debugging purposes, for example in a staging environment. We can also enable asset compiling by setting the <code>config.assets.compile</code> option. We can do this if we don&rsquo;t want to precompile assets but instead compile them on the fly as requests are made to them.</p> 
+
+``` /config/environments/production.rb
+# Don't fallback to assets pipeline if a precompiled asset is missed
+config.assets.compile = true
+```
+
+<p>If we make this change we&rsquo;ll also need change the <code>application.rb</code> file as by default the gems in the <code>assets</code> group won&rsquo;t be loaded in production. We&rsquo;ll need to comment out the line that tells Bundler only to require the <code>asset</code> group gems in development and test and uncomment the one that requires them for the current environment.</p>
+
+``` /config/application.rb
+if defined?(Bundler)
+  # If you precompile assets before deploying to production, use this line
+  # Bundler.require(*Rails.groups(:assets => %w(development test)))
+  # If you want your assets lazily compiled in production, use this line
+  Bundler.require(:default, :assets, Rails.env)
+end
+```
+
+<p>If we make this change we&rsquo;ll also want comment out the <code>load &#x27;deploy/assets&#x27;</code> line in the capfile so that the assets aren&rsquo;t precompiled when we deploy. </p>
+
+<p>This compile option is useful if we don&rsquo;t want to precompile the assets, but it&rsquo;s not really recommended as it means that our application is going to load all the asset-related gems in every Rails instance and compile them there. This will use more memory which can be avoided by precompiling the assets. If our issue with precompiling is that it takes a long time to do we can add another configuration option to <code>production.rb</code>.</p>
+
+``` /config/environments/production.rb
+config.assets.initialize_on_precompile = false
+```
+
+<p>This means that the entire Rails application won&rsquo;t be loaded when the assets are precompiled, but it won&rsquo;t work in some cases such as on a Heroku deploy. Finally there&rsquo;s an option to turn the digest feature off if we don&rsquo;t want this added to the end of each file name.</p>
+
+```/config/environments/production.rb
+# Generate digests for assets URLs
+config.assets.digest = false
+```
+
+<p>If we do remove the digest we should also remove the <code>expires max;</code> line from the <code>nginx_unicorn.rb</code> file so that the asset files aren&rsquo;t cached. This means that if we remove the digest we lose the advantages of caching.</p> 
+
+<p>While we&rsquo;re in the <code>production.rb</code> configuration file we should also uncomment the <code>x_sendfile_header</code> option for the web server that we&rsquo;re using, in our case Nginx.</p>
+
+``` /config/environments/production.rb
+# Specifies the header that your server uses for sending files
+# config.action_dispatch.x_sendfile_header = "X-Sendfile" # for apache
+config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for nginx
+```
+
+<p>This way if the Rails app sends a file back the web server will be used.</p>
+
+<h3>Precompiling Assets Locally</h3>
+
+<p>There&rsquo;s one more asset pipeline variation that we&rsquo;ll talk about and this has to do with the Capistrano <code>precompile</code> task that we showed earlier. If we have trouble compiling assets on the server then we can&rsquo;t run the <code>assets:precompile</code> Rake task there. Instead we can run it on our local machine and upload the compiled assets to the server.</p> 
+
+<p>There are a number of steps we need to take to do this. First we need to add the <code>/public/assets</code> directory to the application&rsquo;s <code>.gitignore</code> file so that the compiled assets aren&rsquo;t added to the Git repository.</p>
+
+``` /.gitignore
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+#
+# If you find yourself ignoring temporary files generated by your text editor
+# or operating system, you probably want to add a global ignore instead:
+#   git config --global core.excludesfile ~/.gitignore_global
+
+# Ignore bundler config
+/.bundle
+
+# Ignore the default SQLite database.
+/db/*.sqlite3
+
+# Ignore all logfiles and tempfiles.
+/log/*.log
+/tmp
+
+/config/database.yml
+
+/public/assets
+```
+
+<p>While we could use Git to sync these assets we&rsquo;ll use <code>rsync</code> as otherwise our repository can get fairly messy. Next we&rsquo;ll need to check that the <code>load &#x27;deploy/assets&#x27;</code> line is uncommented in the capfile as we still want to use the other tasks that this provides. Finally at the bottom of <code>deploy.rb</code> we&rsquo;ll need to add this task.</p>
+
+``` /config/deploy.rb
+namespace :deploy do
+  namespace :assets do
+    desc "Precompile assets on local machine and upload them to the server."
+    task :precompile, roles: :web, except: {no_release: true} do
+      run_locally "bundle exec rake assets:precompile"
+      find_servers_for_task(current_task).each do |server|
+        run_locally "rsync -vr --exclude='.DS_Store' public/assets #{user}@#{server.host}:#{shared_path}/"
+      end
+    end
+  end
+end
+```
+
+<p>This overrides the <code>deploy:assets:precompile</code> task so that it runs <code>rake assets:precompile</code> locally then runs <code>rsync</code> to sync the <code>public/assets</code> directory to each server in the web role. With these settings in place when we run <code>cap deploy</code> now the assets will be compiled locally and then synced to the server. With this set up the asset pipeline still works and our server doesn&rsquo;t have to precompile the assets.</p>

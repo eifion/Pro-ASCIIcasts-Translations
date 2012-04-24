@@ -1,0 +1,423 @@
+<p>In <a href="http://railscasts.com/episodes/335-deploying-to-a-vps">episode 335</a> we showed how to deploy a Rails application to a Virtual Private Server. Doing this required a large number of commands to be run on the server to get it all set up and if an application runs on multiple servers this is something that we don&rsquo;t want to have to do manually every single time. In <a href="http://railscasts.com/episodes/337-capistrano-recipes">episode 337</a> we automated the server setup with Capistrano. This works quite well but it stretches the limits of what Capistrano is designed to do as it isn&rsquo;t really a server provisioning tool. This brings us to <a href="http://wiki.opscode.com/display/chef/Home">Chef</a>. Chef is a complicated framework and we won&rsquo;t be able to do much more than scratch the surface of it in this episode but hopefully we&rsquo;ll show you enough of the basics so that you can explore Chef on your own afterwards if it seems to fit your needs. Chef helps us to automate the setup and management of our servers and when we use it one of the first decisions we need to make is whether to go with Chef Server or Chef Solo. Chef Server runs on its own server and other servers can communicate with it to determine how they should be set up. By contrast Chef Solo runs on the server that it&rsquo;s setting up and as we&rsquo;re working with a single VPS we&rsquo;ll be using that here.</p>
+
+<h3>Installing Chef on a Server</h3>
+
+<p>We&rsquo;ll be using Chef on a Linode VPS and we&rsquo;ll start by rebuilding the server so that we&rsquo;ve got clean install to work with. Once the server has finished rebuilding we&rsquo;ll boot it up and SSH in to it.</p> 
+
+``` terminal
+$ ssh root@178.xxx.xxx.xxx
+```
+
+<p>Chef uses Ruby which isn&rsquo;t installed on our server by default. We&rsquo;ll install it from source using <a href="https://gist.github.com/2307959">the commands listed here</a>. Note that the last command shown installs two gems to get Chef installed on our system.</p>
+
+``` terminal
+#!/usr/bin/env bash
+apt-get -y update
+apt-get -y install build-essential zlib1g-dev libssl-dev libreadline5-dev libyaml-dev
+cd /tmp
+wget ftp://ftp.ruby-lang.org/pub/ruby/1.9/ruby-1.9.3-p125.tar.gz
+tar -xvzf ruby-1.9.3-p125.tar.gz
+cd ruby-1.9.3-p125/
+./configure --prefix=/usr/local
+make
+make install
+gem install chef ruby-shadow --no-ri --no-rdoc
+```
+
+<p>If you prefer to install Ruby through rvm or rbenv you can do so with Chef afterwards through a recipe; here we&rsquo;re installing an initial version of Ruby to get Chef up and running. We can use the Gist shown above to run these commands in one go, like this:</p>
+
+``` terminal
+root@li349-144:~# curl -L https://gist.github.com/raw/2307959/ff2d251c9f4f149c5ca73c873ad8990711b3ca74/chef_solo_bootstrap.sh | bash
+```
+
+<p>This script will take a while to run but once it&rsquo;s finished we should have both Ruby and Chef Solo installed.</p>
+
+``` terminal
+root@li349-144:~# ruby -v
+ruby 1.9.3p125 (2012-02-16 revision 34643) [i686-linux]
+root@li349-144:~# chef-solo -v
+Chef: 0.10.8
+```
+
+<h3>Creating Our First Chef Recipe</h3>
+
+<p>Now we can set Chef up. Chef Solo expects all its configuration files and cookbooks to be on the same system that it&rsquo;s running on. We&rsquo;ll create a chef directory under <code>/var</code> where we can put all our Chef-related files then move into that directory.</p>
+
+``` terminal
+root@li349-144:~# mkdir /var/chef
+root@li349-144:~# cd /var/chef
+```
+
+<p>In this directory we&rsquo;ll make our first Chef cookbook under a new cookbooks directory. Normally we&rsquo;d make a separate cookbook for each thing we want to install and set up on the server, such as Nginx, MySql or Git, but as we&rsquo;re working with Chef Solo on a single VPS we&rsquo;ll create a cookbook that we&rsquo;ll call <code>main</code> which will set up everything we need. Each cookbook has many recipes and these go in a <code>recipes</code> subdirectory.</p>
+
+``` terminal
+root@li349-144:/var/chef# mkdir -p cookbooks/main/recipes
+```
+
+<p>Chef will look inside the cookbooks directory for a recipe called <code>default.rb</code> and this will be the primary recipe. Other recipes will usually be variations of this. Inside this recipe we have access to methods that will help us set up our system. For example if we want to install Git on our server we could use package like this:</p>
+
+``` /var/chef/cookbooks/main/recipes/default.rb
+package "git-core"
+```
+
+<p>This method will use the server&rsquo;s package manager, in this case apt-get, to install <code>git-core</code>. We also need to set up a configuration file for Chef Solo so that we can tell it where are cookbooks are stored. We&rsquo;ll do this in a file called <code>solo.rb</code>.</p>
+
+``` /var/chef/solo.rb
+cookbook_path File.expand_path("../cookbooks", __FILE__)
+```
+
+<p>We can now run the <code>chef-solo</code> command and use this file as its config file.</p>
+
+``` terminal
+root@li349-144:/var/chef# chef-solo -c solo.rb 
+[Thu, 12 Apr 2012 17:40:55 -0400] INFO: *** Chef 0.10.8 ***
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Run List is []
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Run List expands to []
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Starting Chef Run for li349-144.members.linode.com
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Running start handlers
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Start handlers complete.
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Chef Run complete in 0.00146873 seconds
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Running report handlers
+[Thu, 12 Apr 2012 17:40:56 -0400] INFO: Report handlers complete
+```
+
+<p>Even though Chef ran successfully here it didn&rsquo;t really do anything. This is because its Run List is empty and we can see this in the output. Even though we&rsquo;ve created a recipe we haven&rsquo;t told Chef to run it. We can create as many recipes as we like but Chef will only run the ones we tell it to. We need to make a Run List configuration and with Chef Solo this is normally done in a JSON file in a file called <code>node.json</code>. Don&rsquo;t confuse this with Node.js, this is completely unrelated. &ldquo;Node&rdquo; is a term that Chef uses to represent a server that it needs to set up. Inside this file we need to specify a <code>run_list</code> option and tell it to run our main recipe.</p>
+
+``` /var/chef/node.json
+{
+  "run_list":["recipe[main]"]
+}
+```
+
+<p>We can run <code>chef-solo</code> again now and use its <code>-j</code> option to tell it to use our new <code>node.js</code> file. This time we&rsquo;ll can see our recipe in the Run List and also that the <code>git-core</code> package is installed.</p>
+
+``` terminal
+root@li349-144:/var/chef# chef-solo -c solo.rb -j node.json 
+[Thu, 12 Apr 2012 17:54:40 -0400] INFO: *** Chef 0.10.8 ***
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Setting the run_list to ["recipe[main]"] from JSON
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Run List is [recipe[main]]
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Run List expands to [main]
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Starting Chef Run for li349-144.members.linode.com
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Running start handlers
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Start handlers complete.
+[Thu, 12 Apr 2012 17:54:41 -0400] INFO: Processing package[git-core] action install (main::default line 1)
+[Thu, 12 Apr 2012 17:54:45 -0400] INFO: package[git-core] installed version 1:1.7.0.4-1ubuntu0.2
+[Thu, 12 Apr 2012 17:54:45 -0400] INFO: Chef Run complete in 3.912841062 seconds
+[Thu, 12 Apr 2012 17:54:45 -0400] INFO: Running report handlers
+[Thu, 12 Apr 2012 17:54:45 -0400] INFO: Report handlers complete
+```
+
+<p>If we don&rsquo;t want to specify the <code>-j</code> option each time we run <code>chef-solo</code> we can use the <code>json_attribs</code> option in our <code>solo.rb</code> file to specify the path of our JSON configuration file.</p>
+
+``` /var/chef/solo.rb
+cookbook_path File.expand_path("../cookbooks", __FILE__)
+json_attribs File.expand_path("../node.json", __FILE__)
+```
+
+<p>Now we can call <code>chef-solo</code> without the <code>-j</code> option and when we do the output is a little different. </p>
+
+``` terminal
+root@li349-144:/var/chef# chef-solo -c solo.rb
+[Thu, 12 Apr 2012 18:09:19 -0400] INFO: *** Chef 0.10.8 ***
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Setting the run_list to ["recipe[main]"] from JSON
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Run List is [recipe[main]]
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Run List expands to [main]
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Starting Chef Run for li349-144.members.linode.com
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Running start handlers
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Start handlers complete.
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Processing package[git-core] action install (main::default line 1)
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Chef Run complete in 0.135240883 seconds
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Running report handlers
+[Thu, 12 Apr 2012 18:09:20 -0400] INFO: Report handlers complete
+```
+
+<p>The output still says that Chef ran the install action for <code>git-core</code> but it doesn&rsquo;t say that it installed it. The idea here is that we can run <code>chef-solo</code> as many times as we want and it will only install and perform the actions necessary on the system and not rerun actions that have already been run. This means that we can run Chef quite frequently, such as every time we deploy our Rails application.</p> 
+
+<h3>Adding More Functionality To Our Recipe</h3>
+
+<p>There&rsquo;s more that we want to do to our recipe but editing it on the server isn&rsquo;t the easiest way to do it so we&rsquo;ll move everything over to our local machine. We can use <code>scp</code> to copy everything over.</p>
+
+``` terminal
+$ scp -r root@178.xxx.xxx.xxx:/var/chef .
+```
+
+<p>In our <code>default.rb</code> file we currently just install Git but there are other things we can do here. If we look at the <a href="http://wiki.opscode.com/display/chef/Resources">Resources page</a> of Chef&rsquo;s documentation we&rsquo;ll find a list of the many methods that we can call in our recipe. For example we can make new directories and files and and even create new users on the server. Each of these methods has its own documentation page explaining how its used. We want to create a <code>deployer</code> user on the server so we&rsquo;ll add a call to the <code>user</code> method to our recipe. We need to pass this a name and a block and in the block we specify the user&rsquo;s other attributes. The <code>password</code> attribute is interesting: we don&rsquo;t use a plain text password here but a shadow hash and <a href="http://wiki.opscode.com/display/chef/Resources#Resources-User">the documentation for this page</a> shows us how to create one. We&rsquo;ll use the <code>openssl</code> command to do this. We pass this the password we want to use and it will return a hash that we can use in our recipe.</p>
+
+``` terminal
+$ openssl passwd -1 "theplaintextpassword"
+$1$5mk003zO$GDCEKOIAsqvm4RDrJMX5Z.
+```
+
+<p>Now we can write the code to create our new user using this hash for the password.</p>
+
+``` cookbooks/main/recipes/default.rb
+package "git-core"
+
+user "deployer" do
+  password "$1$5mk003zO$GDCEKOIAsqvm4RDrJMX5Z."
+  gid "admin"
+  home "/home/deployer"
+  supports manage_home: true
+end
+```
+
+<p>We also set <code>gid</code> to set the users group to admin so that the user has sudo privileges and set the user&rsquo;s home directory. This directory may not be set by default and it can be necessary to use the <code>supports</code> option to ensure that it&rsquo;s created as we have here. To run this recipe we&rsquo;re going to have to copy these changes back to the server and we can use <code>rsync</code> to do this.</p>
+
+``` terminal
+$ rsync -r . root@178.xxx.xxx.xxx:/var/chef
+```
+
+<p>We can then run the recipe on the server by SSHing in and running <code>chef-solo</code> with our <code>solo.rb</code> file.</p>
+
+``` terminal
+$ ssh root@178.xxx.xxx.xxx "chef-solo -c /var/chef/solo.rb"
+root@178.xxx.xxx.xxx's password: 
+[Fri, 13 Apr 2012 13:54:09 -0400] INFO: *** Chef 0.10.8 ***
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Setting the run_list to ["recipe[main]"] from JSON
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Run List is [recipe[main]]
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Run List expands to [main]
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Starting Chef Run for li349-144.members.linode.com
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Running start handlers
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Start handlers complete.
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Processing package[git-core] action install (main::default line 1)
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Processing user[deployer] action create (main::default line 3)
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: user[deployer] created
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Chef Run complete in 0.15908905 seconds
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Running report handlers
+[Fri, 13 Apr 2012 13:54:10 -0400] INFO: Report handlers complete
+```
+
+<p>We can see from the output that the <code>deployer</code> user has been created so the changes to our recipe have worked.</p>
+
+<p>Each time we run these commands we need to enter the server&rsquo;s root user&rsquo;s password, but there&rsquo;s a useful utility called <code>ssh-copy-id</code> that we can use so that we don&rsquo;t have to. This isn&rsquo;t included by default in OS X but if we have Homebrew we can easily install it by running</p> 
+
+``` terminal
+$ brew install ssh-copy-id
+```
+
+<p>We can now use this, passing in a username and the address of our server. We&rsquo;ll need to enter the password one last time but after we do we won&rsquo;t need to type it in again when we log in to the server.</p>
+
+<h3>Making Our Recipe More Configurable</h3>
+
+<p>Back to our recipe now. The way we create out user works fine but we have a lot of static strings in our recipe. The username and password are settings that we might want to change depending on the server we&rsquo;re deploying to so it would be a good idea to move these out into an external configuration file. Chef supports this by giving us access to the content in <code>node.json</code> file. We&rsquo;ll add a new option to this file and define the username and password there.</p>
+
+``` node.json
+{
+  "user": { 
+    "name": "deployer",
+    "password": "$1$5mk003zO$GDCEKOIAsqvm4RDrJMX5Z."
+  },
+  "run_list":["recipe[main]"]
+}
+```
+
+<p>In our recipe we can now access these values through a <code>node</code> hash.</p>
+
+``` cookbooks/main/recipes/default.rb
+package "git-core"
+
+user node[:user][:name] do
+  password node[:user][:password]
+  gid "admin"
+  home "/home/#{node[:user][:name]}"
+  supports manage_home: true
+end
+```
+
+<h3>Templates</h3>
+
+<p>Next we&rsquo;ll look at templates. These allow us to generate files dynamically using erb and to use one all we have to do is call <code>template</code> and pass it the name of the file we want to write and a block. In the block we use source, passing in the name of the template. We want deployer to have ZSH as the default shell and so we&rsquo;ll use the <code>shell</code> option to set this. We want to create a <code>zshrc</code> file for deployer in their home directory and we&rsquo;ll do this by using a template. Note that we&rsquo;re adding the <code>zsh</code> package here so that it&rsquo;s installed on the server.</p>
+
+``` cookbooks/main/recipes/default.rb
+package "git-core"
+package "zsh"
+
+user node[:user][:name] do
+  password node[:user][:password]
+  gid "admin"
+  home "/home/#{node[:user][:name]}"
+  supports manage_home: true
+  shell "/bin/zsh"
+end
+
+template "/home/#{node[:user][:name]}/.zshrc" do
+  source "zshrc.erb"
+  owner node[:user][:name]
+end
+```
+
+<p>As well as setting the source file, which we&rsquo;ll create next, we use <code>owner</code> to set the file&rsquo;s owner to that user. Templates belong in a <code>templates</code> directory under <code>cookbooks/main</code> and the templates for our <code>default</code> recipe should go in a <code>default</code> directory here. We&rsquo;ll create <code>zshrc.rb</code> here and paste some simple code into it that customizes the prompt, sets the default Rails environment to production and adds some colour to the <code>ls</code> command.</p>
+
+``` chef/cookbooks/main/templates/default/zshrc.erb
+export PS1='%m:%3~%# '
+export RAILS_ENV=production
+
+alias ls='ls --color=auto'
+```
+
+<p>The great thing about using a template to do this is that we can use erb code to make it dynamic. We have access to the <code>node</code> object like we did in our recipe so we could customize our template so that the command to set the <code>ls</code> colouring is only included if an <code>ls_color</code> option is present.</p>
+
+``` chef/cookbooks/main/templates/default/zshrc.erb
+export PS1='%m:%3~%# '
+export RAILS_ENV=production
+
+<% if node[:user][:ls_color] %>
+alias ls='ls --color=auto'
+<% end %>
+```
+
+<p>Now we can change this file based on the contents of <code>node.json</code> and we&rsquo;ll add the <code>ls_color</code> option there now.</p>
+
+``` node.json
+{
+  "user": { 
+    "name": "deployer",
+    "password": "$1$5mk003zO$GDCEKOIAsqvm4RDrJMX5Z.",
+    "ls_color": true
+    },
+  "run_list":["recipe[main]"]
+}
+```
+
+<p>Even though we&rsquo;ve already created <code>deployer</code> on the server running this recipe again will update that user and set their default shell. This is one of the great things about Chef: if something is already set up on the server and we alter a recipe Chef will update it to match the changes.</p> 
+
+<p>We can try this out now. We&rsquo;ll run <code>rsync</code> to copy the changes to the server and then run <code>chef-solo</code> again.</p>
+
+``` terminal
+$ rsync -r . root@178.xxx.xxx.xxx:/var/chef
+$ ssh root@178.xxx.xxx.xxx "chef-solo -c /var/chef/solo.rb"
+[Fri, 13 Apr 2012 16:25:23 -0400] INFO: *** Chef 0.10.8 ***
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Setting the run_list to ["recipe[main]"] from JSON
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Run List is [recipe[main]]
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Run List expands to [main]
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Starting Chef Run for li349-144.members.linode.com
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Running start handlers
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Start handlers complete.
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Processing package[git-core] action install (main::default line 1)
+[Fri, 13 Apr 2012 16:25:24 -0400] INFO: Processing package[zsh] action install (main::default line 2)
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: package[zsh] installed version 4.3.10-5ubuntu3
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: Processing user[deployer] action create (main::default line 4)
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: user[deployer] altered
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: Processing template[/home/deployer/.zshrc] action create (main::default line 12)
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: template[/home/deployer/.zshrc] owner changed to 1000
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: template[/home/deployer/.zshrc] updated content
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: Chef Run complete in 1.876843613 seconds
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: Running report handlers
+[Fri, 13 Apr 2012 16:25:26 -0400] INFO: Report handlers complete
+```
+
+<p>We can see from the output that ZSH has been installed, that the <code>deployer</code> user has been altered and that the <code>.zshrc</code> template has been processed and copied into the right directory. If we log into the server as <code>deployer</code> now we should have ZSH as our shell and if we <code>cat</code> the <code>.zshrc</code> file we&rsquo;ll see the code from the template.</p>  
+
+``` terminal
+li349-144:~% cat .zshrc
+export PS1='%m:%3~%# '
+export RAILS_ENV=production
+
+alias ls='ls --color=auto'
+```
+
+<h3>Using Other Cookbooks To Install Software</h3>
+
+<p>We&rsquo;ll need to install more software on the server before we can host a Rails application on it. For example we want to install Nginx and while we could do this by installing its package doing this will install an older version. If we want to install a more recent version or compile it from source we can do so. There&rsquo;s a rich community around Chef and plenty of cookbooks available on the Internet. A good place to start is the <a href="http://community.opscode.com/cookbooks">Opscode Community site</a> and there&rsquo;s an <a href="http://community.opscode.com/cookbooks/nginx">Nginx cookbook</a> available there. We can download this and move it into our Chef directory. This is a better example of a cookbook than our simple example and it comes complete with a <code>metadata.rb</code> file that contains a lot of useful information. When using a third-party cookbook it&rsquo;s a good idea to check its calls to depends. Cookbooks often have dependencies on other cookbooks and the Nginx cookbook is no exception, depending on <code>build-essential</code>, <code>runit</code>, <code>bluepill</code> and <code>ohai</code>.</p>
+
+``` cookbooks/nginx/metadata.rb
+%w{ build-essential runit bluepill }.each do |cb|
+  depends cb
+end
+
+depends 'ohai', '~> 1.0.2'
+```
+
+<p>Depending on our configuration not all of these will be used but it&rsquo;s still a good idea to find these on the Opscode Community site and download them. We&rsquo;ll do that now and copy each one into our <code>cookbooks</code> directory.</p>
+
+<p>The metadata file also tells us what recipes the cookbook makes available. The Nginx cookbook has two recipes, a default <code>nginx</code> one, which uses the normal package install, and an <code>nginx::source</code> one which will install Nginx from source.</p>
+
+``` cookbooks/nginx/metadata.rb
+recipe "nginx", "Installs nginx package and sets up configuration with Debian apache style with sites-enabled/sites-available"
+recipe "nginx::source", "Installs nginx from source and sets up configuration with Debian apache style with sites-enabled/sites-available"
+```
+
+<p>We want to install Nginx from source so we&rsquo;ll use this one here. We can view the source code for this recipe by looking in its <code>recipes</code> directory and if we look in the <code>source.rb</code> file there we&rsquo;ll find the code that downloads, un-tars and compiles the Nginx source code.</p>
+
+<p>There are a number of configuration options in this recipe that we can override in our <code>node.json</code> configuration file. One option, for example, sets the version of Nginx that will be downloaded.</p>
+
+``` cookbooks/nginx/recipes/source.rb
+src_filepath  = "#{Chef::Config[:file_cache_path]}/nginx-#{node[:nginx][:version]}.tar.gz"
+```
+
+<p>The default value for this and all the other settings is defined in a file in the recipe&rsquo;s <code>attributes</code> directory. The version number appears in a <code>default.rb</code> file. We&rsquo;ll leave all the settings at their defaults for now.</p>
+
+``` cookbooks/nginx/attributes/default.rb
+default[:nginx][:version] = "1.0.14"
+```
+
+<p>Exploring cookbooks like this is great way to get an understanding of how Chef works and of how to structure our own cookbooks. We&rsquo;ll go back to our own recipe now and use the <code>nginx::source</code> recipe from the cookbook to install Nginx on our server.</p>
+
+``` cookbooks/main/recipes/default.rb
+package "git-core"
+package "zsh"
+
+include_recipe "nginx::source"
+
+user node[:user][:name] do
+  password node[:user][:password]
+  gid "admin"
+  home "/home/#{node[:user][:name]}"
+  supports manage_home: true
+  shell "/bin/zsh"
+end
+
+template "/home/#{node[:user][:name]}/.zshrc" do
+  source "zshrc.erb"
+  owner node[:user][:name]
+end
+```
+
+<p>When we <code>rsync</code> our changes to the server then run our <code>chef-solo</code> there again we&rsquo;ll see a lot more output now as it goes through the process of downloading and compiling Nginx. We now have Nginx running on our server but it doesn&rsquo;t have any enabled sites. We&rsquo;ll add the following code to our recipe to make a simple Nginx site.</p>
+
+``` cookbooks/main/recipes/default.rb
+directory "/home/#{node[:user][:name]}/example" do
+  owner node[:user][:name]
+end
+
+file "/home/#{node[:user][:name]}/example/index.html" do
+  owner node[:user][:name]
+  content "<h1>Hello World!</h1>"
+end
+
+file "#{node[:nginx][:dir]}/sites-available/example" do
+  content "server { root /home/#{node[:user][:name]}/example; }"
+end
+
+nginx_site "example"
+```
+
+<p>Here we make a new <code>example</code> directory under the deployer user&rsquo;s home directory and add a simple HTML file to it. We then create another file under Nginx&rsquo;s <code>sites-available</code> directory with a very simple Nginx configuration file in it. Making a site available doesn&rsquo;t make it enabled but the Nginx cookbook provides an <code>nginx_site</code> method to do this and we&rsquo;ve used this in our recipe. This will enable our site and also reload Nginx. When we <code>rsync</code> the changes to the server and run <code>chef-solo</code> again we should be able to view our simple site by visiting the server&rsquo;s IP address in a browser.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1111/original/E339I01.png" width="800" height="290" alt="Our simple site running under Nginx."/>
+</div>
+
+<p>That&rsquo;s as far as we&rsquo;re going to take this recipe. It&rsquo;s still quite simple but it should give you some idea as to how to go about setting up a server for a Rails application. We&rsquo;ve only scratched the surface of Chef in this episode but there&rsquo;s much more documentation available at the <a href="http://wiki.opscode.com/display/chef/home">Chef Wiki</a> and it&rsquo;s well worth taking a look through this if you need more information. If you need to install a specific piece of software on your server the chances are that someone has already written a cookbook to do this so remember to check the <a href="http://community.opscode.com/cookbooks">community site</a> before writing your own recipes. There are even more cookbooks available on Github. 37 Signals have a large <a href="https://github.com/37signals/37s_cookbooks">cookbooks repository</a> which is worth taking a look at.</p>
+
+<p>If you decide that Chef isn&rsquo;t for you there are a number of alternatives available such as <a href="http://puppetlabs.com/">Puppet</a>, <a href="https://github.com/crafterm/sprinkle">Sprinkle</a>, <a href="https://github.com/wr0ngway/rubber">Rubber</a> and <a href="https://github.com/kenn/sunzi">Sunzi</a>. If your Rails application is fairly simple don&rsquo;t forget about the Capistrano recipe solution that we showed last week.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+

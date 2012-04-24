@@ -1,0 +1,165 @@
+<p>The Rails log file should be one of the first places where we look to determine what&rsquo;s going on behind the scenes of a Rails request. It gives us all sorts of useful information including the controller action that was triggered, the parameters that were sent with the request, the database queries that were made, what the response was and even how long the request took to process. Whenever something goes wrong in a Rails application the log file will help us to determine what&rsquo;s gone wrong. If the log file doesn&rsquo;t display all the information we want about a request we can add whatever we want to it. Let&rsquo;s say that we&rsquo;re debugging the <code>index</code> action of an <code>ArticlesController</code> and we want to know the number of articles that were found. We can do this by using <code>logger.debug</code>.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  logger.debug "Articles Count: #{@articles.size}"
+end
+```
+
+<p>When we visit this action in a browser now we&rsquo;ll see the count in the log.</p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 20:59:50 +0100
+Processing by ArticlesController#index as HTML
+  Article Load (0.1ms)  SELECT "articles".* FROM "articles" 
+Articles Count: 3
+  Rendered articles/index.html.erb within layouts/application (2.8ms)
+Completed 200 OK in 18ms (Views: 8.4ms | ActiveRecord: 0.7ms)
+[2012-04-23 20:59:50] WARN  Could not determine content-length of response body. Set content-length of the response or set Response#chunked = true
+```
+
+<p>We have access to the <code>logger</code> method in all models, controllers and views. If we need to access it somewhere else we can call <code>Rails.logger.debug</code> instead. We don&rsquo;t always need to use <code>debug</code>; the logger has different levels of message priority. As well as <code>debug</code>, which is the lowest priority, we can use <code>info</code>, <code>warn</code>, <code>error</code> or <code>fatal</code> depending on the importance of the message we&rsquo;re trying to log. The great thing about this is that we can customize the log level we want to use in different environments. If we look at the <code>production.rb</code> configuration file we&rsquo;ll see that there&rsquo;s a configuration option to change the default log level, which is <code>info</code>. If we want to display more logging information in production we could change this to <code>debug</code> then once we have all the kinks ironed out of our application we could change it to <code>warn</code> to display less information in the log.</p>
+
+``` /config/environments/production.rb
+# See everything in the log (default is :info)
+config.log_level = :warn
+```
+
+<h3>Log Tags</h3>
+
+<p>There are other options we can pass in to customize our logger. The <code>log_tags</code> option was added in Rails 3.2 and can be used to prepend information to each log message. We&rsquo;ll show how this works in development so that we can see the effect. For now we&rsquo;ll just set it to a static string.</p>
+
+``` /config/environments/development.rb
+Blog::Application.configure do
+  config.log_tags = ["Hello World"]
+  # Other config settings omitted.
+end
+```
+
+<p>To see this we&rsquo;ll need to restart the application&rsquo;s server then make a request. </p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 21:22:51 +0100
+[Hello World] Processing by ArticlesController#index as HTML
+[Hello World]   Article Load (0.1ms)  SELECT "articles".* FROM "articles" 
+[Hello World] Articles Count: 3
+[Hello World]   Rendered articles/index.html.erb within layouts/application (31.7ms)
+[Hello World] Completed 200 OK in 210ms (Views: 172.6ms | ActiveRecord: 3.3ms)
+```
+
+<p>We can see now that each log message is prefixed with that tag. Passing in a string isn&rsquo;t very useful but we can pass in a symbol such as <code>:remote_ip</code> and this will call that method on the request object for each request. Another useful option is <code>:uuid</code>. This is the unique identifier for each request and it&rsquo;s useful in production mode if we have multiple Rails instances writing to the log at the same time.</p>
+
+``` /config/environments/development.rb
+Blog::Application.configure do
+  config.log_tags = [:uuid, :remote_ip]
+  # Other config settings omitted.
+end
+```
+
+<p>When we restart our application now and make a request each log message is prefixed with a unique request identifier and the user&rsquo;s IP address.</p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 21:32:18 +0100
+[878f88dce4eb8c3193d8d1eeb401b275] [127.0.0.1] Processing by ArticlesController#index as HTML
+```
+
+<p>We can also pass in a lambda, or anything that responds to <code>call</code>. The request object will be passed in to it and this will enable us to generate a tag dynamically. To demonstrate this we&rsquo;ll return the current time.</p>
+
+``` /config/environments/development.rb
+Blog::Application.configure do
+  config.log_tags = [:uuid, :remote_ip, lambda { |req| Time.now }]
+  # Other config settings omitted.
+end
+```
+
+<p>Now each line in the log file will be tagged with the current time.</p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 21:39:58 +0100
+[f069842f0099b8063d1549771b6b9645] [127.0.0.1] [2012-04-23 21:39:58 +0100] Processing by ArticlesController#index as HTML
+```
+
+<h3>Formatting Log Output</h3>
+
+<p>Log tags can only take us so far. If we want to print out the log level or do some extra formatting of each message we can&rsquo;t really do that here. Fortunately the Ruby logger makes it easy to change the message formatting by setting a <code>formatter</code> to an object that responds to <code>call</code> and which returns a string with the formatted message. Unfortunately Rails makes it difficult to get to the actual Ruby logger instance as it wraps it in a couple of other classes. One option is to create a new logger instance and set this as the Rails logger and the production configuration file has a commented-out example of how we can do this.</p>
+
+``` /config/environments/production.rb
+# Use a different logger for distributed setups
+# config.logger = ActiveSupport::TaggedLogging.new(SyslogLogger.new)
+```
+
+<p>This approach works but it can involve a lot of work, especially if all we want to do is add some formatting. Instead we&rsquo;ll use an easier solution by creating a new initializer and overriding the <code>Logger::SimpleFormatter</code> class.</p>
+
+``` /config/initializers/log_formatter.rb
+class Logger::SimpleFormatter
+  def call(severity, time, progname, msg)
+    "[#{severity}] #{msg}\n"
+  end
+end
+```
+
+<p>Rails uses this class internally as the default formatter for its logger. If we override its <code>call</code> method we can handle the formatting however we want and we&rsquo;ve added the severity in here before the message. Note that we need to make sure that we add a newline character at the end of the line.</p>
+
+<h3>Simplifying The Log Output</h3>
+
+<p>Having all this information in the log in development isn&rsquo;t really useful and makes it difficult to read the log, but in production it can be really handy to have all this  detail. One thing hat makes the log file harder to read is the log messages related to the asset pipeline. Each request for an asset is logged in detail and this makes it difficult to find log messages specific to the controllers. It would be nice if we could remove the asset-related logs. Fortunately there&rsquo;s a gem called <code>quiet_assets</code> that does this. We&rsquo;ll add it to the gemfile in the development group then run <code>bundle</code> to install it.</p>
+
+```/Gemfile
+gem 'quiet_assets', group: :development
+```
+
+<p>Requests to the asset pipeline will now no longer be logged.</p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 22:27:01 +0100
+[INFO] [4efdb286071dd2d53097d275687fe8e7] [127.0.0.1] [2012-04-23 22:27:01 +0100] Processing by ArticlesController#index as HTML
+[DEBUG] [4efdb286071dd2d53097d275687fe8e7] [127.0.0.1] [2012-04-23 22:27:01 +0100]   Article Load (0.1ms)  SELECT "articles".* FROM "articles" 
+[DEBUG] [4efdb286071dd2d53097d275687fe8e7] [127.0.0.1] [2012-04-23 22:27:01 +0100] Articles Count: 3
+[INFO] [4efdb286071dd2d53097d275687fe8e7] [127.0.0.1] [2012-04-23 22:27:01 +0100]   Rendered articles/index.html.erb within layouts/application (6.3ms)
+[INFO] [4efdb286071dd2d53097d275687fe8e7] [127.0.0.1] [2012-04-23 22:27:01 +0100] Completed 200 OK in 111ms (Views: 51.9ms | ActiveRecord: 2.7ms)
+[2012-04-23 22:27:02] WARN  Could not determine content-length of response body. Set content-length of the response or set Response#chunked = true
+[2012-04-23 22:27:02] WARN  Could not determine content-length of response body. Set content-length of the response or set Response#chunked = true
+[2012-04-23 22:27:02] WARN  Could not determine content-length of response body. Set content-length of the response or set Response#chunked = true
+[2012-04-23 22:27:02] WARN  Could not determine content-length of response body. Set content-length of the response or set Response#chunked = true
+```
+
+<p>There are still some annoying warning messages relating to the content length showing up in the log. These show up because we&rsquo;re using Webrick as our web server and the easiest way to fix this is to switch over to Thin instead. All we need to do is add it to the gemfile in the development group, run <code>bundle</code> then restart the Rails server again.</p>
+
+``` /Gemfile
+gem 'quiet_assets', group: :development
+gem 'thin', group: :development
+```
+
+<p>Now when we make a request we no longer get the warning messages.</p>
+
+``` log
+Started GET "/" for 127.0.0.1 at 2012-04-23 22:37:11 +0100
+[INFO] [b60ddc7dfe8a77ddf57e50074bb034f9] [127.0.0.1] [2012-04-23 22:37:11 +0100] Processing by ArticlesController#index as HTML
+[DEBUG] [b60ddc7dfe8a77ddf57e50074bb034f9] [127.0.0.1] [2012-04-23 22:37:11 +0100]   Article Load (0.1ms)  SELECT "articles".* FROM "articles" 
+[DEBUG] [b60ddc7dfe8a77ddf57e50074bb034f9] [127.0.0.1] [2012-04-23 22:37:11 +0100] Articles Count: 3
+[INFO] [b60ddc7dfe8a77ddf57e50074bb034f9] [127.0.0.1] [2012-04-23 22:37:11 +0100]   Rendered articles/index.html.erb within layouts/application (5.3ms)
+[INFO] [b60ddc7dfe8a77ddf57e50074bb034f9] [127.0.0.1] [2012-04-23 22:37:11 +0100] Completed 200 OK in 91ms (Views: 31.9ms | ActiveRecord: 2.7ms)
+```
+
+<h3>More Efficient Logging</h3>
+
+<p>We&rsquo;ll finish this episode with one more tip on logging. Earlier we made a call to <code>logger.debug</code> in a controller to log the number of articles that the action retrieved. If we want to do something more processor-intensive here and we don&rsquo;t want to slow down our production application with a log message that may not even be written to the log, depending on the current log level. Let&rsquo;s say that instead we want to log the total number of articles. This will involve making a database call.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  logger.debug "Articles Count: #{Article.count}"
+end
+```
+
+<p>To avoid this we can pass in a block to the <code>debug</code> call. This means that the code will only be called if the logging level is set to debug.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  logger.debug { "Articles Count: #{Article.count}" }
+end
+```
+
+<p>If we&rsquo;re ever logging something that might slow down performance in a log message we should be sure to pass it in in a block.</p> 
