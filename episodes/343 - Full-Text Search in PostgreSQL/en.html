@@ -1,0 +1,402 @@
+<p>In past episodes we&rsquo;ve covered many solutions for full-text searching, including Thinking Sphinx, Sunspot and ElasticSearch. All of these require an external search engine, separate from the database but if we use Postgres for our application&rsquo;s database we can take advantage of its built-in full-text search capability. There are many advantages to keeping the full-text search inside the primary database and we&rsquo;ll mention some of these as we show you how this works in this episode. The application will be working with in this episode is a simple blogging application that shows a number of articles. We&rsquo;ve already implemented some of this application&rsquo;s features, including pagination and a simple search form, similar to the one we demonstrated in <a href="http://railscasts.com/episodes/37-simple-search-form">episode 37</a>, that finds articles whose name or content contains the search term.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1126/original/E343I01.png" width="800" height="500" alt="Our blogging application."/>
+</div>
+
+<p>First we&rsquo;ll walk through the source code for this application, starting with the view template for the page above.</p>
+
+``` /app/views/articles/index.html.erb
+<h1>Articles</h1>
+
+<%= form_tag articles_path, method: :get do %>
+  <p>
+    <%= text_field_tag :query, params[:query] %>
+    <%= submit_tag "Search", name: nil %>
+  </p>
+<% end %>
+
+<div id="articles">
+<% @articles.each do |article| %>
+  <h2>
+    <%= link_to article.name, article %>
+    <span class="comments">(<%= pluralize(article.comments.size, 'comment') %>)</span>
+  </h2>
+  <div class="info">
+    by <%= article.author.name %>
+    on <%= article.published_at.strftime('%b %d, %Y') %>
+  </div>
+  <div class="content"><%= article.content %></div>
+<% end %>
+</div>
+
+<%= will_paginate @articles %>
+```
+
+<p>This template contains the code that renders the list of articles and also the simple search form. When the form is submitted the search term is passed as <code>query</code> parameter to the <code>articles</code> path, which is the <code>ArticlesController</code>&rsquo;s <code>index</code> action. Let&rsquo;s look at that next.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.text_search(params[:query]).page(params[:page]).per_page(3)
+end
+```
+
+<p>Here we fetch the articles we want by calling a custom <code>text_search</code> class method on the <code>Article</code> model and passing the <code>query</code> parameter to it, along with the current page number and number of articles per page. The <code>text_search</code> method looks like this:</p>
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    where("name ilike :q or content ilike :q", q: "%#{query}%")
+  else
+    scoped
+  end
+end
+```
+
+<p>Here we check to see if the <code>query</code> parameter is present and if it is we find the articles that match that query using a <code>like</code> comparison (actually <code>ilike</code> so that the search is case-insensitive). We compare the articles&rsquo; <code>name</code> and <code>content</code> columns to the query, which is wrapped in percent signs so that the search term is matched anywhere in those fields.</p> 
+
+<h3>Using Full-Text Searching</h3>
+
+<p>This is a poor excuse for full-text searching so let&rsquo;s take advantage of Postgres&rsquo;s full-text search feature to improve it. One problem with our current approach is that we&rsquo;re treating the search term as a single string so if we search for &ldquo;superman character&rdquo; no articles are returned even though we have articles that contain both those words but not together. Changing from a <code>like</code> condition to a full-text search with Postgres is quite easy. All we have to do is replace <code>ilike</code> with double at signs (<code>@@</code>) and remove the percent signs from the search term like this:</p>
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    where("name @@ :q or content @@ :q", q: query)
+  else
+    scoped
+  end
+end
+```
+
+<p>When we search for &ldquo;superman character&rdquo; now we&rsquo;ll see all the articles that contain both of those words.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1127/original/E343I02.png" width="800" height="500" alt="A search for &ldquo;superman characters&rdquo; now returns the relevants articles."/>
+</div>
+
+<p>By default the full-text search uses an English dictionary with stemming so if we search for &ldquo;superman characters&rdquo; (note the extra &ldquo;s&rdquo;) we get the same set of results, even though the word &ldquo;characters&rdquo; isn&rsquo;t in the articles. Stop words are also supported which means that common English words will be ignored. If we search for &ldquo;superman of dc comics&rdquo;, this will return the &ldquo;Superman&rdquo; article even though it doesn&rsquo;t contain the word &ldquo;of&rdquo;.</p>
+
+<p>One of the best reasons for keeping full-text searching in the database is that it works seamlessly with all other SQL clauses. For example our pagination still works without any adjustment from us. The <code>text_search</code> method is still just a simple ActiveRecord scope that we can add other clauses to, such as <code>page</code> and <code>per_page</code> for pagination. Another good reason for using this approach is that everything stays in sync automatically: if we were to create a new article, or edit an article, that content is instantly available in the full-text search.</p>
+
+<h3>How Full-Text Searching Works</h3>
+
+<p>We&rsquo;ve shown how powerful full-text searching is but what&rsquo;s going on when we use it and how can we get the most from it?  We&rsquo;ll use the database console to show what goes on when we make a full-text search. We can use the <code>rails db</code> command to enter the Postgres console and we&rsquo;ll use the <code>SELECT</code> command with some static text to experiment with various operators and functions.</p>
+
+``` terminal
+noonoo:blog eifion$ rails db
+psql (9.1.2)
+Type "help" for help.
+
+blog_development=# select 'ninja turtles' @@ 'turtles';
+ ?column? 
+----------
+ t
+(1 row)
+```
+
+<p>The <code>t</code> we get as a response stands for true. Searching for <code>turtle</code> here will return true as well because of stemming, while searching for something else entirely such as <code>green</code> will return false. There&rsquo;s some typecasting going on behind the scenes here. The phrase on the left side of the <code>@@</code> is being converted to a tsvector while the phrase on the right is converted to a plain tsquery. We can mimic this by calling the relevant functions.</p>
+
+``` terminal
+blog_development=# select to_tsvector('ninja turtles') @@ plainto_tsquery('turtle');
+ ?column? 
+----------
+ t
+(1 row)
+```
+
+<p>This isn&rsquo;t the full story, however. We can pass a dictionary as a first argument to these functions, like this:</p>
+
+``` terminal
+blog_development=# select to_tsvector('english', 'ninja turtles') @@ plainto_tsquery('english', 'turtle');
+ ?column? 
+----------
+ t
+(1 row)
+```
+
+<p>English is the default dictionary so this will give us the same results as before. This means that we can change the language or do a more literal search by passing in <code>simple</code> instead of <code>english</code>.</p>
+
+``` terminal
+blog_development=# select to_tsvector('simple', 'ninja turtles') @@ plainto_tsquery('simple', 'turtle');
+ ?column? 
+----------
+ f
+(1 row)
+```
+
+<p>This time we get a false response as we&rsquo;re searching for <code>turtle</code> not <code>turtles</code>. </p>
+
+<p>You might be wondering what the difference between a plain tsquery and a normal one is. If we use <code>to_tsquery</code> instead of  <code>plainto_tsquery</code> we&rsquo;ll get the same results as we only have a single word in our query. If we enter multiple search words, though, we&rsquo;ll get a syntax error.</p>
+
+``` terminal
+blog_development=# select to_tsvector('simple', 'ninja turtles') @@ to_tsquery('simple', 'ninja turtles');
+ERROR:  syntax error in tsquery: "ninja turtles"
+```
+
+<p>A normal tsquery expects boolean operators between each word so we can use <code>&amp;</code> to search for <code>ninja</code> and <code>turtles</code> or a pipe to search for <code>ninja</code> or <code>turtles</code>.</p>
+
+``` terminal
+blog_development=# select to_tsvector('simple', 'ninja turtles') @@ to_tsquery('simple', 'ninja | turtles');
+ ?column? 
+----------
+ t
+(1 row)
+```
+
+<p>To exclude a word we use an exclamation mark, so <code>ninja &amp; !turtles</code> would match text that contains <code>ninja</code> but not <code>turtles</code>. If we&rsquo;re going to use a plain <code>to_tsquery</code> like this we&rsquo;ll need to translate whatever the user enters as a search term and use the relevant operators.</p> 
+
+<p>When performing a plain-text search we often want to sort the results by relevance. We can do this by using the <code>ts_rank</code> function which returns a float value that we can use for ranking.</p>
+
+``` terminal
+blog_development=# select ts_rank(to_tsvector('ninja turtles'), to_tsquery('turtles'));
+  ts_rank  
+-----------
+ 0.0607927
+(1 row)
+```
+
+<p>Now that we know how to sort by relevance let&rsquo;s apply this to our application. We&rsquo;ll add some code to the <code>text_search</code> method in the <code>Article</code> model that sets a <code>rank</code> variable to the value of the sum of the ranks for the <code>name</code> and <code>content</code> fields. We can then order the results by that rank in descending order.</p>
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    rank = <<-RANK
+    ts_rank(to_tsvector(name), plainto_tsquery(#{sanitize(query)})) +
+    ts_rank(to_tsvector(content), plainto_tsquery(#{sanitize(query)}))
+  RANK
+  where("name @@ :q or content @@ :q", q: "%#{query}%").order("#{rank} desc")
+  else
+    scoped
+  end
+end
+```
+
+<p>When we search for &ldquo;dc comics&rdquo; now the Superman article will appear at the top of the results as that&rsquo;s the article that contains that phrase most frequently.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1128/original/E343I03.png" width="800" height="500" alt="Search results are now ordered by relevance."/>
+</div>
+
+<h3>Texticle and PgSearch</h3>
+
+<p>The <code>text_search</code> method is starting to get a little messy and it will only get worse if we search against more columns. Fortunately there&rsquo;s a gem that can help up here. <a href="http://tenderlove.github.com/texticle/">Texticle</a> makes it easier to do full-text searching in Postgres. To use it we just need to add it to the application&rsquo;s gemfile and then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'texticle', require: 'texticle/rails'
+```
+
+<p>Now we can clean up the <code>text_search</code> method in our model like this:</p>
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    search(query)
+  else
+    scoped
+  end
+end
+```
+
+<p>This will automatically search all text-based columns on the table and do much the same as we had before. If we search for &ldquo;Superman&rdquo; again now and look at the log file we&rsquo;ll see the SQL query that was made.</p> 
+
+``` terminal
+  Article Load (2.5ms)  SELECT "articles".*, ts_rank(to_tsvector('english', "articles"."name"::text), to_tsquery('english', 'dc\ comics'::text)) + ts_rank(to_tsvector('english', "articles"."content"::text), to_tsquery('english', 'dc\ comics'::text)) AS "rank0.9491099641574605" FROM "articles" WHERE (to_tsvector('english', "articles"."name"::text) @@ to_tsquery('english', 'dc\ comics'::text) OR to_tsvector('english', "articles"."content"::text) @@ to_tsquery('english', 'dc\ comics'::text)) ORDER BY "rank0.9491099641574605" DESC LIMIT 3 OFFSET 0
+   (1.2ms)  SELECT COUNT(*) FROM "articles" WHERE (to_tsvector('english', "articles"."name"::text) @@ to_tsquery('english', 'dc\ comics'::text) OR to_tsvector('english', "articles"."content"::text) @@ to_tsquery('english', 'dc\ comics'::text))
+```   
+   
+<p>This query is similar to the manual one we had, using <code>ts_rank</code> to generate a rank and <code>@@</code> to compare a tsvector and a tsquery.</p> 
+
+<p>Texticle is great for a simple full-text search like this but if we want a more customizable solution then another gem called <a href="https://github.com/Casecommons/pg_search">PgSearch</a> is better. This offers a couple of ways to do full-text searching in Postgres. One option called multi-search will search multiple models at once. The other option is called <code>pg_search_scope</code> and is used for searching a single model. We&rsquo;ll use this second option in our application. First we&rsquo;ll replace the <code>texticle</code> gem in our gemfile with pg_search and then run <code>bundle</code> again to install it.</p>
+
+``` /Gemfile
+#gem 'texticle', require: 'texticle/rails'
+gem 'pg_search'
+```
+
+<p>Now in our <code>Article</code> model we need to include <code>PgSearch</code>. We can then use the <code>pg_search_scope</code> method. We need to pass in a name for our scope and we&rsquo;ll call ours <code>search</code>. We can then use the <code>against</code> option to specify the columns that we want to search. This will generate a <code>search</code> method which we can use in the same way we used it with Texticle.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  attr_accessible :author_id, :author, :content, :name, :published_at
+  belongs_to :author
+  has_many :comments
+  
+  include PgSearch
+  pg_search_scope :search, against: [:name, :content]
+
+  def self.text_search(query)
+    if query.present?
+      search(query)
+    else
+      scoped
+    end
+  end
+end
+```
+
+<p>We&rsquo;ll need to restart our Rails application for these changes to be picked up but after we do we should have full-text searching working with PgSearch. This won&rsquo;t work exactly as before as it doesn&rsquo;t use the English dictionary by default so if we search for &ldquo;characters&rdquo; the articles containing &ldquo;character&rdquo; won&rsquo;t be returned. If we look at the log we&rsquo;ll see that query passes <code>simple</code> to the tsvector and tsquery instead of the English dictionary.</p>
+
+``` terminal
+  Article Load (1.5ms)  SELECT "articles".*, (ts_rank((to_tsvector('simple', coalesce("articles"."name", '')) || to_tsvector('simple', coalesce("articles"."content", ''))), (to_tsquery('simple', ''' ' || 'characters' || ' ''')), 0)) AS pg_search_rank FROM "articles" WHERE (((to_tsvector('simple', coalesce("articles"."name", '')) || to_tsvector('simple', coalesce("articles"."content", ''))) @@ (to_tsquery('simple', ''' ' || 'characters' || ' ''')))) ORDER BY pg_search_rank DESC, "articles"."id" ASC LIMIT 3 OFFSET 0
+```  
+  
+<p>To get this behaviour back we&rsquo;ll need to specify the dictionary like this:</p>
+
+``` /app/models/article.rb
+pg_search_scope :search, against: [:name, :content],
+  using: {tsearch: {dictionary: "english"}}
+```  
+
+<p>Now when we search for &ldquo;characters&rdquo; we&rsquo;ll get the articles that contain &ldquo;character&rdquo; returned too.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1129/original/E343I04.png" width="800" height="500" alt="A search for &ldquo;characters&rdquo; now returns articles containing &ldquo;character&rdquo;."/>
+</div>
+
+<h3>Searching Related Attributes</h3>
+
+<p>One useful feature of PgSearch is that it makes it easy to search through related attributes. For example in our application an <code>Article</code> belongs to an <code>Author</code> and has many <code>Comments</code>. We can use PgSearch&rsquo;s <code>associated_against</code> option to include these and we&rsquo;ll include the author&rsquo;s <code>name</code> and the comments&rsquo; <code>name</code> and <code>content</code> fields.</p>
+
+``` /app/models/article.rb
+pg_search_scope :search, against: [:name, :content],
+  using: {tsearch: {dictionary: "english"}},
+  associated_against: {author: :name, comments: [:name, :content]}
+```  
+
+<p>Now a search for &ldquo;Clark&rdquo; will return all the articles written by Clark Kent. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1130/original/E343I05.png" width="800" height="500" alt="The author model&rsquo;s name field is now also searched.	"/>
+</div>
+
+<p>Another of PgSearch&rsquo;s useful features is the ability to ignore accents. </p>
+
+``` /app/models/article.rb
+pg_search_scope :search, against: [:name, :content],
+  using: {tsearch: {dictionary: "english"}},
+  associated_against: {author: :name, comments: [:name, :content]},
+  ignoring: :accents
+```  
+
+<p>This might not work out of the box and if we reload the page now we&rsquo;ll get an exception complaining about an undefined function called <code>unaccent</code> in the SQL. To fix this we&rsquo;ll need to add an extension to our Postgres database. We can do this inside a migration so we&rsquo;ll create one to do that.</p>
+
+``` terminal
+$ rails g migration add_unaccent_extension
+```
+
+<p>This migration will just execute a SQL statement.</p>
+
+``` /db/migrations/20120428000000_add_unaccent_extension.rb
+class AddUnaccentExtension < ActiveRecord::Migration
+  def up
+    execute "create extension unaccent"
+  end
+
+  def down
+    execute "drop extension unaccent"
+  end
+end
+```
+
+<p>We can now run the migration by running <code>rake db:migrate</code> and when we reload the page now the error will be gone. We can search for &ldquo;s&uuml;perman&rdquo; (with an umlaut) now and this will find the articles containing &ldquo;superman&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1131/original/E343I06.png" width="800" height="500" alt="Searching for a word containing an accent will now return matching results for that word without the accent."/>
+</div>
+
+<p>PgSearch provides many other options such as the ability to add weights to certain attributes in the relevance ranking and there&rsquo;s more information about this in the <a href="https://github.com/Casecommons/pg_search/blob/master/README.rdoc">documentation</a>.</p>
+
+<h3>Speeding Up Searches</h3>
+
+<p>Let&rsquo;s shift gears now and focus on performance. We can see from the log that the search query only takes a couple of milliseconds to run but as we only have a few records in the database this isn&rsquo;t really a surprise. To see how searching performs under more realistic conditions we&rsquo;ll need to add more records. The <code>seeds.rb</code> file generates the initial records for our application and we&rsquo;ll alter this file so it creates each record 1,000 times.</p> 
+
+``` /db/seeds.rb
+bruce = Author.create! name: "Bruce Wayne"
+clark = Author.create! name: "Clark Kent"
+
+1000.times do 
+  superman = Article.create! name: "Superman", author: clark, published_at: 3.weeks.ago, content: <<-ARTICLE
+  Superman is a fictional comic book superhero appearing in publications by DC Comics, widely considered to be an American cultural icon. Created by American writer Jerry Siegel and Canadian-born American artist Joe Shuster in 1932 while both were living in Cleveland, Ohio, and sold to Detective Comics, Inc. (later DC Comics) in 1938, the character first appeared in Action Comics #1 (June 1938) and subsequently appeared in various radio serials, television programs, films, newspaper strips, and video games. (from Wikipedia)
+  ARTICLE
+
+  # Some articles and comments omitted.
+
+  Comment.create! name: "Lois Lane", article: superman, content: <<-COMMENT
+  I want to meet Superman again, does anyone know where I can find him?
+  COMMENT
+end
+```
+
+<p>We could use a Rake task to do this but this will work as a quick and dirty way to create the records. We can run the file by running <code>rake db:seed</code>. We&rsquo;ll also go back to our <code>Article</code> model and change back to the more manual search so that we have a simpler query that we can focus on optimizing.</p> 
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    # search(query)
+    rank = <<-RANK
+      ts_rank(to_tsvector(name), plainto_tsquery(#{sanitize(query)})) +
+      ts_rank(to_tsvector(content), plainto_tsquery(#{sanitize(query)}))
+    RANK
+  where("name @@ :q or content @@ :q", q: "%#{query}%").order("#{rank} DESC")
+  else
+    scoped
+  end
+end
+```
+
+<p>When we make a search now it takes a noticeable time to run. If we look at the log we&rsquo;ll see that the search took almost a second to complete, long enough for Rails&rsquo; auto-explain to kick in and run an EXPLAIN on the query. The main problem is missing indexes and adding one will make a big difference to the speed. We should add an index to whatever&rsquo;s on the left side of the <code>@@</code> operators, in this case the <code>name</code> and <code>content</code> fields. Also it&rsquo;s not good to rely on the auto-typecasting so we&rsquo;ll expand out the query.</p>
+
+``` /app/models/article.rb
+def self.text_search(query)
+  if query.present?
+    # search(query)
+    rank = <<-RANK
+      ts_rank(to_tsvector(name), plainto_tsquery(#{sanitize(query)})) +
+      ts_rank(to_tsvector(content), plainto_tsquery(#{sanitize(query)}))
+    RANK
+  where("to_tsvector('english', name) @@ :q or to_tsvector('english', content) @@ :q", q: query).order("#{rank} DESC")
+  else
+    scoped
+  end
+end
+```
+
+<p>This is the same query that we had before but now we have something more concrete that we can add an index to. We&rsquo;ll generate a migration to add the indexes.</p>
+
+``` terminal
+$ rails g migration add_search_index_to_articles
+```
+
+<p>The migration will create the two new indexes.</p>
+
+``` /db/migrations/20120428000000_add_search_index_to_articles.rb
+class AddSearchIndexToArticles < ActiveRecord::Migration
+  def up
+    execute "create index articles_name on articles using gin(to_tsvector('english', name))"
+    execute "create index articles_content on articles using gin(to_tsvector('english', content))"
+  end
+
+  def down
+    execute "drop index articles_name"
+    execute "drop index articles_content"
+  end
+end
+```
+
+<p>We create two indexes here, one for the <code>name</code> column and one for <code>content</code> and we use the <code>to_tsvector</code> call like we do in the query to generate the index. Note, though, that we pass this in to a <code>gin</code> method which is a way to efficiently create an index for full-text searching. Postgres offers another indexing function called GiST which is also worth considering. There are more details about these in the <a href="http://www.postgresql.org/docs/9.1/static/textsearch-indexes.html">documentation</a> but as a rule GIN works best for web applications.</p>
+
+<p>After we&rsquo;ve migrated our database to add the indexes we can try running another search. This time it runs more quickly and if we look at the logs we&rsquo;ll see that database query takes about half the time it did before. This is good but it&rsquo;s not quite the speedup we were hoping for. The primary cause of the remaining slowness is the call to <code>ts_rank</code> as this doesn&rsquo;t take advantage of the index. If we sort the results by name rather than rank the searches become blazing fast, the log now showing the results running in a few milliseconds. As a compromize we could omit the content field from the relevance ranking. This way there will be some relevance but not as much and the query still runs quickly.</p>
+
+<h3>Problems With schema.rb</h3>
+
+<p>We&rsquo;ll finish off this episode by talking about the <code>schema.rb</code> file. This is supposed to be a representation of the full database schema in Ruby but it&rsquo;s now incomplete. This is because we&rsquo;ve added some migrations that run SQL code and this is quite common when a Rails application uses Postgres as its database server. If we try to load in the schema file, e.g. when we set up our test database, it will be incomplete. To fix this we can uncomment the following line in our application config file.</p>
+
+``` /config/application.rb
+# Use SQL instead of Active Record's schema dumper when creating the database.
+# This is necessary if your schema can't be completely dumped by the schema dumper,
+# like if you have constraints or database-specific column types
+config.active_record.schema_format = :sql
+```
+
+<p>If we run <code>rake db:migrate</code> now the schema file will be generated in SQL. A new <code>structure.sql</code> file will be created and this will include everything we need to generate the database. We can now remove the <code>db/schema.rb</code> file. If we ever need to load or dump the schema data now we should use the <code>db:structure:load</code> and <code>db:structure:dump</code> Rake tasks and not the schema tasks.</p>
