@@ -1,0 +1,219 @@
+Below is a page from a Rails application for creating and managing surveys. Each survey has many questions and each question has many possible answers.
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1132/original/E196RI01.png" width="800" height="550" alt="Our survey application."/>
+</div>
+
+<p>Currently we can only edit each survey&rsquo;s name. We want to change this application so that we&rsquo;re able to edit a survey&rsquo;s questions and answers on the same form. The tricky part of this is that questions and answers are separate models. A <code>Survey</code> has many <code>Questions</code>, a <code>Question</code> has many <code>Answers</code> and we have an <code>Answer</code> model that belongs to a <code>Question</code>. This means managing three different models through a single form.</p>
+
+<p>Fortunately Rails provides a method called <code>accepts_nested_attributes_for</code> which allows us to manage associated records in a form. If we want to manage questions in our survey form we have to add a call to this method in our <code>Survey</code> model. As we&rsquo;re using <code>attr_accessible</code> in our model we also need to modify this and add the plural name of the associated model followed by <code>_attributes</code> so that these attributes can be set.</p>
+
+``` /app/models/survey.rb
+class Survey < ActiveRecord::Base
+  attr_accessible :name, :questions_attributes
+  has_many :questions
+  accepts_nested_attributes_for :questions
+end
+```
+
+<p>In the view template for our form we just have a field for the survey&rsquo;s <code>name</code>. We&rsquo;ll add a field for each question&rsquo;s <code>content</code> attribute like this:</p>
+
+``` /app/views/surveys/_form.html.erb
+<div class="field">
+  <%= f.label :name %><br />
+  <%= f.text_field :name %>
+</div>
+  
+<%= f.fields_for :questions do |builder| %>
+  <fieldset>
+  <%= builder.label :content, "Question " %><br/>
+  <%= builder.text_area :content %>
+  </fieldset>
+<% end %>
+```
+
+<p>We add fields for the <code>Question</code> model with <code>fields_for</code>, passing in the name of the association and a block. A form builder is passed to the block and the block is called for each of the survey&rsquo;s questions. We wrap each question in a <code>fieldset</code> element and render a <code>label</code> and a  <code>text_area</code> containing its content. When we reload our survey form now we&rsquo;ll have a field for editing each question.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1133/original/E196RI02.png" width="800" height="650" alt="We can now edit each question."/>
+</div>
+
+<p>If we make a change to one or more of the questions these changes will be saved and the survey&rsquo;s questions will be updated.</p>
+
+<h3>Removing Questions</h3>
+
+<p>It would be nice to have a way to remove questions too. One way to do this is to have a checkbox against each question to mark the question for deletion. We&rsquo;ll add one underneath each text area along with a label. The key here is to call the checkbox <code>_destroy</code> as this will automatically remove the question if the checkbox is checked.</p> 
+
+``` /app/views/surveys/_form.html.erb
+<%= f.fields_for :questions do |builder| %>
+  <fieldset>
+  <%= builder.label :content, "Question " %><br/>
+  <%= builder.text_area :content %><br/>
+  <%= builder.check_box :_destroy %>
+  <%= builder.label :_destroy, "Remove Question" %>
+  </fieldset>
+<% end %>
+```
+
+<p>Destroying records for nested attributes is disabled by default but we can enable it by adding the <code>allow_destroy</code> option to <code>accepts_nested_attributes_for</code> and setting it to <code>true</code>.</p>
+
+``` /app/models/survey.rb
+class Survey < ActiveRecord::Base
+  attr_accessible :name, :questions_attributes
+  has_many :questions
+  accepts_nested_attributes_for :questions, allow_destroy: true
+end
+```
+
+<p>Reloading the page now will show the checkboxes and if we check one then submit the form it will delete that question.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1134/original/E196RI03.png" width="800" height="700" alt="Checking the checkbox next to each question will now remove it."/>
+</div>
+
+<h3>Editing Answers</h3>
+
+<p>We still need a way to edit each question&rsquo;s answers in our form so we&rsquo;ll modify it to display them underneath each question. Essentially we need to repeat the same process but this time for questions and their answers. First we&rsquo;ll modify the <code>Question</code> model and add a call to <code>accepts_nested_attributes_for</code> and add <code>answers_attributes</code> to <code>attr_accessible</code>.</p>
+
+``` /app/models/question.rb
+class Question < ActiveRecord::Base
+  attr_accessible :content, :survey_id, :answers_attributes
+  belongs_to :survey
+  has_many :answers
+  accepts_nested_attributes_for :answers, allow_destroy: true
+end
+```
+
+<p>In the view template we need to add another call to <code>fields_for</code> for answers, nested under the questions. Before we do that we&rsquo;ll move some of the view code into a partial that we&rsquo;ll call <code>question_fields</code> to help clean things up. We&rsquo;ll pass the builder to this partial as an <code>f</code> option.</p>
+
+``` /app/views/surveys/_form.html.erb
+<%= f.fields_for :questions do |builder| %>
+  <%= render 'question_fields', f: builder %>
+<% end %>
+```
+
+<p>We can now use this option in our new partial, along with a call to <code>fields_for</code> to render out the answers for the question. This will call a new <code>answer_fields</code> partial that we&rsquo;ll write next.</p>
+
+``` /app/views/surveys/_question_fields.html.erb
+<fieldset>
+  <%= f.label :content, "Question " %><br/>
+  <%= f.text_area :content %><br/>
+  <%= f.check_box :_destroy %>
+  <%= f.label :_destroy, "Remove Question" %>
+  <%= f.fields_for :answers do |builder| %>
+  	<%= render 'answer_fields', f: builder %>
+  <% end %>
+</fieldset>
+```
+
+<p>The <code>answer_fields</code> partial will render an answer in a <code>text_field</code>.</p>
+
+``` /app/views/surveys/_answer_fields.html.erb
+<fieldset>
+  <%= f.label :content, "Answer" %>
+  <%= f.text_field :content %>
+  <%= f.check_box :_destroy %>
+  <%= f.label :_destroy, "remove" %>
+</fieldset>
+```
+
+<p>When we reload the edit page now we&rsquo;ll see the answers for each question and if we edit some of them the changes are saved and the survey updated.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1135/original/E196RI04.png" width="800" height="600" alt="We can now edit answers too."/>
+</div>
+
+<h3>Adding and Removing Questions and Answers Through JavaScript</h3>
+
+<p>The next thing we&rsquo;ll show you is how to add and remove question and answer records through JavaScript. We&rsquo;ll focus on removing records first. Instead of using a checkbox to select the records we want to remove we&rsquo;ll have a &lsquo;remove&rsquo; link that will remove that record when it&rsquo;s clicked. First we&rsquo;ll replace the <code>_destroy</code> checkbox in the <code>answer_fields</code> partial with a hidden field so that we can modify its value with JavaScript. We&rsquo;ll also replace the label with a link that we&rsquo;ll give a class so that we can reference it later.</p>
+
+``` /app/views/surveys/_answer_fields.html.erb
+<fieldset>
+  <%= f.label :content, "Answer" %>
+  <%= f.text_field :content %>
+  <%= f.hidden_field :_destroy %>
+  <%= link_to "remove", '#', class: "remove_fields" %>
+</fieldset>
+```
+
+<p>We&rsquo;ll add the JavaScript (actually CoffeeScript) code in <code>surveys.js.coffee</code>. </p>
+
+``` /app/assets/javascripts/surveys.js.coffee
+jQuery ->
+  $('form').on 'click', '.remove_fields', (event) ->
+    $(this).prev('input[type=hidden]').val('1')
+    $(this).closest('fieldset').hide()
+    event.preventDefault()
+```	
+	
+<p>In this file we check that the DOM is loaded then listen to the <code>click</code> event for any elements in the form with a class of <code>remove_fields</code>. We use on here, rather than calling <code>click</code> directly is because we&rsquo;ll have to insert <code>remove_fields</code> links dynamically later on. When that event fires we find the hidden field just before the link and set its value to <code>1</code>. We then use <code>closest</code> to find the <code>fieldset</code> that wraps the whole answer and hide it. Finally we use <code>event.preventDefault()</code> to stop the link&rsquo;s default behaviour from firing. When we reload the page now we&rsquo;ll have a &ldquo;remove&rdquo; link next to each answer. Clicking one of the links will hide that answer and when we submit the form that answer will be removed from the question.</p> 
+
+<p>We could apply the same approach to the &ldquo;Remove Question&rdquo; checkbox but we&rsquo;ll leave it as-is so that our example app shows both approaches. Instead we&rsquo;ll focus next on adding questions and answers through a link and some JavaScript and here&rsquo;s where things get a little trickier. We list the answer fields inside the question partial and we&rsquo;ll add a link to add an answer underneath the existing answers. This link needs a lot of logic associated with it so we&rsquo;ll create a helper method to generate it. There are a number of variables we&rsquo;ll have to pass in to this method including the form builder and the name of the association we&rsquo;re trying to add to.</p>
+
+``` /app/views/surveys/_question_fields.html.erb
+<fieldset>
+  <%= f.label :content, "Question " %><br/>
+  <%= f.text_area :content %><br/>
+  <%= f.check_box :_destroy %>
+  <%= f.label :_destroy, "Remove Question" %>
+  <%= f.fields_for :answers do |builder| %>
+  	<%= render 'answer_fields', f: builder %>
+  <% end %>
+  <%= link_to_add_fields "Add Answer", f, :answers %>
+</fieldset>
+```
+
+<p>We&rsquo;ll create this helper method on the application helper.</p>
+
+``` /app/helpers/application_helper.rb
+module ApplicationHelper
+  def link_to_add_fields(name, f, association)
+    new_object = f.object.send(association).klass.new
+    id = new_object.object_id
+    fields = f.fields_for(association, new_object, child_index: id) do |builder|
+      render(association.to_s.singularize + "_fields", f: builder)
+    end
+    link_to(name, '#', class: "add_fields", data: {id: id, fields: fields.gsub("\n", "")})
+  end
+end
+```
+
+<p>The first thing this method does is build an instance of that association record. We take the form builder&rsquo;s object, in this case a <code>Question</code> instance, and call the association method on that, which will be answers, call <code>klass</code> on that to get the <code>Answer</code> class and finally call new on that to create a new <code>Answer</code>. In the next line we grab that object&rsquo;s <ode>object_id</ode> to generate a unique value that we&rsquo;ll use later. We then call <code>fields_for</code> on the form builder, just like we did in the partial, passing in the association and the answer instance we created so that it builds fields for the answer and we pass the unique id as the <code>child_index</code>. We then render the partial for this association, in this case the <code>_answer_fields</code> partial and finally we generate a link with a class of <code>add_fields</code> and give it some <code>data-</code> attributes including the unique identifier and all the field data we generated.</p> 
+
+<p>In our CoffeeScript file we can now add some code to handle these links.</p>
+
+``` /app/assets/javascripts/surveys.js.coffee
+$('form').on 'click', '.add_fields', (event) ->
+  time = new Date().getTime()
+  regexp = new RegExp($(this).data('id'), 'g')
+  $(this).before($(this).data('fields').replace(regexp, time))
+  event.preventDefault()
+```  
+
+<p>In this code we listen for the <code>click</code> event on any links with a class of <code>add_fields</code>. When this event fires we store the current time then generate a regular expression based on the link&rsquo;s <code>data-id</code> attribute, which contains the unique identifier we created in our helper method. We then insert the new fields before the link by fetching the encoded HTML from the <code>data-fields</code> attributes and replacing the unique identifier with the current time. The way each field will have a unique index  based on the current time.</p> 
+
+<p>Reloading the page now shows the new link and clicking on it adds a new answer field. Entering a value in this new field and submitting the form will add the new answer to the question.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1136/original/E196RI05.png" width="800" height="550" alt="Answers can now be added or removed dynamically."/>
+</div>
+
+<p>We can do the same thing for questions. First we&rsquo;ll add a link to add a question in our template immediately after the questions are rendered.</p>
+
+``` /app/views/surveys/_form.html.erb
+<%= f.fields_for :questions do |builder| %>
+  <%= render 'question_fields', f: builder %>
+<% end %>
+<%= link_to_add_fields "Add Question", f, :questions %>
+```  
+
+<p>Reloading the page now will show the &ldquo;Add Question&rdquo; link and clicking it will add a textfield where we can add a new question. This new question will have an &ldquo;Add Answer&rdquo; link and we can add as many answers to the new question as we like.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1137/original/E196RI06.png" width="800" height="550" alt="We can now create new questions, too."/>
+</div>
+
+<p>Submitting the form will create the new question and its answers.</p>
+
+<p>What we&rsquo;ve built here will work well for creating surveys as well. We can create a new survey and give it as many questions and answers as we like.</p> 

@@ -1,0 +1,251 @@
+<p>Sometimes when we&rsquo;re building an application we run into a situation that would benefit from a schema-less database. Below is an app that has different kinds of product records including books and videos.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1141/original/E345I01.png" width="800" height="500" alt="The products page."/>
+</div>
+
+<p>We need to store different information based on the type of product. For a book we want to store the author while for videos we want to store a rating and a runtime. This information is currently stored in a <code>description</code> text field in the database which isn&rsquo;t very efficient and gives us no way to extract these attributes and act upon them individually. We could make each of these attributes a separate column in the database but this can quickly get out of hand as we introduce more types of products to our application. How do we best deal with this situation?</p>
+
+<h3>Hstore</h3>
+
+<p>At this point we might consider switching to a NoSQL database such as MongoDB but as our application uses Postgres we can try hstore instead. This allows us to store a hash of attributes in a single database column. Hstore isn&rsquo;t just a serialized hash in a text field, it provides a multitude of operators and functions that we can use to query and interact with this data. We&rsquo;ll add it to our application so store data related to each product type.</p>
+
+<p>First a couple of notes about our application. We&rsquo;ve already configured it to use Postgres as its database as we showed in <a href="http://railscasts.com/episodes/342-migrating-to-postgresql">episode 342</a>. In our application config file we&rsquo;ve uncommented the line that sets the schema_format to sql as the schema won&rsquo;t be simple enough to represent in Ruby code.</p>
+
+``` /config/application.rb
+# Use SQL instead of Active Record's schema dumper when creating the database.
+# This is necessary if your schema can't be completely dumped by the schema dumper,
+# like if you have constraints or database-specific column types
+config.active_record.schema_format = :sql
+```
+
+<p>To add hstore to our app we&rsquo;ll use the <a href="https://github.com/softa/activerecord-postgres-hstore">activerecord-postgres-hstore gem</a>. When Rails 4 is released this will have built-in support for hstore which will make this gem unnecessary. Installing the gem is done in the usual way, by adding it to the gemfile and running bundle.</p>
+
+``` /Gemfile
+gem 'activerecord-postgres-hstore'
+```
+
+<p>Next we&rsquo;ll need to run a generator to set up hstore. </p>
+
+``` terminal
+$ rails g hstore:setup
+    create  db/migrate/20120504000000_setup_hstore.rb
+```	
+<p>This generates a migration that adds the <code>hstore</code> extension to our database.</p>
+
+``` db/migrate/20120504000000_setup_hstore.rb
+class SetupHstore < ActiveRecord::Migration
+  def self.up
+    execute "CREATE EXTENSION hstore"
+  end
+
+  def self.down
+    execute "DROP EXTENSION hstore"
+  end
+end
+```
+
+<p>Before we migrate the database we&rsquo;ll create another migration that adds a <code>properties</code> column to our <code>products</code> table. This will be used to store the dynamic attributes that are different for each type of product and will be of type <code>hstore</code>, which is will be a valid datatype once we&rsquo;ve run the other migration.</p>
+
+``` terminal
+$ rails g migration add_properties_to_products properties:hstore
+```
+
+<p>There&rsquo;s one more migration that we&rsquo;ll create now which adds an index to our new column as it&rsquo;s generally a good idea to index these columns.</p>
+
+``` db/migrate/20120504000000_ add_properties_to_products.rb
+class IndexProductsProperties < ActiveRecord::Migration
+  def up
+    execute "CREATE INDEX products_properties ON products USING GIN(properties)"
+  end
+
+  def down
+    execute "DROP INDEX products_properties"
+  end
+end
+```
+
+<p>This migration adds a migration to the properties column using the <code>GIN</code> function.  We could use <code>GiST</code> here instead and there&rsquo;s more information about the differences between these in the <a href="http://www.postgresql.org/docs/9.1/interactive/indexes-types.html">documentation</a>.</p>
+
+<p>With all these migrations in place we can now migrate that database by running <code>rake db:migrate</code>.</p>
+
+<h3>Using Hstore</h3>
+
+<p>We&rsquo;ll start by demonstrating hstore in the console. First we&rsquo;ll fetch a product. This now has a <code>properties</code> attribute which will be <code>nil</code> be default.</p>
+
+``` console
+1.9.3-p125 :001 > p = Product.first
+1.9.3-p125 :002 > p.properties
+ => nil
+``` 
+
+<p>We can set this attribute to a hash of values. The product we&rsquo;ve fetched is a video so we&rsquo;ll give it <code>rating</code> and <code>runtime</code> values then save it. This will save this information into the <code>properties</code> column in the database.</p>
+
+``` console
+1.9.3-p125 :003 > p.properties = { rating: "PG-13", runtime: 107 }
+ => {:rating=>"PG-13", :runtime=>107}
+1.9.3-p125 :004 > p.save
+```
+
+<p>When we reload the product and check its properties we&rsquo;ll get that hash of values.</p>
+
+``` console
+1.9.3-p125 :005 > p.reload
+1.9.3-p125 :006 > p.properties
+ => {"rating"=>"PG-13", "runtime"=>"107"}
+``` 
+
+<p>One important difference about the hash that&rsquo;s retuned from the database is that the keys and values are all strings, even though we used a symbol and an integer when we set it. Hstore only stores string values so if we want to store a boolean, date or integer value we&rsquo;ll need to convert it manually afterwards. Another thing to be aware of is that the <code>properties</code> object will be a different object each time we fetch it. If we try to set a specific property through this hash it won&rsquo;t work as the old hash will be used each time. We always have to set the full hash each time.</p>
+
+``` console
+# This won’t work
+1.9.3-p125 :007 > p.properties["runtime"] = 123
+ => 123
+1.9.3-p125 :008 > p.properties
+ => {"rating"=>"PG-13", "runtime"=>"107"} 
+
+# We have to set the full hash like this
+1.9.3-p125 :009 > p.properties = { :rating => "PG-13", :runtime => 123 }
+ => {:rating=>"PG-13", :runtime=>123} 
+1.9.3-p125 :010 > p.properties
+ => {:rating=>"PG-13", :runtime=>123} 
+``` 
+ 
+<h3>Querying Hstore Columns</h3>
+
+<p>With these problems out of the way we can start to look at the interesting stuff: querying our new hstore column. The <a href="http://www.postgresql.org/docs/9.1/static/hstore.html">documentation</a> shows us the different operators that we can use here and one of them is -&gt; which is used to extract a value from a hstore, given a key. Let&rsquo;s say that we want to find all the products with a rating of &ldquo;PG-13&rdquo;, we can do so like this:</p>
+
+``` console
+1.9.3-p125 :015 >   Product.where("properties -> 'rating' = 'PG-13'")
+  Product Load (0.8ms)  SELECT "products".* FROM "products" WHERE (properties -> 'rating' = 'PG-13')
+ => [#<Product id: 1, name: "The Sixth Sense", category: "Videos", price: #<BigDecimal:7fdb01f85c30,'0.999E1',18(18)>, description: "Rated: PG-13\n\nRuntime: 107 minutes\n\nA boy who commu...", created_at: "2012-05-04 17:46:25", updated_at: "2012-05-04 20:24:50", properties: {"rating"=>"PG-13", "runtime"=>"107"}>]
+``` 
+
+<p>We can use <code>LIKE</code> here, too, and find all the products with a rating that contains the letter G like this:</p>
+
+``` console
+1.9.3-p125 :016 > Product.where("properties -> 'rating' LIKE '%G%'")
+```
+
+<p>If we want to compare a number, say finding all the products with a <code>runtime</code> greater than 100 we&rsquo;ll have to cast the value to an integer which we can do like this:</p>
+
+``` console
+1.9.3-p125 :017 > Product.where("(properties -> 'runtime')::int > 100")
+```
+
+<p>Typecasting in Postgres can be a little tricky as it will raise an exception if any of the data doesn&rsquo;t convert to the target datatype. It can be necessary to add another <code>WHERE</code> clause to ensure that we only fetch the records that have a value that can be converted. If all we&rsquo;re going is a simple string comparison then it&rsquo;s more efficient to use the <code>@&gt;</code> operator instead. This will check to see if the hstore on the left contains the one on the right.</p> 
+
+``` console
+1.9.3-p125 :021 > Product.where("properties @> ('rating' => 'PG-13')")
+```
+
+<p>The advantage of this is that it will use the index if there is one.</p>
+
+<h3>Using Hstore in Our Application</h3>
+
+<p>Now that we know how hstore works let&rsquo;s apply it to our application&rsquo;s product form. Instead of having each book&rsquo;s author&rsquo;s name in the <code>description</code> field we&rsquo;ll have a separate field for the author. We&rsquo;ll start by adding a new field to the form partial.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :author %><br />
+  <%= f.text_field :author %>
+</div>
+```
+
+<p>We&rsquo;ll need accessor methods on <code>Product</code> for this new field. It would be nice if we could take advantage of the new store features that Rails 3.2 provides. There&rsquo;s a <code>store_accessor</code> method that will do exactly what we want. We pass it the name of a column, in this case <code>properties</code>, and a list of attributes that we want to make accessors for and this will create a getter and setter method. Unfortunately this isn&rsquo;t compatible with the hstore gem. Presumably it will work with Rails 4 but for now we&rsquo;ll have to this manually and write getter and setter methods.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :category, :price, :description, :author
+  
+  # store_accessor :properties, :author
+  
+  def author
+    properties && properties["author"]
+  end
+  
+  def author=(value)
+    self.properties = (properties || {}).merge("author" => value)
+  end
+end
+```
+
+<p>The getter method checks that the <code>properties</code> hash exists and if so returns the value of its <code>author</code> key. The setter method sets the full hash to the value of the existing hash (or an empty hash if doesn&rsquo;t exist) and merges the new value for the <code>author</code> key. The final change we&rsquo;ve made is to add the new attribute to the list in <code>attr_accessible</code> to make it accessible through mass assignment.</p>
+
+<p>Reloading the page now shows the new field and if we fill in this field, submit the form then go back to edit it again we&rsquo;ll see the value we entered in the author field.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1142/original/E345I02.png" width="800" height="500" alt="The author value from the properties hash is now shown on the form."/>
+</div>
+
+<h3>Generating The Other Accessor Methods</h3>
+
+<p>We could write similar getter and setter methods for the other hstore attributes but instead we&rsquo;ll use meta-programming to generate them.</p> 
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :category, :price, :description
+  
+  # store_accessor :properties, :author
+  
+  %w[author rating runtime].each do |key|
+    attr_accessible key
+    
+    define_method(key) do
+      properties && properties[key]
+    end
+    
+    define_method("#{key}=") do |value|
+      self.properties = (properties || {}).merge(key => value)
+    end
+  end
+end
+```
+
+<p>Now we have a an array of the attributes we store in our <code>properties</code> hash and we loop through them and call <code>define_method</code> on each one to create each getter and setter. We also call <code>attr_accessor</code> to add the attribute to the list of accessible attributes. Once we&rsquo;ve added <code>rating</code> and <code>runtime</code> fields to the edit and show forms in the same way we added <code>author</code> we can try this out. If we edit one of our films then visit its page we&rsquo;ll see the new fields listed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1143/original/E345I03.png" width="800" height="500" alt="The information from the video-related fields is now shown."/>
+</div>
+
+<p>One thing we should do is make the edit form smarter so that it only shows the author field if we&rsquo;re editing a book  and the <code>rating</code> and <code>runtime</code> fields if we&rsquo;re editing a video. Doing this is a out of the scope of this episode, however. An alternative approach to dealing with hstore attributes in a form is demonstrated in <a href="http://hstoredemo.herokuapp.com/products/new">this example app</a>. This allows us to add and remove attributes dynamically and store them in hstore. This is a less strict approach that we have in our application but it might work well in others.</p>
+
+<p>One benefit to having accessor methods to hstore attributes is that it makes validations easy. If we want to make sure that any entered runtime value is valid we can do so in the usual way.</p>
+
+``` /app/models/product.rb
+validates_numericality_of :runtime, allow_blank: true
+```
+
+<p>There are many different styles of form that we can make with hstore. We can treat attributes like database columns as we have in our application or make a more free-flowing hash of data that lets us enter anything we want. We&rsquo;ll finish off this episode with a quick bonus tip. If we want to perform queries on our attributes we can do so by adding a scope call, like this:</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :category, :price, :description
+  validates_numericality_of :runtime, allow_blank: true
+  
+  # store_accessor :properties, :author
+  
+  %w[author rating runtime].each do |key|
+    attr_accessible key
+    scope "has_#{key}", lambda { |value| where("properties @> (? => ?)", key, value) }
+    
+    define_method(key) do
+      properties && properties[key]
+    end
+    
+    define_method("#{key}=") do |value|
+      self.properties = (properties || {}).merge(key => value)
+    end
+  end
+end
+```
+
+<p>We can now use this scope to find, say, all the products with a rating of &ldquo;R&rdquo;.</p>
+
+``` console
+1.9.3-p125 :001 > Product.has_rating("R")
+  Product Load (3.2ms)  SELECT "products".* FROM "products" WHERE (properties @> ('rating' => 'R'))
+ => [] 
+``` 
+
+<p>A good refactoring to do on our <code>Product</code> model would be to move the code that creates the accessors for each attribute into some kind of method call to clean the code up, but we&rsquo;ll leave this as an exercise.</p>
