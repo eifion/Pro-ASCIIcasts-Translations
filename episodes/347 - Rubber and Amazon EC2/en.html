@@ -1,0 +1,292 @@
+<p>Amazon EC2 lets us deploy our Rails applications into the cloud and to scale them on demand by adding or removing service instances. Deploying directly to EC2 gives us a lot of control over the server setup and can be more affordable than other cloud services. That said it puts a lot more work and responsibility in our court, but there is a gem called <a href="https://github.com/wr0ngway/rubber/">Rubber</a> that can help us with this. Thisagem builds on Capistrano and allows us to deploy easily to EC2 and manage it with only a few commands. We&rsquo;ll show you how it works in this episode.</p>
+
+<h3>Getting Started With Rubber</h3>
+
+<p>We&rsquo;ll start by creating a new Rails app to deploy. This will use Postgresql as its database as that&rsquo;s what it&rsquo;ll use in production.</p>
+
+``` terminal
+$ rails new blog -d postgresql
+```
+
+<p>To give the app something to do we&rsquo;ll generate a scaffold for an <code>Article</code> with <code>name</code> and <code>content</code> fields.</p>
+
+``` terminal
+$ cd blog
+$ rails g scaffold article name content:text
+```
+
+<p>Now that we have an app to deploy let&rsquo;s set it up to work with Rubber. First we&rsquo;ll run the following command to install it.</p>
+
+``` terminal
+$ gem install rubber
+```
+
+<p>This gives us access to a <code>rubber</code> command that we can use to set up our project. If you have trouble running this command and you&rsquo;re using rbenv you might need to run <code>rbenv rehash</code> before you can execute <code>rubber</code>. Once the gem and its dependencies have installed we can run <code>rubber vulcanize</code> to prepare our application for EC2 deployment. We need to pass this command the name of the template we want to use to tell it how to set up the production environment. We&rsquo;ll use one called <code>complete_passenger_postgresql</code>.</p> 
+
+``` terminal
+$ rubber vulcanize complete_passenger_postgresql
+```
+
+<p>This will generate a number of files but it does this so that all the server configuration is in one place. This makes it much easier to manage all the production server configuration. If we look at the source code for Rubber we&rsquo;ll find a <code>templates</code> directory and in there are all the templates that Rubber provides out of the box including one called <code>complete_passenger_postgresql</code>. We can pass any of the templates in this directory to <code>rubber</code> to customize our production stack and we can view the source code for each one to see how they work. The <a href="https://github.com/wr0ngway/rubber/blob/master/templates/complete_passenger_postgresql/templates.yml">source code for our template</a> is simple and just includes two other templates.</p>
+
+``` rubber/templates/complete_passenger_postgresql/templates.yml
+description: A fairly complete and scalable postgresql deployment setup
+dependent_templates:
+  - complete_passenger
+  - postgresql
+```
+
+<p>Next we&rsquo;ll take a look at the files that were generated when we ran <code>rubber</code>. We now have a <code>rubber</code> directory under <code>/config</code> where most of the files can be found. There are some Ruby files which are primarily Capistrano recipes and normally we won&rsquo;t need to modify these directly. There are also a number of YAML files in this directory and these are configuration files designed to be modified. For example rvm will be set up on the server and in <code>rubber-rvm.yml</code> we can define the version of Ruby that will be installed.</p>
+
+``` /config/rubber/rubber-rvm.yml
+# REQUIRED: Set to the rvm version string for the ruby version you wish to use
+# Run "rvm list known" to see the list of possible options
+rvm_ruby: 1.9.3-p194
+```
+
+<p>In the <code>rubber-passenger</code> config file we can define the number of app instances that will be allowed.</p>
+
+``` /config/rubber/rubber-passenger.yml
+max_app_connections: 20
+```
+
+<p>If this isn&rsquo;t enough configuration for our application we can find the full configuration files in a <code>role</code> subdirectory. For example in <code>role/passenger/passenger.conf</code> we can fully customize our Passenger setup with Apache here. This way we have full control over how our production environment is set up but if you&rsquo;re not sure what to do here you can stick with the defaults as these are pretty good.</p>
+
+<p>One file we will need to change is <code>rubber.yml</code>. Here we can set the name of the application, the admin email address, the domain name and so on. We&rsquo;ll call the app <code>blog</code> and leave the rest of the options at the defaults.</p>
+
+``` /config/rubber/rubber.yml
+# REQUIRED: The name of your application
+app_name: blog
+
+# REQUIRED: The system user to run your app servers as
+app_user: app
+
+# REQUIRED: Notification emails (e.g. monit) get sent to this address
+#
+admin_email: "root@#{full_host}"
+
+# OPTIONAL: If not set, you won't be able to access web_tools
+# server (graphite, graylog, monit status, haproxy status, etc)
+# web_tools_user: admin
+# web_tools_password: sekret
+
+# REQUIRED: The timezone the server should be in
+timezone: US/Eastern
+
+# REQUIRED: the domain all the instances should be associated with
+#
+domain: foo.com
+# Rest of file omitted.
+```
+
+<p>We&rsquo;ll also need to change the access information for EC2 in this file. If you don&rsquo;t have an EC2 account it&rsquo;s easy to set one up. We just need to go to the Amazon EC2 page3 click &ldquo;Sign Up Now&rdquo; then follow the rest of the steps. Once we&rsquo;ve signed up we  need to go to the &ldquo;Security Credentials&rdquo; page from our account page and this will give us the information we need to add to this file. The account number is near the top of this page and we&rsquo;ll need to use this in the account setting, stripping out any dashes. Further down in the Access Credentials section of this page we&rsquo;ll find the Access Key ID which we&rsquo;ll paste in the <code>access_key</code> section and the Secret Access Key which goes in the <code>secret_access_key</code> section.</p>
+
+
+``` /config/rubber/rubber.yml
+# REQUIRED The amazon keys and account ID (digits only, no dashes) used to access the AWS API
+#
+access_key: ADFKDSI345SAD34SDFQ
+secret_access_key: Vrtei34dfg+3dfgDFwegWPhdewFW6lEJBhTW
+account: 123412341234
+```
+
+<p>The next thing we need to do is set up a key pair. The default name for this is <code>gsg-keypair</code>, but we can call it anything we want. Back on our Amazon account page we&rsquo;ll click the &ldquo;Key Pairs&rdquo; tab and look for the &ldquo;Amazon EC2 Key Pairs&rdquo; section. Here&rsquo;s we&rsquo;ll find a link to the AWS Management Console and we can to click this to switch to the management console. On the lefthand side of this page we&rsquo;ll find a &ldquo;Key Pairs&rdquo; link and here we can create a new key pair and give it a name (we&rsquo;ll stick with the default of <code>gsg-keypair</code>). Clicking &ldquo;Create&rdquo; will download a <code>gsg-keypair.pem</code> file. Rubber expects this file to be in a <code>.ec2</code> directory under our home directory and expects it to have the same name as the <code>key_name</code> setting so we&rsquo;ll need to move it. It&rsquo;s a good idea to change the permissions on this file so that it&rsquo;s only accessible by us so we&rsquo;ll do that too.</p>
+
+``` terminal
+$ mkdir ~/.ec2
+$ mv ~/Downloads/gsg-keypair.gem ~/.ec2/gsg-keypair
+$ chmod 600 ~/.ec2/gsg-keypair
+```
+
+<p>If we need to change this file&rsquo;s name or location we can do so by modifying the following part of the config file.</p>
+
+``` /config/rubber/rubber.yml
+# REQUIRED:  The name of the amazon keypair and location of its private key
+#
+# NOTE: for some reason Capistrano requires you to have both the public and
+# the private key in the same folder, the public key should have the
+# extension ".pub".  The easiest way to get your hand on this is to create the
+# public key from the private key: ssh-keygen -y -f gsg-keypair > gsg-keypair.pub
+#
+key_name: gsg-keypair
+key_file: "#{Dir[(File.expand_path('~') rescue '/root') + '/.ec2/*' + cloud_providers.aws.key_name].first}"
+```
+
+<p>We&rsquo;ll need to make a public version of this file and we can do so by running <code>ssh-keygen</code>.</p>
+
+``` terminal
+$ ssh-keygen -y -f ~/.ec2/gsg-keypair > ~/.ec2/gsg-keypair.pub
+```
+
+<p>That&rsquo;s all we need to change in this configuration file but it&rsquo;s worth reading through the rest of it to see what it all does.</p>
+
+<p>Next we&rsquo;ll make some changes to the gemfile. We&rsquo;ll uncomment the reference to the <code>therubyracer</code> gem as by default Rubber doesn&rsquo;t set up a JavaScript compiler on the server so we&rsquo;ll need this gem to compile our assets.</p>
+
+``` /Gemfile
+# See https://github.com/sstephenson/execjs#readme for more supported runtimes
+gem 'therubyracer', :platform => :ruby
+```
+
+<p>Note that at the bottom of the file Rubber has added some gems and we&rsquo;ll need to run <code>bundle</code> to install these.</p>
+
+``` /Gemfile
+gem 'rubber'
+gem 'open4'
+gem 'gelf'
+gem 'graylog2_exceptions', :git => 'git://github.com/wr0ngway/graylog2_exceptions.git'
+gem 'graylog2-resque'
+```
+
+<h3>Deploying Our Application</h3>
+
+<p>Now that we have everything set up it&rsquo;s time to deploy our application. This is done through Capistrano commands and Rubber gives us a <code>create_staging</code> command thats will deploy everything to a single Amazon instance. This is a good way to start off and try this out. This command will ask for a couple of settings before it runs but we can leave these at their defaults.</p>
+
+``` terminal
+$ cap rubber:create_staging
+    triggering load callbacks
+  * executing `rubber:init
+  * executing `runner:create_staging’
+Hostname to user for staging instance [production]:
+Roles to use for staging instance [apache,app,collectd,common,db:primary=true,elasticsearch,examples,graphite_server,graphite_web,graylog_elasticsearch,graylog_mongodb,graylog_server,graylog_web,haproxy,mongodb,monit,passenger,postgresql,postgresql_master,web,web_tools]:
+```
+
+<p>This command takes a while to complete but we can just let it run. After a while it will ask for the password for the user on the local machine so that it can modify the HOSTS file. After we do that it will ask to reboot the instance and we should allow it. After a while the command will finally finish but if it doesn&rsquo;t seem to finish this could be because SSH has timed out. In this case we should just abort it and try running the <code>rubber bootstrap</code> command (more about this later).</p>
+
+<p>We can try our application out now by visiting <code>production.foo.com</code>. This is the domain name we set it up with and it works because this domain has been added to our HOSTS file so it will only work on our local machine. Our application works and we can create, edit and view articles.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1151/original/E347I01.png" width="800" height="400" alt="Our application running on EC2."/>
+</div>
+
+
+<p>If we want to see the actual address of the server we can look in the HOSTS file where we&rsquo;ll see the line that maps <code>production.foo.com</code> to a subdomain of <code>amazonaws.com</code>. </p>
+
+<h3>Setting Up Multiple Instances</h3>
+
+<p>So, thanks to Rubber we&rsquo;ve successfully deployed a Rails application with just one command. As its name suggests the <code>rubber:create_staging</code> command is usually used for testing or staging purposes. In a production environment we&rsquo;ll have several instances taking on different roles. Before we take a look at this it&rsquo;s a good idea to terminate any instances that we aren&rsquo;t using. We can destroy our current instance by running <code>cap rubber:destroy</code> and destroy all instances with <code>cap rubber:destroy_all</code>.</p>         
+<p>Now that we&rsquo;ve tested things out we&rsquo;ll create a cluster of instances that take on different roles. We can create an instance by running <code>cap rubber:create</code>. This command will ask us what we want to call the instance. We&rsquo;re going to make a database server first so we&rsquo;ll call it <code>db01</code>. Next it will ask us what role this instance should play and as we want it to be the primary database server we can use <code>db:primary=true</code> here.</p>
+
+``` terminal
+$ cap rubber create
+    triggering load callbacks
+  * executing `rubber:init’
+  * executing `rubber:create’
+Instance alias (e.g. web01 or web01~web05, web09): db01
+Instance roles (e.g. web, app, db:primary=true): db:primary=true
+```
+
+<p>Next the command will try to sync security groups and it will notice that some are left over from the last deployment and no longer required. It will ask us if we want to remove them and we&rsquo;ll say no to this. There are a lot of groups, however, and we&rsquo;ll have to say no each time. If we look at the <code>rubber.yml</code> config file we&rsquo;ll find a <code>prompt_for_security_group_sync</code> option which is set to true by default. If we change this to <code>false</code> then we won&rsquo;t get that prompt any more.</p>
+
+<p>As the script carries on running it will ask for our user password again so that it can modify the HOSTS file and then it will complete. This shouldn&rsquo;t take as long to run as it did the first time as it&rsquo;s not setting up an instance from scratch just creating it. We&rsquo;ll create a few more instances now by running the same command, but this time we&rsquo;ll pass in the values beforehand. We&rsquo;ll create an app server and a web server that will be an HAProxy and which will delegate to the various app instances.</p>
+
+``` terminal
+$ ALIAS=app01 ROLES=app cap rubber:create
+$ ALIAS=web01 ROLES=web cap rubber:create
+```
+
+<p>With our instances created we can set them up by running <code>rubber:bootstrap</code> task.</p>
+
+``` terminal
+$ cap rubber:bootstrap
+```
+
+<p>This command is idempotent so it should only set up what it needs to and we should be able to run it as often as we want to. This will take a while to run but it&rsquo;s setting up all the instances at the same time so we can just let it run. When it finishes we can do the initial deployment by running</p>
+
+``` terminal
+$ cap deploy:cold
+```
+
+<p>When this completes we can try visiting our application in a browser. When we do we get an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1152/original/E347I02.png" width="800" height="398" alt="Now that our application is running on multiple instances we get an error when we try to browse it."/>
+</div>
+
+<p>Let&rsquo;s try debugging this problem. Rubber provides a useful <code>tail_logs</code> task which will tail the logs on each of the servers. </p>
+
+``` terminal
+$ cap rubber:tail_logs
+```
+
+<p>When we run this we&rsquo;ll see the error that&rsquo;s causing our application to fail. The message we get is <code>ActionView::Template::Error (application.css isn&#x27;t precompiled):</code>. For some reason the assets aren&rsquo;t compiling on the server. To fix this problem we need to add the following line to the <code>deploy.rb</code> config file.</p>
+
+``` /config/deploy.rb
+set :assets_role, [:app]
+```
+
+<p>By default the assets are only precompiled in the <code>:web</code> role but in our setup this role is hosting the HAProxy instance but Apache, which is supposed to serve the assets, is on the <code>app</code> instances. This setting will probably be set by default in future versions of Rubber so we might not need to set in manually. With this change in place we can run <code>cap deploy</code> which will now compile the assets on the app instances. When we reload our page now it works.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1153/original/E347I03.png" width="800" height="398" alt="Now that the assets are precompiled correctly the application works again."/>
+</div>
+
+<h3>Scaling Our Application</h3>
+
+<p>Rubber includes a large number of useful commands that we can run to manage our instances. We can get a list of these by running <code>cap -T</code>. One useful one is cap rubber:describe. This will list each of our instances and its current state.</p>
+
+<p>Let&rsquo;s say that our application is getting a lot of traffic and we need to scale it. It&rsquo;s easy to create another instance so we&rsquo;ll create another app instance and another db instance.</p>
+
+```  terminal
+$ ALIAS=app02 ROLES=app cap rubber:create
+$ ALIAS=db02 ROLES=db cap rubber:create
+```
+
+<p>The new database instance will automatically take on the role of a slave database and replicate properly. While we&rsquo;re doing this we&rsquo;ll also create a web_tools instance so that we can gather some information about our servers. In our <code>rubber.yml</code> file is a commented-out section for setting a username and password for web_tools. We&rsquo;ll need to uncomment this and set the appropriate values in here.</p>
+
+``` /config/rubber/rubber.yml
+# OPTIONAL: If not set, you won't be able to access tools
+# server (graphite, graylog, monit status, haproxy status, etc)
+# web_tools_user: admin
+# web_tools_password: sekret
+```
+
+<p>We can now create a web_tools instance in the usual way.</p>
+
+``` terminal
+$ ALIAS=tools ROLES=web_tools cap rubber:create
+```
+
+<p>When this finishes we can run <code>cap rubber:bootstrap</code> like before to set up these instances.  </p>
+
+<p>If you&rsquo;re ever curious about the instances that Rubber has set up and how they&rsquo;re configured take a look at the <code>config/rubber/common/instance-production.yml</code> file. Here you&rsquo;ll find a list of the instances, the roles they occupy, the different security groups and so on. You&rsquo;ll find a lot of useful information about your instances here.</p>
+
+<p>If we want to add configuration options to a specific instance or role there&rsquo;s a commented-out example of how we can do this at the bottom of the <cocde>rubber.yml</cocde> file.</p>
+
+``` /config/rubber/rubber.yml
+# OPTIONAL: Role specific overrides
+# roles:
+#   somerole:
+#     packages: []
+#   somerole2:
+#     myconfig: someval
+
+# OPTIONAL: Host specific overrides
+# hosts:
+#   somehost:
+#     packages: []
+```
+
+<p>Now with the <code>bootstrap</code> command done we could run <code>cap deploy:cold</code> to set up the new server. As we&rsquo;re only deploying to a single instance we can use the <code>FILTER</code> option and set that to the name of the instance, like this:</p>
+
+``` terminal
+$ FILTER=app02 cap deploy:cold
+```
+
+<p>We&rsquo;ll run cap deploy on everything next just for good measure and to make sure that everything is started up properly. </p>
+
+<p>With everything set up now when we browse around our application it will have load balancing between the two app servers. Rubber sets all this up automatically, we don&rsquo;t have to think about it.</p>
+
+<h3>Monitoring Our Application</h3>
+
+<p>To access the web_tools we need to go to <code>https://tools.foo.com:8443</code>. We might be prompted for a username and password when we do, we need to use the ones we entered in <code>rubber.yml</code> earlier. Here we have access to Monit which lets us check the status of each of our instances. We can check the CPU and memory usage, see the different processes that are running and so on.</p> 
+
+<p>We also view statistics for HAProxy. There&rsquo;s a lot of information here including the app servers it&rsquo;s delegating to, the load balancing between them and whether they&rsquo;re up or down. We can also see information about our server with Graphite and Graylog. Graylog will prompt for the same username and password as before but also for its own username and password. These are set in the <code>rubber-graylog</code> config file and it&rsquo;s a good idea to change them from their default values.</p>
+
+``` /config/rubber/rubber-graylog.yml
+graylog_web_username: admin
+graylog_web_password: admin1
+```
+
+<p>Once we&rsquo;re logged in we&rsquo;ll see our log files. Various logs are piped into here including our Rails application&rsquo;s logs and we can search these log files, run analytics against them and much more.</p> 
+
+<p>That wraps up our look at Rubber. It provides a simple way to deploy to EC2 and there&rsquo;s much more information available about it <a href="https://github.com/wr0ngway/rubber/wiki">on its Wiki</a>. There are some great articles there that go into detail about aspects of Rubber that we haven&rsquo;t covered here.</p>

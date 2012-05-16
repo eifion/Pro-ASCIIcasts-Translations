@@ -1,0 +1,281 @@
+<p>Below is bookstore application that currently has no books.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1154/original/E258I01.png" width="800" height="400" alt="The bookstore application."/>
+</div>
+
+<p>When we create a book we can only set its name but we also want to be able to assign multiple authors to it. We already have a many-to-many association set up between the <code>Book</code> and <code>Author</code> models through an <code>Authorship</code> model.</p>
+
+``` /app/models/book.rb
+class Book < ActiveRecord::Base
+  attr_accessible :name
+  has_many :authorships
+  has_many :authors, through: :authorships
+end
+```
+<p>
+The question is how do we set up our form so that we can assign authors to a book? One option is to use checkboxes like we shown in <a href="http://railscasts.com/episodes/17-habtm-checkboxes">episode 17</a> but the problem with this approach here is that as we have a lot of authors managing them through checkboxes isn&rsquo;t practical. A solution to this problem is to use <a href="http://harvesthq.github.com/chosen/">Chosen</a> which allows us to turn a long select menu into one that the user can search through and filter the results. We can also use it on a many-to-many association where it will be turned into a list from which many items can be selected.</p>
+
+<p>We&rsquo;ll use Chosen to assign authors to a book. The first thing we need to do is add multiple select menu for the authors. We&rsquo;ll add this below the name field.</p>
+
+``` /app/views/books/_form.html.erb
+<div class="field">
+  <%= f.label :name %><br />
+  <%= f.text_field :name %>
+</div>
+<div class="field">
+  <%= f.label :author_ids, "Authors" %><br/>
+  <%= f.collection_select :author_ids, Author.order(:name), :id, :name, {}, {multiple:true} %>
+</div>
+  
+<div class="actions">
+  <%= f.submit %>
+</div>
+```
+
+<p>We use <code>collection_select</code> here on the <code>author_ids</code> attribute which is set up by the <code>has_many</code> association. Note that in the HTML options hash we set to <code>multiple</code> to <code>true</code> so that the list is rendered as a multiple select. In the <code>Book</code> model we need to update the call to <code>attr_accessible</code> so that we can update the <code>author_ids</code> through the form.</p>
+
+``` /app/models/book.rb
+attr_accessible :name, :author_ids
+```
+
+<p>Reloading the page now shows the list of authors and we can now assign multiple authors to any books we create.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1155/original/E258I02.png" width="800" height="478" alt="We can now pick authors from a multi-select list."/>
+</div>
+
+<p>This now works and when we edit an existing book the correct authors are selected. All we need to do now is use Chosen to turn this in to better way to select authors. There&rsquo;s a <a href="https://github.com/tsechingho/chosen-rails"><code>chosen-rails</code> gem</a> available which makes it easier to integrate Chosen into the asset pipeline and we&rsquo;ll add this to the <code>assets</code> group in our gemfile and then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+  gem 'uglifier', '>= 1.0.3'
+  gem 'chosen-rails'
+end
+```
+
+<p>In the <code>application.js</code> file we need to add a line to include <code>chosen-jquery</code>.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require chosen-jquery
+//= require_tree .
+```
+
+<p>We need to do something similar in the <code>application.css</code> file.</p>
+
+``` /app/assets/stylesheets/application.css
+*= require_self
+*= require chosen
+*= require_tree .
+```
+
+<p>We still need to add Chosen to the authors field and we&rsquo;ll do this inside the books CoffeeScript file.</p>
+
+``` /app/assets/javascripts/books.js.coffee
+jQuery ->
+  $('#book_author_ids').chosen()When we reload the page now we’ll see that Chosen is being used for the authors.
+```  
+  
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1156/original/E258I03.png" width="800" height="478" alt="Chosen is now used to display the authors."/>
+</div>
+
+<p>We can now type in the authors box to filter the list of authors then select an author to add or easily remove an existing author by clicking the cross next to it. We can make the box look a little prettier by adding some styling.</p>
+
+``` /app/assets/stylesheets/books.css.scss
+#book_author_ids {
+  width: 450px;
+}
+```
+
+<h3>jQuery Tokeninput</h3>
+
+<p>Chosen is a great way to make a tokenized input field but it doesn&rsquo;t work well in every situation. If we have hundreds of thousands of records to select from we don&rsquo;t want to load them all into the client at once and in these cases it would be better to use AJAX to fetch only the records we want. There are some extensions to Chosen to enable this behaviour but we&rsquo;ll use a different project that designed for these scenarios: <a href="http://loopj.com/jquery-tokeninput/">jQuery Tokeninput</a>. If we have a lot of records to choose from this is a perfect solution.</p> 
+
+<p>To demonstrate this we&rsquo;ll start our application again but this time we&rsquo;ll use jQuery Token input to do the same thing. First we&rsquo;ll download the <a href="http://loopj.com/jquery-tokeninput/">latest version of the project</a> from Github as this includes some fixes that aren&rsquo;t in the current release. We&rsquo;ll need to copy the JavaScript file in the download&rsquo;s <code>src</code> directory to our application&rsquo;s <code>/vendor/assets/javascripts</code> directory and the stylesheet files from <code>styles</code> to <code>/vendor/assets/stylesheets</code>. We&rsquo;ll need to include the JavaScript file in the <code>application.js</code> file like this:</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require jquery.tokeninput
+//= require_tree .
+```
+
+<p>In <code>application.css</code> we&rsquo;ll include <code>token-input-facebook</code> as we want to use the Facebook theme.</p>
+
+``` /app/assets/stylesheets/application.css
+*= require_self
+*= require token-input-facebook
+*= require_tree .
+```
+
+<p>In our form template we need to add a new text field for adding the author tokens. </p>
+
+``` /app/views/books/_form.html.erb
+<div class="field">
+  <%= f.label :name %><br />
+  <%= f.text_field :name %>
+</div>
+<div class="field">
+  <%= f.label :author_tokens, "Authors" %><br/>
+  <%= f.text_field :author_tokens %>
+</div>	  
+<div class="actions">
+   <%= f.submit %>
+</div>
+```
+
+<p>We don&rsquo;t have an <code>author_tokens</code> attribute in our <code>Book</code> model so we&rsquo;ll add getter and setter methods for it now.</p>
+
+``` /app/models/book.rb
+class Book < ActiveRecord::Base
+  attr_accessible :name, :author_tokens
+  has_many :authorships
+  has_many :authors, through: :authorships
+  attr_reader :author_tokens
+  
+  def author_tokens=(ids)
+    self.author_ids = ids.split(",")
+  end
+  
+end
+```
+
+<p>The getter method is simple; the string passed to the setter will be a list of ids separated by commas so we&rsquo;ll split this string and set the <code>author_ids</code> from the resulting array. We need <code>author_tokens</code> to be settable through the form through mass assignment so we&rsquo;ve added to <code>attr_accessible</code>. What we have so far is an authors text field in which we can enter a comma-separated list of ids. Next we&rsquo;ll turn it into a token input field.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1157/original/E258I04.png" width="800" height="358" alt="We now have an authors text field."/>
+</div>
+
+<p>We can do this in the books CoffeeScript file by getting the <code>book_author_tokens</code>
+field and calling <code>tokenInput</code> on it, passing in the path to load the JSON data when a search is made. There are a variety of other options we can pass in here and these are described in the documentation.</p>
+
+``` /app/assets/javascripts/books.js.coffee
+jQuery ->
+  $('#book_author_tokens').tokenInput '/authors.json'
+    theme: 'facebook'
+```	
+
+<p>To get this working we need to make <code>/authors.json</code> respond with some JSON data containing the matching authors. We already have an <code>AuthorsController</code> with an index action. We&rsquo;ll add a <code>respond_to</code> block to it to enable it to respond to JSON requests.</p>
+
+``` /app/controllers/authors_controller.rb
+def index
+  @authors = Author.order(:name)
+  respond_to do |format|
+    format.html
+    format.json { render json: @authors }
+  end
+end
+```
+
+<p>Now when we reload the page we&rsquo;ll have a token field. When we enter text in to this field we&rsquo;ll get a list of authors that we can select from.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1158/original/E258I05.png" width="800" height="499" alt="We now have a list of authors we can choose from."/>
+</div>
+
+<p>There&rsquo;s a problem, however: the authors aren&rsquo;t filtered by the text we enter. We can fix this by adding a where clause when we fetch the authors.</p>
+
+``` /app/controllers/authors_controller.rb
+def index
+  @authors = Author.order(:name)
+  respond_to do |format|
+    format.html
+    format.json { render json: @authors.where("name like ?", "%#{params[:q]}%") }
+  end
+end
+```
+
+<p>When we start typing into the authors field now the results are filtered.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1159/original/E258I06.png" width="800" height="370" alt="The authors are now filtered by the text we enter."/>
+</div>
+
+<h3>Updating Existing Records</h3>
+
+<p>When we select some authors then save the new book it works but when we go back to edit that book the authors field is blank. We&rsquo;re going to have to preload the data and we&rsquo;ll use a <code>data-</code> attribute on the input field to do this.</p> 
+
+``` /app/views/books/_form.html.erb
+<div class="field">
+  <%= f.label :author_tokens, "Authors" %><br/>
+  <%= f.text_field :author_tokens, data: {load: @book.authors} %>
+</div>
+```
+
+<p>This will encode the book&rsquo;s authors in JSON format for us in a <code>data-load</code> attribute. In our books CoffeeScript file we can use <code>tokenInput</code>&rsquo;s <code>prePopulate</code> option to populate the text field based on this data.</p> 
+
+``` /app/assets/javascripts/books.js.coffee
+jQuery ->
+  $('#book_author_tokens').tokenInput '/authors.json'
+    theme: 'facebook'
+	prePopulate: $('#book_author_tokens').data('load')
+```	
+
+<p>When we reload the page now the book&rsquo;s authors are shown.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1160/original/E258I07.png" width="800" height="358" alt="The book&rsquo;s authors are now shown in the text field."/>
+</div>
+
+<h3>Adding New Authors</h3>
+
+<p>The token input field is now pretty much complete and will fetch each book&rsquo;s authors from the database. It would be nice though if a new author was created when we type a name that isn&rsquo;t in the current list. To do this we need to have the JSON response from the <code>index</code> action return something for creating a new author if no match is found. There&rsquo;s quite a bit of logic involved in doing this so we&rsquo;ll create a new class method in the <code>Author</code> model called tokens that takes the search term as an argument.</p>
+
+``` /app/controllers/authors_controller.rb
+def index
+  @authors = Author.order(:name)
+  respond_to do |format|
+    format.html
+    format.json { render json: @authors.tokens(params[:q]) }
+  end
+end
+```
+
+<p>This new method looks like this:</p>
+
+``` /app/models/author.rb
+def self.tokens(query)
+  authors = where("name like ?", "%#{query}%")
+  if authors.empty?
+    [{id:"<<<#{query}>>>"}, name: "New: \"#{query}\""}]
+  end
+end
+```
+
+<p>This performs the same query we had before but now if no matching authors are found it will return a special response for creating a new author with the name that was entered and an <code>id</code> in a special format that we&rsquo;ll need to parse on the receiving end. This parsing happens in the Book model where we receive the author tokens.  We&rsquo;ll replace the code that parses these tokens with another new method in <code>Author</code>.</p>
+
+``` /app/models/book.rb
+def author_tokens=(tokens)
+  self.author_ids = Author.ids_from_tokens(tokens)
+end
+```
+
+<p>Here&rsquo;s the code for the new method.</p>
+
+``` /app/models/author.rb
+def self.tokens(query)
+  authors = where("name like ?", "%#{query}%")
+  if authors.empty?
+    [{id:"<<<#{query}>>>", name: "New: \"#{query}\""}]
+  else
+    authors
+  end
+end
+```
+
+<p>This code performs a find and replace for the special string. If it finds it it will create a new author with the name that was passed in. Now if we enter an author who doesn&rsquo;t exist we&rsquo;ll be given the option to create them and when we submit the form that new author will be added to the list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1161/original/E258I08.png" width="800" height="" alt="We can now add new authors to a book."/>
+</div>
+
+<p>We now have a way to manage a many-to-many relationship by using jQuery Tokeninput. One thing to point out is that as have a <code>name</code> attribute on our Author model returning the JSON for the authors worked. If  our model didn&rsquo;t have a name but instead had a different attribute, say <code>title</code>, that we want to use for the token input we need to set the <code>propertyToSearch</code> option to the appropriate attribute.</p> 
+
+<p>One final note. There&rsquo;s a project called <a href="http://ivaynberg.github.com/select2/">Select2</a> which is based on Chosen but which adds many more features including AJAX loading. This project is still fairly early in development but it&rsquo;s worth keeping an eye on as it progresses.</p>

@@ -1,0 +1,205 @@
+<p>Sending email from Rails applications is easy thanks to ActionMailer but there are a few issues we can run into when using it. In this episode we&rsquo;ll show you how it works and how to avoid some common problems. To demonstrate it we&rsquo;ll use a simple application with name and email address fields (to keep this example simple there aren&rsquo;t the usual password fields).</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1144/original/E069IR01.png" width="800" height="400" alt="Our simple signup form."/>
+</div>
+
+<p>Filling in both fields and submitting the form creates a new <code>User</code> record and when this happens we want to send an email to the user thanking them for signing up. The form submits to the <code>UsersController</code>&rsquo;s <code>create</code> action and this currently just saves the new <code>User</code>. We&rsquo;ll have to modify it to send an email as well.</p>
+
+``` /app/controllers/users_controller.rb
+def create
+  @user = User.new(params[:user])
+  if @user.save
+    redirect_to @user, notice: "Signed up successfully."
+  else
+    render :new
+  end
+end
+```
+
+<h3>Creating a Mailer</h3>
+
+<p>To send email in Rails we first need to create a mailer. Rails includes a generator to make this easy; we just need to pass it the name of the mailer we want to create and a name for the email we want to send.</p>
+
+``` terminal
+$ rails g mailer user_mailer signup_confirmation
+      create  app/mailers/user_mailer.rb
+      invoke  erb
+      create    app/views/user_mailer
+      create    app/views/user_mailer/signup_confirmation.text.erb
+      invoke  test_unit
+      create    test/functional/user_mailer_test.rb
+```	  
+
+<p>This command creates an <code>app/mailers</code> directory with a <code>user_mailer.rb</code> file in it and we can use this to send out our signup confirmation email. The generator also creates a view for the message which contains some default text.</p>
+
+``` /app/views/user_mailer/signup_confirmation.text.erb
+UserMailer#signup_confirmation
+
+<%= @greeting %>, find me in app/views/app/views/user_mailer/signup_confirmation.text.erb
+```
+
+<p>Note that we can share instance variables between the view and the mailer itself much like we can with a controller.</p> 
+
+<p>It&rsquo;s important that the <code>signup_confirmation</code> method ends with a call to <code>mail</code> as this will generate the email and return it. We can pass a variety of options to this method including who we send it to and the message&rsquo;s <code>subject</code>. A comment near the top of the class shows us that we can also set the subject in the internationalization file but we&rsquo;ll set it directly here as we don&rsquo;t need to support multiple languages.</p>
+
+``` /app/mailers/user_mailer.rb
+class UserMailer < ActionMailer::Base
+  default from: "from@example.com"
+
+  # Subject can be set in your I18n file at config/locales/en.yml
+  # with the following lookup:
+  #
+  #   en.user_mailer.signup_confirmation.subject
+  #
+  def signup_confirmation
+    @greeting = "Hi"
+
+    mail to: "to@example.org", subject: "Sign Up Confirmation"
+  end
+end
+```
+
+<p>The <a href="http://api.rubyonrails.org/classes/ActionMailer/Base.html#method-i-mail">API documentation</a> shows us a list of all the options we can pass in to the <code>mail</code> method.</p>
+
+<p>If we have multiple methods defined in a mailer class and we want to share options between them we can make a call to <code>default</code>. Any options defined here will automatically be applied to each call to <code>mail</code>. We&rsquo;ll use to define who the emails are sent from.</p>
+
+``` /app/mailers/user_mailer.rb
+class UserMailer < ActionMailer::Base
+  default from: "railscasts@example.com"
+
+  # Subject can be set in your I18n file at config/locales/en.yml
+  # with the following lookup:
+  #
+  #   en.user_mailer.signup_confirmation.subject
+  #
+  def signup_confirmation
+    @greeting = "Hi"
+
+    mail to: "to@example.org", subject: "Sign Up Confirmation"
+  end
+end
+```
+
+<p>We still need to specify who to send the email to; this should be the email specified in the form. By design mailer classes don&rsquo;t have access to request parameters so we&rsquo;ll have to pass in the <code>User</code> model in different way. We&rsquo;ll alter the <code>signup_confirmation</code> method so that it takes a <code>user</code> argument and pass the user in that way. We can then call <code>user.email</code> to get their email address. We&rsquo;ll also set an instance variable to that user so that we can use it in the view.</p>
+
+``` /app/mailers/user_mailer.rb
+def signup_confirmation(user)
+  @user = user
+
+  mail to: user.email, subject: "Sign Up Confirmation"
+end
+```
+
+<p>We can use that instance variable in the view to add the user&rsquo;s name in the email.</p>
+
+``` /app/views/user_mailer/signup_confirmation.text.erb
+<%= @user.name %>,
+
+Thank you for signing up.
+```
+
+<p>Our email is now pretty much complete and we just need to send it from our controller. We could send email through a model observer or a callback but we&rsquo;ll send the email in the controller so that we don&rsquo;t unintentionally send any email when we&rsquo;re interacting with the model in other ways.</p> 
+
+``` /app/controllers/users_controller.rb
+def create
+  @user = User.new(params[:user])
+  if @user.save
+    UserMailer.signup_confirmation(@user).deliver
+    redirect_to @user, notice: "Signed up successfully."
+  else
+    render :new
+  end
+end
+```
+
+<p>To send the email we call <code>UserMailer.signup_confirmation</code> and pass in our user and call <code>deliver</code> on that. You might have noticed that we call <code>signup_confirmation</code> as a class method while in the UserMailer class it&rsquo;s an instance method. How does this work? The answer is in the <a href="https://github.com/rails/rails/blob/master/actionmailer/lib/action_mailer/base.rb">Rails source code for ActionMailer</a>. This uses <code>method_missing</code> to create a new instance of the mailer and calls the missing method on that.</p> 
+
+<p>We can try this out now. Once we&rsquo;ve restarted the server to pick up the changes we&rsquo;ll submit the form and see if the email is sent. It doesn&rsquo;t seem to work, however, and by default Rails will silently ignore any errors that occur when it&rsquo;s trying to send email. This makes trying to debug this problem difficult. To make it easier we can modify the development config file and set <code>raise_delivery_errors</code> to <code>true</code>.</p>
+
+``` /config/environments/development.rb
+# Don't care if the mailer can't send
+config.action_mailer.raise_delivery_errors = true
+```
+
+<p>An exception will now be raised if an email fails to be delivered. After restarting the server and submitting the form again this time we get a &ldquo;Connection refused&rdquo; exception. This error isn&rsquo;t useful either but essentially it means that Rails can&rsquo;t connect to the SMTP server which by default is specified as localhost. We can change how mail is sent by specifying the <code>delivery_method</code>. We can set this to <code>smtp</code>, <code>sendmail</code>, <code>file</code> or <code>test</code>.</p>
+
+``` config/environments/development.rb
+ config.action_mailer.delivery_method = :smtp
+``` 
+ 
+<p>If want to use a different server we can set the <code>smtp_settings</code> setting, like this:</p>
+
+``` config/environments/development.rb
+config.action_mailer.smtp_settings = {
+  address: "smtp.gmail.com",
+  port: 587,
+  domain: "asciicasts.com",
+  authentication: "plain",
+  enable_starttls_auto: true,
+  user_name: ENV["GMAIL_USERNAME"],
+  password: ENV["GMAIL_PASSWORD"]
+}
+```
+
+<p>Obviously you&rsquo;ll need to put your own username and password settings in here. Note that we&rsquo;re reading ours from environment variables. We&rsquo;ll need to restart our application for these changes to be picked up but when we do this time our application successfully sends the email out.</p> 
+
+<p>An alternative way to test email delivery in development mode is to use Ryan Bates&rsquo; <a href="https://github.com/ryanb/letter_opener">Letter Opener gem</a>. To use it we need to add the gem to our gemfile then run <code>bundle</code>.</p>
+
+``` /Gemfile
+gem "letter_opener", :group => :development
+```
+
+<p>Next we need to change the <code>delivery_method</code> in the <code>config</code> file.</p>
+
+``` /config/environments/development.rb
+config.action_mailer.delivery_method = :letter_opener
+```
+
+<p>This will open any emails in a browser instead of sending them.</p>
+
+<h3>Using Links in Emails</h3>
+
+<p>Next we&rsquo;ll show some common problems that we might run in to when sending email. One of these has to do with URLs. Let&rsquo;s say that we want to add a link to the user&rsquo;s profile at the bottom of their email. We might try to do that like this:</p>
+
+``` /app/views/user_mailer/signup_confirmation.text.erb
+<%= @user.name %>,
+
+Thank you for signing up.
+
+<%= user_url(@user) %>
+```
+
+<p>When we try submitting the signup form, however, this doesn&rsquo;t work.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1145/original/E069RI02.png" width="800" height="400" alt="An exception is thrown when we try to send an email with a link in it."/>
+</div>
+
+<p>The page throws an error saying that it can&rsquo;t generate the URL as there&rsquo;s no host set. This is because the mailer doesn&rsquo;t know which domain to use for the URL. To fix this we need to go back to our development config file and add the following setting.</p>
+
+``` /config/environments/development.rb
+# specify what domain to use for mailer URLs
+config.action_mailer.default_url_options - { host: "localhost:3000" }
+```
+
+<p>This is necessary as our mailer doesn&rsquo;t have access to the request information and therefore doesn&rsquo;t know which host to use. With this setting in place the form will submit correctly and include the host option in the message&rsquo;s URL.</p> 
+
+<h3>Generating HTML Emails</h3>
+
+<p>So far we&rsquo;ve been generating plain text emails but we can make an HTML version of this message as well. To do so we need to make a new view file called <code>signup_confirmation.html.erb</code> and add the HTML version of the email in there.</p>
+
+
+``` /app/views/user_mailer/signup_confirmation.html.erb
+<p><%= @user.name %>,</p>
+
+<p>Thank you for signing up.</p>
+
+<p><%=link_to "User Profile", @user %>
+```
+
+<p>One thing to note here is that we can use helper methods here just like in any other Rails view. Now when the email is delivered it will include the HTML version with the &ldquo;User Profile&rdquo; link.</p>
+
+<p>We need to take care when styling HTML email and there&rsquo;s more information on how to do this in <a href="http://railscasts.com/episodes/312-sending-html-email">episode 312</a>. Take a look also at <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a> which covers writing automated tests for a mailer and <a href="http://railscasts.com/?tag_id=32">the episodes on background jobs</a> as it&rsquo;s a good idea to move sending email into a background process. When we send an email we&rsquo;re communicating with an external service which could be slow to respond or even unavailable and we don&rsquo;t want to show these errors to the user. This isn&rsquo;t as much of an issue if we&rsquo;re using sendmail or postfix in production as these have their own queue but it&rsquo;s a good idea to be aware of this.</p>
+
+<p>Throughout this episode we&rsquo;ve set various configuration options in our development config file. The chances are that we&rsquo;ll want to add options to our production configuration file too but with different values to suit the application when it&rsquo;s in production.</p>
