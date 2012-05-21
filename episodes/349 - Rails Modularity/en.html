@@ -1,0 +1,367 @@
+<p>You&rsquo;ve probably heard that Rails is a modular framework that allows us to only include the parts that we use, but it can be difficult to find examples in the documentation on how to do this. In this episode we&rsquo;ll start from the ground up and show how the smallest Rails application works. Later we&rsquo;ll approach things from the other end with a full Rails stack and trim off what we don&rsquo;t need.</p> 
+
+<p>The smallest Rails application can be found <a href="http://thesmallestrailsapp.com/">here</a> and all it does is print its own source code. We&rsquo;ll run this app on our local machine and play around with it to better understand how it works. It uses <a href="http://coderay.rubychan.de/">Coderay</a> for syntax highlighting so we&rsquo;ll need to install this first.</p>
+
+``` terminal
+$ gem install coderay
+```
+
+<p>Next we&rsquo;ll create a <code>config.ru</code> file to put the application&rsquo;s code in. This is what&rsquo;s known as a Rackup file (if you&rsquo;re not familiar with Rack take a look at <a href="http://railscasts.com/episodes/317-rack-app-from-scratch">episode 317</a>). We&rsquo;ll copy the source code from the site into this file.</p>
+
+``` config.ru
+%w(action_controller/railtie coderay).map &method(:require)
+
+run TheSmallestRailsApp ||= Class.new(Rails::Application) {
+  config.secret_token = routes.append { root to: 'hello#world' }.inspect
+  initialize!
+}
+
+class HelloController < ActionController::Base
+  def world
+    render inline: "
+      <!DOCTYPE html>
+      <title>The Smallest Rails App</title>
+      <h3>I am the smallest rails app!</h3>
+      <p>Here is my source code:</p>
+      #{CodeRay.scan_file(__FILE__, :ruby).div(line_numbers: :table)}
+      <a href='https://github.com/artemave/thesmallestrailsapp.com'>Make me smaller</a>
+    "
+  end
+end
+```
+
+<p>To run this application we run <code>rackup</code>, passing in the <code>-p</code> option to change the port number.</p>
+
+``` terminal
+$ rackup -p 3000
+```
+
+<p>When we visit <code>http://localhost:3000</code> now we&rsquo;ll have the smallest Rails app running on our local machine.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1166/original/E349I01.png" width="800" height="550" alt="The Smallest Rails Application running on our machine."/>
+</div>
+
+<p>We&rsquo;ll expand out the code for this application a little to get a feel for how it works as it&rsquo;s filled with neat little tricks. We&rsquo;ll start with the first line.</p>
+
+``` config.ru
+%w(action_controller/railtie coderay).map &method(:require)
+```
+
+<p>This line requires both <code>action_controller/railtie</code> and <code>coderay</code>. You&rsquo;re probably familiar with <a href="http://railscasts.com/episodes/6-shortcut-blocks-with-symbol-to-proc"><code>Symbol#to_proc</code></a> which lets us pass a symbol to a block, well this is <code>Method#to_proc</code> where we pass a method to a block. This line of code will call <code>require</code> and pass it any arguments that are passed to the block. We could expand this out by using an actual block like this:</p>
+
+``` config.ru
+%w(action_controller/railtie coderay).map {|f| require f }
+```
+
+<p>For clarity&rsquo;s sake we&rsquo;ll stick to the traditional approach and call <code>require</code> directly.</p>
+
+``` config.ru
+require 'action_controller/railtie'
+require 'coderay'
+```
+
+<p>Next, we have something else we don&rsquo;t see very often: a call to <code>Class.new</code>. This will create an anonymous class that inherits from the class we pass into it, in this case <code>Rails::Application</code>.</p>
+
+``` config.ru
+run TheSmallestRailsApp ||= Class.new(Rails::Application) {
+  config.secret_token = routes.append { root to: 'hello#world' }.inspect
+  initialize!
+}
+```
+
+<p>This class doesn&rsquo;t stay anonymous for long as it&rsquo;s assigned to a constant called <code>TheSmallestRailsApp</code>. We then run this application. Another way to write this is to use the <code>class</code> declaration and create a class that inherits from <code>Rails::Application</code>.</p>
+
+``` config.ru
+class TheSmallestRailsApp < Rails::Application
+  config.secret_token = routes.append { root to: 'hello#world' }.inspect
+  initialize!
+end
+
+run TheSmallestRailsApp
+```
+
+<p>We&rsquo;re able to run this as a Rack application because our class inherits from <code>Rails::Application</code>, which is a Rack app. In this class we set <code>config.secret_token</code> to the routes which we call <code>inspect</code> on. This is a bit of trickery as this line of code does two things at once. First we&rsquo;ll look at the routing. The <code>routes.append</code> method works similar to <code>routes.draw</code>, but doesn&rsquo;t work before the application is initialized which is why its used here. Every Rails application&rsquo;s routes file calls <code>routes.draw</code>; the rest of the routing should be familiar. As for the <code>secret_token</code> this needs to be set to a long string or else the application won&rsquo;t start up. It&rsquo;s usually set to long string of characters so that&rsquo;s what we&rsquo;ll do here.</p>
+
+``` config.ru
+class TheSmallestRailsApp < Rails::Application
+  config.secret_token = "e5a39b408f20708a0caeded782bffdc83c9f20614839b30837adb1b7d9c6684947fa9d986d2882188925ab2dd22fb6c8724821f28f47d5d410272aaa868e21aa"
+  initialize!
+  routes.draw do
+    root to: 'hello#world'
+  end
+end
+
+run TheSmallestRailsApp
+```
+
+<p>The rest of the application should be easy to understand: it&rsquo;s just a controller with a world action which renders out the content of a string including the contents of the source code file which are syntax-highlighted with Coderay. This action is set up  as the root URL in the routes file.</p>
+
+``` config.ru
+class HelloController < ActionController::Base
+  def world
+    render inline: "
+      <!DOCTYPE html>
+      <title>The Smallest Rails App</title>
+      <h3>I am the smallest rails app!</h3>
+      <p>Here is my source code:</p>
+      #{CodeRay.scan_file(__FILE__, :ruby).div(line_numbers: :table)}
+      <a href='https://github.com/artemave/thesmallestrailsapp.com'>Make me smaller</a>
+    "
+  end
+end
+```
+
+<p>Whenever we make any changes to this file we&rsquo;ll need to restart the app so that they&rsquo;re picked up. When we reload the page now it works as it did before but it shows our changed source code.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1167/original/E349I02.png" width="800" height="650" alt="The Smallest Rails App now shows our updated code."/>
+</div>
+
+<p>We don&rsquo;t actually need a Rails application class to get this to work. We can use a controller directly as a Rack app like this:</p>
+
+``` config.ru
+require 'action_controller/railtie'
+require 'coderay'
+
+class HelloController < ActionController::Base
+  def world
+    render inline: "
+      <!DOCTYPE html>
+      <title>The Smallest Rails App</title>
+      <h3>I am the smallest rails app!</h3>
+      <p>Here is my source code:</p>
+      #{CodeRay.scan_file(__FILE__, :ruby).div(line_numbers: :table)}
+      <a href='https://github.com/artemave/thesmallestrailsapp.com'>Make me smaller</a>
+    "
+  end
+end
+
+run HelloController.action(:world)
+```
+
+<p>This works and has the same behaviour as before; it just doesn&rsquo;t go through a <code>Rails::Application</code> class. This doesn&rsquo;t use the full Rack middleware stack so if we try to use cookies inside this controller it won&rsquo;t work. Using a class that inherits from <code>Rails::Application</code> uses the full Rails application stack just like a full Rails application.</p>   
+
+<h3>Creating a Controller and a View</h3>
+
+<p>So far we&rsquo;ve been doing everything in a single file but Rails&rsquo; auto-loading behaviour is still there if we need it. We can create <code>app/controllers</code> and <code>app/views</code> directories and separate these parts of the smallest application out. We&rsquo;ll start with the controller and move the controller code from the Rackup file into a new <code>hello_controller.rb</code> file.</p>
+
+``` /app/controllers/hello_controller.rb
+class HelloController < ActionController::Base
+  def world
+    render inline: "
+      <!DOCTYPE html>
+      <title>The Smallest Rails App</title>
+      <h3>I am the smallest rails app!</h3>
+      <p>Here is my source code:</p>
+      #{CodeRay.scan_file(__FILE__, :ruby).div(line_numbers: :table)}
+      <a href='https://github.com/artemave/thesmallestrailsapp.com'>Make me smaller</a>
+    "
+  end
+end
+```
+
+<p>Instead of rendering the HTML inline we&rsquo;ll move it out into a template. We&rsquo;ll just have it render &ldquo;Hello World&rdquo; for now.</p>
+
+``` /app/views/hello/world.html.erb
+Hello World
+```
+
+<p>We can now clean up our controller.</p>
+
+``` /app/controllers/hello_controller.rb
+class HelloController < ActionController::Base
+  def world
+  end
+end
+```
+
+<p>This should go to show you how flexible Rails is. We can fit a Rails application is a single file or expand it out into multiple files easily.</p>
+
+<h3>Striping Down a Full Rails Application</h3>
+
+<p>We&rsquo;ll take the opposite approach now, starting with a full Rails application and removing the parts that we might not use. We&rsquo;ll create a new app called blog and generate some scaffolding for an <code>Article</code> model.</p>
+
+``` terminal
+$ rails new blog
+$ cd blog
+$ rails g scaffold article name content:text
+$ rake db:migrate
+```
+
+<p>The first thing we can consider removing is the asset pipeline. A lot of Rails developers love this, though it&rsquo;s not compulsory to use it. While it can feel a bit heavy in development it shouldn&rsquo;t slow down an app in production at all if we pre-compile the assets. In fact it can often make a site feel faster due to its caching abilities. That said, it&rsquo;s not to everyone&rsquo;s taste and it might not be a good fit for a given application&rsquo;s scenario. To remove it we&rsquo;ll first need to go to the bottom of our application&rsquo;s config file and set <code>config.assets.enabled</code> to <code>false</code>. We can also remove or comment-out any other lines of code that reference <code>config.assets</code> too.</p>
+
+``` /config/application.rb
+# Enable the asset pipeline
+config.assets.enabled = false
+
+# Version of your assets, change this if you want to expire all your assets
+# config.assets.version = '1.0'
+```
+
+<p>At the top of this file we can configure the groups that Bundler uses. We want only the <code>default</code> and current environment&rsquo;s groups to be used and not the <code>assets</code> group.</p>
+
+``` /config/application.rb
+if defined?(Bundler)
+  # If you precompile assets before deploying to production, use this line
+  # Bundler.require(*Rails.groups(:assets => %w(development test)))
+  # If you want your assets lazily compiled in production, use this line
+  Bundler.require(:default, Rails.env)
+end
+```
+
+<p>We can also remove the <code>assets</code> group from the gemfile.</p>
+
+``` /Gemfile
+# Gems used only for assets and not required
+# in production environments by default.
+#group :assets do
+#  gem 'sass-rails',   '~> 3.2.3'
+#  gem 'coffee-rails', '~> 3.2.1'
+#
+#  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+#  # gem 'therubyracer', :platform => :ruby
+#
+#  gem 'uglifier', '>= 1.0.3'
+#end
+```
+
+<p>There&rsquo;s another change we need to make in the application&rsquo;s configuration file. At the top of this file is the line <code>require &#x27;rails/all&#x27;</code> and this will load all the Rails frameworks. If we were to replace this line with one that called each framework separately it would look something like this.</p>
+
+```/config/application.rb
+require "active_record/railtie"
+require "action_controller/railtie"
+require "action_mailer/railtie"
+require "active_resource/railtie"
+# require "sprockets/railtie"
+require "rails/test_unit/railtie"
+```
+
+<p>Now we can pick and choose the parts of Rails that we want to load. As we&rsquo;re not using the asset pipeline we&rsquo;ve commented out the <code>sprockets</code> railtie. </p>
+
+<p>Since we can no longer use the asset pipeline to load jQuery we&rsquo;ll need to generate the jQuery files which we can do by running the following command which will add them to the <code>/public</code> directory.</p>
+
+``` terminal
+$ rails g jquery:install
+```
+
+<p>Next we&rsquo;ll need to move anything that we want to keep from the <code>/assets</code> directory into the relevant subdirectory under <code>/public</code>. Once we&rsquo;ve done so we can remove <code>/assets</code> from our application. We&rsquo;ve just created a new stylesheet at <code>/public/stylesheets/application.css</code> and copied the styles from the <code>scaffold.css.scss</code> file into it. Finally we&rsquo;ll need to change the <code>javascript_include_tag</code> in the application&rsquo;s layout file so that it loads in the necessary JavaScript files.</p>
+
+``` /app/views/layouts/application.html.erb
+<%= javascript_include_tag :defaults %>
+```
+
+<p>If we look at our application is browser now it will work just as it did with the asset pipeline.</p>
+
+<h3>Removing Other Parts of The Framework</h3>
+
+<p>We can slim down our application even further by removing other parts of the framework that we don&rsquo;t need. We aren&rsquo;t going to use unit tests or ActiveResource and so we can remove these from the config file. Our application won&rsquo;t be used to send email either and so we can remove ActionMailer as well and delete the <code>app/mailers</code> directory.</p>
+
+``` /config/application.rb
+require "active_record/railtie"
+require "action_controller/railtie"
+# require "action_mailer/railtie"
+# require "active_resource/railtie"
+# require "sprockets/railtie"
+# require "rails/test_unit/railtie"
+```
+
+<p>When we remove parts of the framework like this we&rsquo;ll need to watch out for configuration options that relate to the removed parts. For example we&rsquo;ll need to remove the references to <code>config.action_mailer</code> in the development and test configuration files. Our application should still boot up like it did before and maybe even a little faster. Now we&rsquo;re left with just ActiveRecord and ActiveController. If we don&rsquo;t want a persistence layer we could remove ActiveRecord or use ActiveModel with our own persistence layer and we&rsquo;ll take this second option here.</p>
+
+``` /config/application.rb
+require "active_model/railtie"
+require "action_controller/railtie"
+# require "action_mailer/railtie"
+# require "active_resource/railtie"
+# require "sprockets/railtie"
+# require "rails/test_unit/railtie"
+```
+
+<p>Again this means that we need to go through our application&rsquo;s configuration files but this time we need to remove any references to <code>config.active_record</code>. We can now remove the <code>/config/database.yml</code> file and the <code>/db</code> directory. We can also remove the reference to the <code>sqlite3</code> gem from the gemfile. Our scaffolding will be completely broken now as it relies on the <code>Article</code> model which inherits from <code>ActiveRecord::Base</code>. For fun we&rsquo;ll replace this class with one that uses ActiveModel and which defines an interface similar to ActiveRecord&rsquo;s but which uses a primitive in-memory store.</p>
+
+``` /app/models/article.rb
+class Article
+  extend  ActiveModel::Naming
+  extend  ActiveModel::Translation
+  include ActiveModel::Validations
+  include ActiveModel::Conversion
+  attr_accessor :id, :name, :content
+
+  def self.all
+    @articles ||= []
+  end
+
+  def self.find(id)
+    all.detect { |a| a.id == id.to_i }
+  end
+
+  def initialize(attrs = {})
+    self.attributes = attrs
+  end
+
+  def persisted?
+    @id.present?
+  end
+
+  def save
+    if valid?
+      unless persisted?
+        self.id = self.class.all.size + 1
+        self.class.all << self
+      end
+      self
+    else
+      false
+    end
+  end
+
+  def attributes=(attrs)
+    attrs.each { |name, value| send("#{name}=", value) }
+  end
+
+  def update_attributes(attrs = {})
+    self.attributes = attrs
+    save
+  end
+
+  def destroy
+    self.class.all.delete(self)
+  end
+end
+```
+
+<p>Let&rsquo;s cross our fingers now and try this out. Our application still boots up and we can still create, edit and view articles through the scaffolding pages.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1168/original/E349I03.png" width="800" height="300" alt="Our application using in-memory persistence."/>
+</div>
+
+<p>We now have a fully-working scaffolding that uses ActiveModel with in-memory persistence. Obviously we wouldn&rsquo;t want to use this class in a production application but it works a demonstration of how we can use ActiveModel without ActiveRecord.</p> 
+
+<p>Let&rsquo;s see what else we can delete. Other likely candidates are <code>app/helpers</code>, <code>config/locales</code>, <code>/lib</code>, <code>/test</code>, <code>/vendor</code> and <code>/doc</code>. None of these are really necessary unless we want to customize what&rsquo;s in them. We can also remove the <code>/config/initializers</code> directory with a little work. Most of the files in it only contain comments. The two configuration options we do want to keep are the ones from the <code>session_store</code> and <code>secret_token</code> files and these can be moved into the application config file. We can then delete <code>/config/initializers</code>.</p>
+
+``` /config/application.rb
+config.session_store :cookie_store, key: '_blog_session'
+config.secret_token = 'bdf146e405f86c43237f9e16d9e17a0a6bf457779da67a798b9a70d01a5d7d1ef8d9cd35c61bc0d1645f3b546bcc768f58ac34c89021b7940d5c6ca9c2ab9115'
+```
+
+<p>What about Bundler? We can safely delete the <code>/Gemfile</code> and <code>/Gemfile.lock</code> files without any bad side effects and our application will no longer use Bundler. Instead we just need to make sure that we load any necessary gems at the top of our application config file and keep an eye out for version dependency issues.</p> 
+
+<p>We&rsquo;re pretty much done now. What do we have left? Under the <code>/script</code> directory we still have the <code>rails</code> script which is necessary to keep the <code>rails</code> command working. In the root we still have <code>Rakefile</code> so that Rake works and  the <code>config.ru</code> file which, like the Rackup file we had in the smallest application, just runs our application. This file also loads the environment config file which calls <code>initialize!</code> on our application after loading it from <code>/config/application.rb</code>. The application config file loads the boot file, which doesn&rsquo;t do anything except set up <code>rubygems</code> and Bundler, then loads the parts of Rails that we want and sets some configuration settings on our app. The rest of our application&rsquo;s files are the models, views and controllers specific to our application.</p> 
+
+<p>Hopefully this will help you draw lines between the Smallest Rails Application and the full Rails stack and give you an idea as to how we can scale between them and add and remove the parts you need. One thing we didn&rsquo;t talk about is the modularity within ActionController itself but this was covered in the previous episode on Rails::API.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

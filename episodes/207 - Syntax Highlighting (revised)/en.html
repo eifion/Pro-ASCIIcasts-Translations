@@ -1,0 +1,217 @@
+<p>We have an example application for posting code snippets online. To create a snippet we give it a name, select its language, enter the code then submit the form. When we do this and view the snippet the code isn&rsquo;t syntax-highlighted. In this episode we&rsquo;ll show you how to add this feature.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1169/original/E207RI01.png" width="800" height="526" alt="Our code snippet application."/>
+</div>
+
+<h3>Comparing The Options</h3>
+
+<p>One of the easiest ways to add syntax highlighting is on the client through JavaScript as this way the server doesn&rsquo;t have to do the work. There are a number of libraries available that will do this including <a href="http://craig.is/making/rainbows">Rainbow</a> and <a href="http://alexgorbatchev.com/SyntaxHighlighter/">SyntaxHighlighter</a>. Both of these are fairly limited in the languages they support and make more work for the browser so instead we&rsquo;ll focus on a solution that parses the code on the server.</p>
+
+<p>There are several server side solutions available. <a href="http://coderay.rubychan.de/">CodeRay</a> is one of the easiest to use in a Rails application as it&rsquo;s written entirely in Ruby and has no other dependencies. It&rsquo;s very fast at parsing code too so we don&rsquo;t need to worry about adding caching. It&rsquo;s main downfall is that it doesn&rsquo;t support a large number of languages, only 18 in the current release. One of the most popular server-side solutions is Pygments. Github uses this and it supports almost any language you can throw at it. For Rails users its main issue is that it&rsquo;s written in Python so we need to use something else in order to run it. The <a href="https://github.com/tmm1/pygments.rb">pygments.rb gem</a> provides a wrapper around Pygments so that we can use it directly in Ruby code. <a href="http://ultraviolet.rubyforge.org/">Ultraviolet</a> is another option. This uses Textmate syntax files which means that it can handle a large variety of languages and that we can customize these if we want to. This can be slow to parse files, however.</p>
+
+<p>To compare these solutions we&rsquo;ll run a benchmark to see how quickly they each parse the same file.</p> 
+
+``` syntax_benchmarks.rb
+require "rubygems"
+require "benchmark"
+require "coderay"
+require "pygments"
+require "uv"
+
+repeat = 50
+content = File.read(__FILE__)
+
+# run it once to initialize
+CodeRay.scan(content, "ruby").div(css: :class)
+Pygments.highlight(content, lexer: "ruby")
+Uv.parse(content, "xhtml", "ruby", true, "amy")
+
+Benchmark.bm(11) do |b|
+  b.report("coderay") do
+    repeat.times { CodeRay.scan(content, "ruby").div(css: :class) }
+  end
+
+  b.report("pygments") do
+    repeat.times { Pygments.highlight(content, lexer: "ruby") }
+  end
+  
+  b.report("ultraviolet") do
+    repeat.times { Uv.parse(content, "xhtml", "ruby", true, "amy") }
+  end
+end
+```
+
+<p>This also servers as a nice way of demonstrating how to do syntax highlighting in each of the three options. To run this file we&rsquo;ll need to install each of the gems.</p>
+
+``` terminal
+$ gem install coderay pygments.rb uv
+```
+
+<p>When these finish installing we can run our benchmark script.</p>
+
+``` terminal
+$ ruby syntax_banchmarks.rb 
+                  user     system      total        real
+coderay       0.200000   0.000000   0.200000 (  0.205535)
+pygments      0.700000   0.000000   0.700000 (  0.697237)
+ultraviolet   3.740000   0.020000   3.760000 (  3.771054)
+```
+
+<p>We can see from the results that CodeRay and Pygments ran quickly while Ultraviolet took a lot longer. The results show that we could use Coderay, and possibly Pygments, to do real-time highlighting but not Ultraviolet.</p>
+
+<h3>Using Pygments</h3>
+
+<p>Let&rsquo;s apply one of these solutions to our Rails application so that it highlights the code snippets. We&rsquo;ll use Pygments but if you prefer one of the other solutions the approach is much the same. We&rsquo;ll need to add the <code>pygments.rb</code> gem to the gemfile and run <code>bundle</code> to add it to our application.</p>
+
+``` /Gemfile
+gem 'pygments.rb'
+```
+
+<p>Next we&rsquo;ll modify the template that displays each snippet. This currently renders the snippet wrapped in <code>pre</code> tags.</p>
+
+``` /app/views/snippets/show.html.erb
+<pre><%= @snippet.code %></pre>
+```
+
+<p>We&rsquo;ll remove the pre tags as Pygments adds its own and pass the snippet into <code>Pygments.highlight</code>.</p>
+
+``` /app/views/snippets/show.html.erb
+<%= raw Pygments.highlight(@snippet.code, lexer: @snippet.language) %>
+```
+
+<p>As we know what language the snippet is in we can use the <code>lexer</code> option to tell Pygments this. If we don&rsquo;t have this information we can omit this option and Pygments will try to work out the language based on the code content. Alternatively if we know the filename or MIME type we can pass these in. We need to pass the output from <code>Pygments.highlight</code> into the raw method as it generates HTML and we don&rsquo;t want this to be auto-escaped.</p> 
+
+<p>When we reload the page it looks just like it did before. Pygments is adding the correct markup but as we haven&rsquo;t added any CSS the tokens aren&rsquo;t coloured. Pygments comes with a <code>css</code> method to generate styling. We could just run this and copy the output into a CSS file or we could take advantage of the asset pipeline and use that here. We can create a new stylesheet with an <code>erb</code> extension and add the line to generate the CSS here.</p>
+
+``` /app/assets/stylesheets/pygments.css.erb
+<%= Pygments.css %>
+```
+
+<p>When we reload the snippet&rsquo;s page now the code will be highlighted.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1170/original/E207RI02.png" width="800" height="526" alt="Our code is now highlighted."/>
+</div>
+
+<p>Pygments comes with several different styles built in. If we run <code>Pygments.styles</code> from the Rails console we&rsquo;ll see a list of the styles we can use.</p>
+
+``` console
+1.9.3-p125 :001 > Pygments.styles
+ => ["monokai", "manni", "rrt", "perldoc", "borland", "colorful", "default", "murphy", "vs", "trac", "tango", "fruity", "autumn", "bw", "emacs", "vim", "pastie", "friendly", "native"]
+``` 
+
+<p>We can take any one of these and pass it as a <code>style</code> option like this</p>
+
+``` /app/assets/stylesheets/pygments.css.erb
+<%= Pygments.css(style: "colorful") %>
+```
+
+<p>When we reload the page now we&rsquo;ll see that style applied.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1171/original/E207RI03.png" width="800" height="526" alt="The code is now highlighted with the &lsquo;colorful&rsquo; style."/>
+</div>
+
+<h3>Highlighting Snippets Embedded in Markdown Documents</h3>
+
+<p>We now have our snippets highlighted without having had to write much code. What though it our code isn&rsquo;t contained in a separate attribute but instead is embedded in a Markdown document instead? Let&rsquo;s say that we have a blogging application with an <code>Article</code> model and that we want to be able to embed code snippets inside the content of an article like we can on Github by using three backticks and specifying the language, like this:</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1172/original/E207RI04.png" width="800" height="526" alt="Adding a code snippet between backticks."/>
+</div>
+
+<p>If we view this article after submitting the form the code snippet will be displayed as we entered it with the backticks and language name visible. This is because to display the article&rsquo;s content we currently just call <code>simple_format</code> on the content attribute so that the line breaks are displayed properly.</p>
+
+``` /app/views/articles/show.html.erb
+<h1><%= @article.name %></h1>
+
+<%= simple_format @article.content %>
+
+<%= link_to 'Edit', edit_article_path(@article) %>
+```
+
+<p>Before we can syntax-highlight our code snippets we&rsquo;ll need to be able to handle Markdown so that we can add code sections within articles. We&rsquo;ll use the <a href="https://github.com/tanoku/redcarpet">Redcarpet gem</a> to do this and, as ever, we&rsquo;ll need to add this gem to the gemfile and run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'redcarpet'
+```
+
+<p>Now in our template we&rsquo;ll use Markdown instead of calling <code>simple_format</code>. We&rsquo;ll use a helper method called <code>markdown</code> method that we&rsquo;ll write shortly.</p> 
+
+``` /app/views/articles/show.html.erb
+<%= markdown @article.content %>
+```
+
+<p>We&rsquo;ll write the helper method in the <code>ApplicationHelper</code> class.</p>
+
+```/app/helpers/application_helper.rb
+module ApplicationHelper
+  def markdown(text)
+    renderer = Redcarpet::Render::HTML.new(hard_wrap: true, filter_html: true)
+    options = {
+      autolink: true,
+      no_intra_emphasis: true,
+      fenced_code_blocks: true,
+      lax_html_blocks: true,
+      strikethrough: true,
+      superscript: true
+    }
+    Redcarpet::Markdown.new(renderer, options).render(text).html_safe
+  end
+end
+```
+
+<p>What we do here is a little different from what we did in <a href="http://railscasts.com/episodes/272-markdown-with-redcarpet">episode 272</a> as Redcarpet has had some significant changes since then. We create a new Redcarpet renderer then we render the Markdown text, passing in a number of options to determine how it will be rendered. We call <code>html_safe</code> on the output from this so that Rails doesn&rsquo;t try to HTML-escape it.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1173/original/E207RI05.png" width="800" height="526" alt="The code snippet isn&rsquo;t highlighted."/>
+</div>
+
+<p>When we reload our article now the code snippet is interpreted properly, although the code isn&rsquo;t syntax-highlighted as it&rsquo;s not being passed through Pygments. This is easy to do with Redcarpet. All we need to do is define a new renderer class that inherits from <code>Redcarpet::Render::HTML</code> and override its <code>block_code</code> method. This takes a code snippet and a language and we can pass these to Pygments so that it can render the code. We can then use this renderer instead of the default one in our markdown method.</p> 
+
+``` /app/helpers/application_helper.rb
+module ApplicationHelper
+  class HTMLwithPygments < Redcarpet::Render::HTML
+    def block_code(code, language)
+      Pygments.highlight(code, lexer:language)
+    end
+  end
+
+  def markdown(text)
+    renderer = HTMLwithPygments.new(hard_wrap: true, filter_html: true)
+    options = {
+      autolink: true,
+      no_intra_emphasis: true,
+      fenced_code_blocks: true,
+      lax_html_blocks: true,
+      strikethrough: true,
+      superscript: true
+    }
+    Redcarpet::Markdown.new(renderer, options).render(text).html_safe
+  end
+end
+```
+
+<p>When we reload the page now the code is highlighted.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1174/original/E207RI06.png" width="800" height="526" alt="The code snippet is now highlighted."/>
+</div>
+
+<h3>Caching Highlighted Code</h3>
+
+<p>We&rsquo;ll finish this episode by talking about caching. How might we cache the output from the <code>Pygments.highlight</code> method if we needed to? One option is to take a SHA of the code and use that as a cache key so that it auto-expires. We can do this by using <code>SHA1.hexdigest</code> to create a hash to use as a key (along with the word &ldquo;code&rdquo; and the code snippet&rsquo;s language) then using <code>Rails.cache.fetch</code> and passing in that key. If a cache item with that key is found its value will be returned; if not the block will be executed and the output from it stored in the cache.</p>
+
+``` /app/helpers/application_helper.rb
+class HTMLwithPygments < Redcarpet::Render::HTML
+  def block_code(code, language)
+    sha = Digest::SHA1.hexdigest(code)
+      Rails.cache.fetch ["code", language, sha].join('-') do
+        Pygments.highlight(code, lexer:language)
+      end
+  end
+end
+```
+
+<p>As we&rsquo;re using Markdown we should move the cache so that it&rsquo;s around the entire markdown method too, but we&rsquo;ll just cache the syntax-highlighting code here. Caching is disabled by default in development mode so we&rsquo;d need to enable that to test this. Its effectiveness will depend on the cache store we decide to use.</p> 
