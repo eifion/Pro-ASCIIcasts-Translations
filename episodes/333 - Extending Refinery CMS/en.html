@@ -48,7 +48,7 @@ gem 'refinerycms-pianos', :path => 'vendor/extensions'
 $ bundle install
 ```
 
-<p>Next we&rsquo;ll run the generator that Refiner provides.</p> 
+<p>Next we&rsquo;ll run the generator that Refinery provides.</p> 
 
 ``` terminal
 $  rails generate refinery:pianos
@@ -60,7 +60,7 @@ $  rails generate refinery:pianos
 Refinery::Pianos::Engine.load_seed
 ``` 
 
-<p>The line that&rsquo;s been added loads the seeds for out <code>pianos</code> engine. This will add a  new page to Refinery for displaying pianos to the user but we can customize the engine and have it load whatever seed data we want. Next we&rsquo;ll migrate the database and load that seed data.</p>
+<p>The line that&rsquo;s been added loads the seeds for our <code>pianos</code> engine. This will add a  new page to Refinery for displaying pianos to the user but we can customize the engine and have it load whatever seed data we want. Next we&rsquo;ll migrate the database and load that seed data.</p>
 
 ``` terminal
 $ rake db:migrate && rake db:seed
@@ -220,20 +220,20 @@ $ rake db:migrate && rake db:seed
 <p>This behaves in a similar way to the <code>show</code> template, using <code>content_for</code> and then rendering a partial. Again we&rsquo;ll replace this with our own code.</p>
 
 ``` app/views/refinery/pianos/pianos/index.html.erb
-&lt;section id=&quot;body_content&quot;&gt;
-  &lt;section id=&quot;body&quot;&gt;
-    &lt;div id=&quot;pianos&quot;&gt;
-      &lt;% @pianos.each do |piano| %&gt;
-      &lt;div class=&quot;piano&quot;&gt;
-        &lt;%= image_fu piano.photo, &quot;200x200&quot;, class: &quot;image-align-#{cycle(&quot;left&quot;,&quot;right&quot;)}&quot;%&gt;
-        &lt;h2&gt;&lt;%= piano.name %&gt;&lt;/h2&gt;
-        &lt;%= raw piano.description %&gt;
-        &lt;p class=&quot;more_info&quot;&gt;&lt;%= link_to &quot;More Information&quot;, refinery.pianos_piano_path(piano) %&gt;&lt;/p&gt;
-        &lt;% end %&gt;
-      &lt;/div&gt;
-    &lt;/div&gt;
-  &lt;/section&gt;
-&lt;/section&gt;
+<section id="body_content">
+  <section id="body">
+    <div id="pianos">
+      <% @pianos.each do |piano| %>
+      <div class="piano">
+        <%= image_fu piano.photo, "200x200", class: "image-align-#{cycle("left","right")}"%>
+        <h2><%= piano.name %></h2>
+        <%= raw piano.description %>
+        <p class="more_info"><%= link_to "More Information", refinery.pianos_piano_path(piano) %></p>
+        <% end %>
+      </div>
+    </div>
+  </section>
+</section>
 ``` 
 
 <p>This code in this template is very similar to the code in the <code>show</code> template, but this time it loops through the list of pianos and renders out each one. When we reload this page now it&rsquo;s also improved and we have a nice list of pianos that we can browse through, each with a link to the page for that piano.</p>
