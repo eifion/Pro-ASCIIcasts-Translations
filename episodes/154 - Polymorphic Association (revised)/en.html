@@ -1,0 +1,325 @@
+<p>The application below has three different models: articles, photos and events.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1187/original/E154RI01.png" width="800" height="500" alt="Our application."/>
+</div>
+
+<p>We want to give users the ability to add comments to all three of these. One option would be to add a separate comment model for each type, giving us an <code>ArticleComment</code> model, a <code>PhotoComment</code> model and an <code>EventComment</code> model. This would involve a lot of work and create duplication in our application, however, especially as the three types of comment should all have the same behaviour and attributes. When we&rsquo;re faced with a situation like this we should consider using a polymorphic association. In this episode we&rsquo;ll show you how to do this.</p>
+
+<h3>Creating a Single Comment Model</h3>
+
+<p>To start we&rsquo;ll create a single model for comments that we&rsquo;ll call <code>Comment</code> and which we&rsquo;ll give a content field. To set up a polymorphic association we have to ask ourselves what the other models that this one relates to have in common. In this case they&rsquo;re all commentable and so we&rsquo;ll add two more fields to this model called <code>commentable_id</code> and <code>commentable_type</code>.</p>
+
+``` terminal
+$ rails g model comment content:text commentable_id:integer commentable_type:string
+```
+
+<p>The generated migration looks like this:</p>
+
+``` /db/migrate/20120527000000_create_comments.rb
+class CreateComments < ActiveRecord::Migration
+  def change
+    create_table :comments do |t|
+      t.text :content
+      t.integer :commentable_id
+      t.string :commentable_type
+
+      t.timestamps
+    end
+    add_index :comments, [:commentable_id, :commentable_type]
+  end
+end
+```
+
+<p>The name of the class is stored in <code>commentable_type</code> and Rails will use this along with the <code>commentable_id</code> to determine the record that the comment is associated with. As these two columns will often be queried together we&rsquo;ve added an index for them. A polymorphic association can be specified in a different way by calling <code>belongs_to</code>, like this:</p>
+
+``` /db/migrate/20120527000000_create_comments.rb
+class CreateComments < ActiveRecord::Migration
+  def change
+    create_table :comments do |t|
+      t.text :content
+      t.belongs_to :commentable, polymorphic: true
+
+      t.timestamps
+    end
+    add_index :comments, [:commentable_id, :commentable_type]
+  end
+end
+```
+
+<p>This will generate the <code>id</code> and <code>type</code> columns for us. We can now generate the new table by running <code>rake db:migrate</code>.</p>
+
+<p>Next we&rsquo;ll need to modify our <code>Comment</code> model and add a <code>belongs_to</code> association for <code>commentable</code>.</p>
+
+``` /app/models/comments.rb
+class Comment < ActiveRecord::Base
+  attr_accessible :content
+  belongs_to :commentable, polymorphic: true
+end
+```
+
+<p>By default the <code>commentable_id</code> and <code>commentable_type</code> fields are added to the <code>attr_accessible</code> list but as we don&rsquo;t need these fields to be accessible through mass assignment we&rsquo;ve removed them. Next we need to go into each of the other models and set the other side of the association. It&rsquo;s important to specify the as option here and set it to the other name of the association, in this case <code>commentable</code>.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  attr_accessible :content, :name
+  has_many :comments, as: :commentable
+end
+```
+
+<p>We&rsquo;ll do the same thing to the <code>Event</code> and <code>Photo</code> models too. We can then use this just like any other <code>has_many</code> association and we&rsquo;ll demonstrate this in the console by adding a new comment to an article.</p>
+
+``` console
+1.9.3p125 :001 > a = Article.first
+  Article Load (0.2ms)  SELECT "articles".* FROM "articles" LIMIT 1
+ => #<Article id: 1, name: "Batman", content: "Batman is a fictional character created by the arti...", created_at: "2012-05-27 08:35:54", updated_at: "2012-05-27 08:35:54"> 
+1.9.3p125 :002 > c = a.comments.create!(content: "Hello World")
+   (0.1ms)  begin transaction
+  SQL (18.5ms)  INSERT INTO "comments" ("commentable_id", "commentable_type", "content", "created_at", "updated_at") VALUES (?, ?, ?, ?, ?)  [["commentable_id", 1], ["commentable_type", "Article"], ["content", "Hello World"], ["created_at", Sun, 27 May 2012 18:43:42 UTC +00:00], ["updated_at", Sun, 27 May 2012 18:43:42 UTC +00:00]]
+   (2.4ms)  commit transaction
+ => #<Comment id: 1, content: "Hello World", commentable_id: 1, commentable_type: "Article", created_at: "2012-05-27 18:43:42", updated_at: "2012-05-27 18:43:42">
+```
+ 
+<p>When the comment is created Rails automatically sets the <code>commentable_type</code> attribute to &ldquo;Article&rdquo; so that it knows which type of model the comment is associated with. If we want to go the other way and determine which article a comment belongs to we can&rsquo;t just call <code>comment.article</code> as this is completely dynamic. Instead we need to call <code>commentable</code>.</p>
+
+``` console
+1.9.3p125 :003 > c.commentable
+  Article Load (0.3ms)  SELECT "articles".* FROM "articles" WHERE "articles"."id" = 1 LIMIT 1
+ => #<Article id: 1, name: "Batman", content: "Batman is a fictional character created by the arti...", created_at: "2012-05-27 08:35:54", updated_at: "2012-05-27 08:35:54">
+``` 
+ 
+<p>This method could also return a <code>Photo</code>, an <code>Event</code> or any other model we want the comment to relate to.</p>
+
+<h3>Using a Polymorphic Association in our Application</h3>
+
+<p>Now that we know how polymorphic associations work how do we use them in our application? In particular how do we use nested resources so that we can use a path like <code>/articles/1/comments</code> to get the comments for a given article.  First we&rsquo;ll create a <code>CommentsController</code> so that we have a place to list comments. We&rsquo;ll give it a new action too so that we can create comments.</p>
+
+``` terminal
+$ rails g controller comments index new 
+```
+
+<p>We want comments to be a nested resource under articles, photos and events so we&rsquo;ll need to modify our routes file.</p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  resources :photos do
+    resources :comments
+  end
+
+  resources :events do
+    resources :comments
+  end
+
+  resources :articles do
+    resources :comments
+  end
+  root to: 'articles#index'
+end
+```
+
+<p>These routes will direct to the <code>CommentsController</code> that we generated. In the <code>index</code> action we want to fetch the comments for whatever commentable model was passed in. To do this we need to fetch the commentable record that owns the comments but for now we&rsquo;ll assume that the <code>id</code> passed in belongs to an <code>Article</code>.</p> 
+
+``` /app/controllers/comments_controller.rb
+class CommentsController < ApplicationController
+  def index
+    @commentable = Article.find(params[:article_id])
+    @comments = @commentable.comments
+  end
+
+  def new
+  end
+end
+```
+
+<p>In the view template we&rsquo;ll loop through the comments and display them.</p>
+
+``` /app/views/comments/index.html.erb
+<h1>Comments</h1>
+
+<div id="comments">
+  <% @comments.each do |comment| %>
+    <div class="comment">
+      <%= simple_format comment.content %>
+    </div>
+  <% end %>
+</div>
+```
+
+<p>When we visit <code>/articles/1/comments</code> now we&rsquo;ll see the one comment that we added to that article earlier. (We&rsquo;ve already added some CSS to the <code>comments.css.scss</code> file.)</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1188/original/E154RI02.png" width="800" height="309" alt="The comment page showing the comment we&rsquo;ve added."/>
+</div>
+
+<p>When we try visiting the comments page for a photo this won&rsquo;t work as the code is trying to find an article, even though no <code>article_id</code> has been passed in. To fix this we&rsquo;ll need to make the <code>find</code> in the controller more dynamic. We&rsquo;ll move the code to find the related model into a <code>before_filter</code>. We need to determine the name of the commentable resource and its <code>id</code>. We&rsquo;ll get these from <code>request.path</code> by splitting it at every slash and grabbing the second and third elements so if the path is <code>/photos/1</code> these will be the two elements used. We can use these to set <code>@commentable</code> by calling <code>singlularize.classify.constantize</code> to get the class of the model and calling <code>find</code> on that to get the instance by the <code>id</code>.</p>
+
+``` /app/controllers/comments_controller.rb
+class CommentsController < ApplicationController
+  before_filter :load_commentable
+  
+  def index
+    @comments = @commentable.comments
+  end
+
+  def new
+  end
+  
+private
+
+  def load_commentable
+    resource, id = request.path.split('/')[1,2]
+    @commentable = resource.singularize.classify.contantize.find(1)
+  end
+end
+```
+
+<p>This is the easiest way to do this but it introduces a lot of coupling between the controller and the format of the URL. If we&rsquo;re using custom URLs we could use a different technique, like this:</p>
+
+``` /app/controllers/comments_controller.rb
+def load_commentable
+  klass = [Article, Photo, Event].detect { |c| params["#{c.name.underscore}_id"]}
+  @commentable = klass.find(params["#{klass.name.underscore}_id"])
+end
+```
+
+<p>This will take each of the commentable classes and look in the <code>params</code> for one matching the class name followed by <code>_id</code>. We&rsquo;ll then use the class that matches to <code>find</code> one matching the <code>id</code>. when we try viewing the comments for a photo now the page works.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1189/original/E154RI03.png" width="800" height="309" alt="The comments page for a photo."/>
+</div>
+
+<h3>Adding Links</h3>
+
+<p>Next we&rsquo;ll look at how to deal with links. How do we make a link for adding a comment to a commentable item? If the comments page was just for photos we could use the path <code>new_photo_comment_path</code> and pass in a photo. We need to support articles and events too so this approach won&rsquo;t work here. What we can do is pass in an array so that Rails generates the call dynamically based on what we pass in, like this:</p>
+
+``` /app/views/comments/index.html.erb
+<p><%= link_to "New Comment", [:new, @commentable, :comment] %></p>
+```
+
+<p>Rails will now generate the correct path dynamically based on the type of the <code>@commentable</code> variable. Clicking the link will take us to the <code>CommentsController</code>&rsquo;s <code>new</code> action so next we&rsquo;ll write the code to handle adding comments. The code for the <code>new</code> and <code>create</code> actions is fairly standard. In new we build a comment through the comments association while in create when the comment is saved successfully we redirect to the <code>index</code> action using the array technique that we used in the view to go to the article comments path, the photos comments path or the events comments path depending on what the new comment is being saved against.</p>
+
+``` /app/controllers/comments_controller.rb
+def new
+  @comment = @commentable.comments.new
+end
+  
+def create
+  @comment = @commentable.comments.new(params[:comment])
+  if @comment.save
+    redirect_to [@commentable, :comments], notice: "Comment created."
+  else
+    render :new
+  end
+end
+```
+
+<p>Next we&rsquo;ll write the view for adding a comment.</p>
+
+``` /app/views/comments/new.html.erb
+<h1>New Comment</h1>
+
+<%= form_for [@commentable, @comment] do |f| %>
+  <% if @comment.errors.any? %>
+    <div class="error_messages">
+      <h2>Please correct the following errors.</h2>
+      <ul>
+      <% @comment.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="field">
+    <%= f.text_area :content, rows: 8 %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>This code is also fairly standard with a form for editing the comment&rsquo;s content. One key difference is the array we pass to <code>form_for</code> so that it generates the URL correctly for the polymorphic association. When we reload the new comment page now we&rsquo;ll see the form and when we add a comment we&rsquo;ll be redirected back to the correct page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1190/original/E154RI04.png" width="800" height="400" alt="A comment added through the UI."/>
+</div>
+
+<p>From a user interface perspective it would probably be better if all the comment functionality was inline on the given model&rsquo;s show page. This is easy to do if we move what we&rsquo;ve created into a couple of partials. We&rsquo;ll move the form from the &ldquo;new comment&rdquo; page into a partial at <code>/app/views/comments/_form.html.erb</code> and use that in the new template.</p>
+
+``` /app/views/comments/new.html.erb
+<h1>New Comment</h1>
+
+<%= render 'form' %>
+```
+
+<p>In the the <code>index</code> view we&rsquo;ll make a partial for the code that lists the comments.</p>
+
+``` /app/views/comments/_comments.html.erb
+<div id="comments">
+  <% @comments.each do |comment| %>
+    <div class="comment">
+      <%= simple_format comment.content %>
+    </div>
+  <% end %>
+</div>
+```
+
+<p>This leaves the index template looking like this:</p>
+
+``` /app/views/comments/index.html.erb
+<h1>Comments</h1>
+
+<%= render 'comments' %>
+
+<p><%= link_to "New Comment", [:new, @commentable, :comment] %></p>
+```
+
+<p>Now in the <code>show</code> template for each commentable model we can add these partials.</p>
+
+``` /app/views/articles/show.html.erb
+<h1><%= @article.name %></h1>
+
+<%= simple_format @article.content %>
+
+<p><%= link_to "Back to Articles", articles_path %></p>
+
+<h2>Comments</h2>
+
+<%= render "comments/comments" %>
+<%= render "comments/form" %>
+```
+
+<p>We also need to modify the show action to prepare the instance variables for these partials. </p>
+
+``` /app/controllers/articles_controller.rb
+def show
+  @article = Article.find(params[:id])
+  @commentable = @article
+  @comments = @commentable.comments
+  @comment = Comment.new
+end
+```
+
+<p>We could alternatively do some some renaming and change the partials so that we don&rsquo;t need to specify all these instance variables. Whichever approach we take we&rsquo;ll need to make the same changes to the <code>photos</code> and <code>events</code> controllers and views.</p>
+
+<p>Finally in the <code>CommentsController</code> we&rsquo;ll need to change the redirect behaviour so that when a comment is successfully created the user is redirected back to that commentable <code>show</code> action instead of the <code>index</code> action.</p>
+
+``` /app/controllers/comments_controller.rb
+def create
+  @comment = @commentable.comments.new(params[:comment])
+  if @comment.save
+    redirect_to @commentable, notice: "Comment created."
+  else
+    render :new
+  end
+end
+```
+
+<p>Let&rsquo;s try this out. If we visit an article now we&rsquo;ll see its comments along with the form for creating a new one. When we add a comment we&rsquo;ll be redirect back to the same page with the new comment showing.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1191/original/E154RI05.png" width="800" height="631" alt="The comments now appear on the relevant page."/>
+</div>
+
+<p>We can easily apply these same steps to photos and events to add inline commenting behaviour.</p>
