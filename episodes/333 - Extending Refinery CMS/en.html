@@ -60,7 +60,7 @@ $  rails generate refinery:pianos
 Refinery::Pianos::Engine.load_seed
 ``` 
 
-<p>The line that&rsquo;s been added loads the seeds for out <code>pianos</code> engine. This will add a  new page to Refinery for displaying pianos to the user but we can customize the engine and have it load whatever seed data we want. Next we&rsquo;ll migrate the database and load that seed data.</p>
+<p>The line that&rsquo;s been added loads the seeds for our <code>pianos</code> engine. This will add a  new page to Refinery for displaying pianos to the user but we can customize the engine and have it load whatever seed data we want. Next we&rsquo;ll migrate the database and load that seed data.</p>
 
 ``` terminal
 $ rake db:migrate && rake db:seed
@@ -222,6 +222,7 @@ $ rake db:migrate && rake db:seed
 ``` app/views/refinery/pianos/pianos/index.html.erb
 <section id="body_content">
   <section id="body">
+<<<<<<< HEAD
   <div id="pianos">
 	  <% @pianos.each do |piano| %>
 	  <div class="piano">
@@ -232,6 +233,18 @@ $ rake db:migrate && rake db:seed
 		<% end %>
 	</div>
   </div>
+=======
+    <div id="pianos">
+      <% @pianos.each do |piano| %>
+      <div class="piano">
+        <%= image_fu piano.photo, "200x200", class: "image-align-#{cycle("left","right")}"%>
+        <h2><%= piano.name %></h2>
+        <%= raw piano.description %>
+        <p class="more_info"><%= link_to "More Information", refinery.pianos_piano_path(piano) %></p>
+        <% end %>
+      </div>
+    </div>
+>>>>>>> b359738ee58f009eabb94425726c565ed65dc72b
   </section>
 </section>
 ``` 

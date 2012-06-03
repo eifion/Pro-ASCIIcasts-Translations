@@ -1,0 +1,318 @@
+<p>This week&rsquo;s episode we&rsquo;ll be a little unusual as the topic doesn&rsquo;t relate directly to Rails. We&rsquo;ll be taking a look at <a href="http://meteor.com/">Meteor</a>, a JavaScript framework for building rich client-side applications. Why are we covering this? Well, as Rails developers it&rsquo;s important that we stay up to date with innovative new technologies and there&rsquo;s a lot that Rails can learn from Meteor.</p> 
+
+<h3>Getting Started</h3>
+
+<p>To demonstrate Meteor we&rsquo;ll build a Raffling application. This lets us add entrants and draw random winners. It&rsquo;s the same application we built in previous episodes with Backbone.js and Rails and will serve as a nice comparison with that.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1180/original/E351I01.png" width="800" height="604" alt="Our raffler application."/>
+</div>
+
+<p>First we&rsquo;ll need to install Meteor, which we do by running this <code>curl</code> command.</p>
+
+``` terminal
+$ curl install.meteor.com | sh
+```
+
+<p>Once this has downloaded and installed we&rsquo;ll have a <code>meteor</code> command which we can use to create a new application.</p>
+
+``` terminal
+$ meteor create raffler
+```
+
+<p>We can view this application by moving into its directory and running <code>meteor</code> without any arguments.</p>
+
+``` terminal
+$ cd raffler
+$ meteor
+```
+
+<p>We can browse the generated application at <code>http://localhost:3000/</code> where we&rsquo;ll see a simple &ldquo;Hello World&rdquo; application with a button. When we click the button a message is logged in the console.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1181/original/E351I02.png" width="800" height="500" alt="The default Meteor application running in the browser."/>
+</div>
+
+<p>Let&rsquo;s take a look at the source code that was generated for this app. A Meteor application can be made up of just three files: an HTML file, a JavaScript file and a CSS file. By default the CSS file is empty; the HTML file is more interesting.</p>
+
+``` /raffler.html
+<head>
+  <title>raffler</title>
+</head>
+
+<body>
+  {{> hello}}
+</body>
+
+<template name="hello">
+  <h1>Hello World!</h1>
+  {{greeting}}
+  <input type="button" value="Click" />
+</template>
+```
+
+<p>This is made up of three sections. There&rsquo;s a <code>head</code> section, a <code>body</code> section and there can be any number of template sections. Note that this isn&rsquo;t a complete HTML document: there&rsquo;s no surrounding HTML tag and there are no tags that include the JavaScript and CSS files as Meteor will add these automatically for us. Note also that this file uses the Handlebars template language to dynamically insert content. For example the code in the body section includes a template called <code>hello</code>. The call to <code>{{greeting}}</code> will search for a <code>greeting</code> attribute defined in the JavaScript file and include it in the output.</p>
+
+<p>Let&rsquo;s look at the JavaScript file next. What&rsquo;s interesting here is that this same JavaScript file will be executed on both the server and the client, though if we want code to execute on only one or the other we can use <code>Meteor.is_client</code> or <code>Meteor.is_server</code> and this can be seen used in the generated code.</p>
+
+``` /raffler.js
+if (Meteor.is_client) {
+  Template.hello.greeting = function () {
+    return "Welcome to raffler.";
+  };
+
+  Template.hello.events = {
+    'click input' : function () {
+      // template data, if any, is available in 'this'
+      if (typeof console !== 'undefined')
+        console.log("You pressed the button");
+    }
+  };
+}
+
+if (Meteor.is_server) {
+  Meteor.startup(function () {
+    // code to run on server at startup
+  });
+}
+```
+
+<p>The code that only runs on the client here defines the <code>greeting</code> attribute that is rendered in the template. Below that we define an event that fires when any <code>input</code> element is clicked (we can use any CSS selector after the space here). When any matching element is clicked the function will be clicked and this will display the console message.</p>
+
+<h3>Creating Our Raffler Application</h3>
+
+<p>We&rsquo;ll replace the generated code now with that for our Raffler application. If we prefer CoffeeScript over JavaScript we can use it. Running <code>meteor list</code> in the terminal will show us the packages that Meteors provides and these include a <code>coffeescript</code> one. We can add it by running this command.</p>
+
+``` terminal
+$ meteor add coffeescript
+```
+
+<p>We&rsquo;ll need to rename our <code>raffer.js</code> file to <code>raffler.coffee</code> to use it with CoffeeScript. Before we write any code, though, we&rsquo;ll add some CSS to <code>raffler.css</code>. There&rsquo;s too much code to list here, but you can find the stylesheet on <a href="https://github.com/railscasts/episode-351/blob/master/raffler-after/raffler.css">Github</a>. Next we&rsquo;ll make some changes to the HTML file.</p>
+
+``` /raffler.html
+<head>
+  <title>Raffler</title>
+</head>
+
+<body>
+  <div id="container">{{> raffle}}</div>
+</body>
+
+<template name="raffle">
+  <h1>Raffler</h1>
+  
+  <ul id="entries">
+    {{#each entries}}
+    <li>{{name}}</li>  
+    {{/each}}
+  </ul>
+</template>
+```
+
+<p>We&rsquo;ve changed the page&rsquo;s title along with the name of the template and the headline. Below the headline we want a list of the current entries so we&rsquo;ve added an unordered list with an <code>id</code> of <code>entries</code>. Inside this list we loop through each entry and display its name. We&rsquo;ve also wrapper the template in a div with an <code>id</code> of <code>container</code> so the correct styles are applied.</p>
+
+<p>Our template is done for now. Next we need to define the <code>entries</code> attribute in the CoffeeScript. We only want to define this on the client side so we&rsquo;ll use <code>is_client</code> before defining <code>entries</code>. For now we&rsquo;ll just set it to a hard-coded value.</p>
+
+``` /raffler.coffee
+if Meteor.is_client
+  Template.raffle.entries = [{name: "Hello World"}]
+``` 
+ 
+<p>When we browse to our application now we&rsquo;ll see the page including the one entry.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1182/original/E351I03.png" width="800" height="316" alt="Our Raffler application showing the hard-coded entry."/>
+</div>
+
+<h3>Persisting Data</h3>
+
+<p>We want our entries to be persistent and backed by a database so that we can change them dynamically. We make a persistent collection in Meteor by creating a new <code>Meteor.Collection</code> and giving it a name which we can use in our app.</p>
+
+``` /raffler.coffee
+Entries = new Meteor.Collection("entries")
+
+if Meteor.is_client
+  Template.raffle.entries = -> Entries.find()
+```  
+  
+<p>To get the list we call <code>find()</code> on the collection. Note that we&rsquo;ve placed the call inside a function so that it&rsquo;s only triggered when we call <code>entries</code> in the template. A Meteor collection is backed by MongoDB on the server but we can interact with it directly on the client as well. Note that we define <code>Entries</code> outside the call to <code>is_client</code> so that its usable on both the client and the server.</p>
+
+<p>Now&rsquo;s a good time to take a look at Meteor&rsquo;s <a href="http://docs.meteor.com/">documentation</a> which covers the various parts of Meteor. The section on <a href="http://docs.meteor.com/#collections">collections</a> explains how they work and what the functions we can call on a collection are.</p>
+
+<p>The list of entries is currently empty as there are no entries in the database. We can add some from the client-side by running JavaScript code in the browser&rsquo;s console. To add an entry we cal <code>Entries.insert</code>.</p>
+
+``` console
+> Entries.insert({name: 'Bob'})
+```
+
+<p>When we do the list is updated immediately.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1183/original/E351I04.png" width="800" height="632" alt="The new entry is added to the list as soon as it&rsquo;s added."/>
+</div>
+
+<p>Note that the view automatically updates when the data changes. We don&rsquo;t have to add callback hooks or re-render the view ourselves. Next we&rsquo;ll add a field at the top of the list so that entries can be added through the interface.</p> 
+
+``` /raffler.html
+<form id="new_entry">
+  <input type="text" name="name" id="new_entry_name">
+  <input type="submit" value="Add">
+</form>
+```
+
+<p>In our CoffeeScript we now need to add an event handler for the template. We do this by setting <code>Template.raffle.events</code>. We set this to listen to the form&rsquo;s <code>submit</code> event. When the form is submitted we first call <code>preventDefault</code> to stop the form from actually being submitted then create a new entry with a name taken from the value of the text field. Finally we clear the text field ready for the next entrant.</p>
+
+``` /raffler.coffee
+Entries = new Meteor.Collection("entries")
+
+if Meteor.is_client
+  Template.raffle.entries = -> Entries.find()
+  
+  Template.raffle.events =
+	  'submit #new_entry': (event) ->
+		  event.preventDefault()
+		  Entries.insert(name: $('#new_entry_name').val())
+		  $('#new_entry_name').val('')
+```      
+      
+<p>The Meteor server will automatically detect changes to file and update the browser accordingly so there&rsquo;s no need to reload the page to see the updated page. When we add names in the textfield now the list and the database are updated automatically.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1184/original/E351I05.png" width="800" height="390" alt="Adding entries through the browser."/>
+</div>
+
+<h3>Drawing Winners</h3>
+
+<p>Now that we can add entries we need to add a &ldquo;Draw Winner&rdquo; button which will, when clicked, mark a random entry as the winner. First we&rsquo;ll add the button at the bottom of the <code>raffle</code> template.</p>
+
+``` /raffle.html
+<button id="draw">Draw Winner</button>
+```
+
+<p>In the CoffeeScript file we&rsquo;ll listen for the button&rsquo;s <code>click</code> event and select a random winner when it fires.</p>
+
+``` /raffler.coffee
+  Template.raffle.events =
+    'submit #new_entry': (event) ->
+      event.preventDefault()
+      Entries.insert(name: $('#new_entry_name').val())
+      $('#new_entry_name').val('')
+  
+    'click #draw': ->
+      winner = _.shuffle(Entries.find().fetch())[0]
+      if winner
+        Entries.update(winner._id, $set: {winner: true})
+```        
+        
+<p>To do this we get all the entries with <code>Entry.find()</code>, like we did before. This returns a cursor object that we can call <code>fetch()</code> on to turn it into an array. To get a random entry we use <a href="http://underscorejs.org/">Underscore.js</a>&rsquo;s <code>shuffle</code> function to shuffle the array the return the first entry from that array.</p>
+
+<p>If a record is found we update their entry in the database to mark them as a winner.   To do this we call the <code>$set</code> option. This is passed in directly to MongoDB and if we look at the relevant page of the <a href="http://www.mongodb.org/display/DOCS/Updating#Updating-ModifierOperations">documentation</a> we&rsquo;ll see that this sets the value of the field that&rsquo;s passed in. We can also use MongoDB operators when querying records through Meteor. For example if we wanted to find all the records that aren&rsquo;t winners we could use <code>$ne</code>. We&rsquo;ll use this in our code so that we don&rsquo;t we don&rsquo;t select someone who&rsquo;s already been marked as a winner.</p>
+
+``` /raffler.coffee
+  Template.raffle.events =
+    'submit #new_entry': (event) ->
+      event.preventDefault()
+      Entries.insert(name: $('#new_entry_name').val())
+      $('#new_entry_name').val('')
+  
+    'click #draw': ->
+      winner = _.shuffle(Entries.find(winner: {$ne: true}).fetch())[0]
+      if winner
+        Entries.update(winner._id, $set: {winner: true})
+```        
+        
+<p>We still need to update the HTML to show that a given entry is a winner. All we need to do is make a small change to our template.</p>
+
+``` /raffler.html
+<ul id="entries">
+  {{#each entries}}
+  <li>
+    {{name}}
+    {{#if winner}}
+      <span class="winner">WINNER</span>
+    {{/if}}
+  </li>  
+  {{/each}}
+</ul>
+```
+
+<p>Now when we click &ldquo;Draw Winner&rdquo; a random entrant will be marked as a winner.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1185/original/E351I06.png" width="800" height="445" alt="Clicking the button now marks an entry as a winner."/>
+</div>
+
+<p>It can be easy to lose track of which winner is the most recent so we&rsquo;ll highlight this one. We could do this through some jQuery code but we want this to be persistent so we&rsquo;ll store this information in the database. To do this we&rsquo;ll set a <code>recent</code> attribute on the most recent winner after first removing this attribute from any other recent winners.</p>
+
+``` /raffler.coffee
+Entries = new Meteor.Collection("entries")
+
+if Meteor.is_client
+  Template.raffle.entries = -> Entries.find()
+  
+  Template.raffle.events =
+    'submit #new_entry': (event) ->
+      event.preventDefault()
+      Entries.insert(name: $('#new_entry_name').val())
+      $('#new_entry_name').val('')
+  
+    'click #draw': ->
+      winner = _.shuffle(Entries.find(winner: {$ne: true}).fetch())[0]
+      if winner
+        Entries.update({recent: true}, {$set: {recent:false}}, {multi: true})
+        Entries.update(winner._id, $set: {winner: true, recent: true})
+```        
+        
+<p>We&rsquo;ll need to modify our template now to show the most recent winner differently from the other winners. As this logic is now beginning to get a little complex we&rsquo;ll move it off into a new template.</p>
+
+``` /raffler.html
+<ul id="entries">
+  {{#each entries}}
+    {{> entry}}
+  {{/each}}
+</ul>
+```
+
+<p>We&rsquo;ll create the new template at the bottom of the same file. In it we&rsquo;ll use a custom attribute called <code>winner_class</code> that will have a different value depending on whether the current entrant is a recent winner or not.</p>
+
+``` /raffler.html
+<template name="entry">
+  <li>
+    {{name}}
+    {{#if winner}}
+      <span class="winner {{winner_class}}">WINNER</span>
+    {{/if}}
+  </li>  
+</template>
+```
+
+<p>We can set the value of this attribute in our CoffeeScript. We&rsquo;ll add the attribute to them template and set it to a function call which checks <code>this.recent</code> and sets <code>winner_class</code> depending on its value. In the function <code>this</code> is the current scope of the template so has access to all the template&rsquo;s attributes.</p>
+
+``` /raffer.coffee
+  Template.entry.winner_class = ->
+    if this.recent then 'highlight' else ''
+```    
+    
+<p>Now when we click &ldquo;Draw Winner&rdquo; the most recent winner is highlighted in red.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1186/original/E351I07.png" width="800" height="443" alt="The most recent winner is now highlighted in red."/>
+</div>
+
+<h3>Automatic Updates</h3>
+
+<p>We haven&rsquo;t yet shown you one of the coolest features of Meteor. This is that all changes are automatically pushed to all clients. If we have multiple browser windows open and click &ldquo;Draw Winner&rdquo; in one of them the new winner is immediately shown in the other window too. Similarly adding a new entrant in one window will immediately add it to all lists. Meteor does this all automatically for us.</p>
+
+<p>Another great feature is ease of deployment. Meteor has some servers set up which we&rsquo;re free to deploy our application to. All we need to do is run <code>meteor deploy</code> and pass in a domain name.</p>
+
+``` terminal
+$ meteor deploy asciicast-raffler.meteor.com
+```
+
+<p>When we visit that address now we&rsquo;ll see our Meteor application and it will work just like it does on our local machine.</p>
+
+<p>One concern about Meteor is its security. Anyone can visit our application, open up their browser&rsquo;s console and remove all the entrants by running  <code>Entries.remove({})</code>. Meteor will handle security better in future releases, in the meantime it&rsquo;s worth reading <a href="http://britto.co/blog/security_with_meteor">this blog entry</a> which shows several work-arounds for various security issues including handling cases when we don&rsquo;t want the client to perform database actions directly.</p> 
+
+Another concern is the simplicity of the project&rsquo;s structure. Having a single CoffeeScript file works well for our small example but if we have thousands of lines of code this approach will become unusable. We can split our code up into as many CoffeeScript files as we want and these will all be combined. The same applies for the CSS and HTML files. We can also add client and server directories to our project to better control where the code is executed and to protect our JavaScript from being shown on the client. It&rsquo;s a good idea to browse though the <a href="http://meteor.com/examples/leaderboard">example applications</a> that Meteor provides to see the different directory structures used in them to deal with larger applications.
+
+Meteor is shaping up to be an excellent solution for rich client-side apps. In its current state it works best for prototypes and small applications but it will be interesting to see it mature.
