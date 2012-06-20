@@ -1,0 +1,381 @@
+<p>At some point when building a Rails application we&rsquo;ll probably need to write a complex SQL query like the one we have below for searching for products.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :category_id, :released_at, :discontinued_at, :stock
+
+  def self.search(query)
+    where("released_at <= ? and (discontinued_at is null or discontinued_at > ?) and stock >= ? and name like ?", Time.zone.now, Time.zone.now, 2, "%#{query}%")
+  end
+end
+```
+
+<p>This query searches for products that are released, that aren&rsquo;t discontinued, that are in stock and which have a name that matches the search term. There are various third-party libraries that can help with queries like this; one such is Squeel which was covered in <a href="http://railscasts.com/episodes/354-squeel">the last episode</a>. In this episode we&rsquo;ll show you various ways that we can rewrite this query using only ActiveRecord and Arel.</p> 
+
+<h3>Improving Our Query</h3>
+
+<p>A query with a large number of arguments at the end and question marks scattered throughout the SQL can be difficult to read. One solution to this problem is to create a hash of the parameters. This has the added advantage that we can remove duplicate values, like the two calls to <code>Time.zone.now</code> we have in our query. We can  then replace the question marks in the query with the names of the hash&rsquo;s keys.</p>
+
+``` /app/models/product.rb
+def self.search(query)
+  where("released_at <= :now and (discontinued_at is null or discontinued_at > :now) and stock >= :stock and name like :query", now: Time.zone.now, stock: 2, query: "%#{query}%")
+end
+```
+
+<p>Another option is to move sections of the query into named scopes. This has a nice side-effect of making the sections reusable elsewhere in the application.</p> 
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :category_id, :released_at, :discontinued_at, :stock
+  
+  scope :released,          -> { where("released_at <= ?", Time.zone.now) }
+  scope :not_discontinued,  -> { where("discontinued_at is null or discontinued_at > ?", Time.zone.now) }
+  scope :in_stock,          -> { where("stock >= ?", 2) }
+  scope :available,         -> { released.not_discontinued.in_stock }
+  scope :search.            -> { available.where("name like ?", "%#{query}%") }
+end
+```
+
+<p>We now have five different named scopes that describe the different parts of our search query. What&rsquo;s nice about this approach is that it&rsquo;s self-documenting as each scope has a name that describes what it does. Note that we have an <code>available</code> scope that is made up from other scopes and a <code>search</code> scope which uses <code>available</code> to find products that match the query.</p> 
+
+<p>We&rsquo;re using the Ruby 1.9 lambda syntax (<code>-&gt;</code>) here. This is the same as using lambda but is a little shorter to type, although arguments are defined differently, outside the block. You can see this in the <code>search</code> scope above. It&rsquo;s not necessary to use a lambda in every one of these scopes. For example the <code>in_stock</code> scope above doesn&rsquo;t deal with the current time like the other scopes do so we could remove the lambda here and have the scope be evaluated at the class level. It seems, though, that omitting the lambda will be deprecated in Rails 4. The reason for this is that it can be easy to introduce bugs when the lambda is omitted. For example our <code>available</code> scope doesn&rsquo;t appear to use the current time so it looks like we might be able to skip the lambda. We can&rsquo;t, though, as some of the scopes it calls do use the current time. When in doubt, always use a lambda.</p>
+
+<p>An alternative to using the <code>scope</code> method is to define class methods. This can be preferable, especially when a scope takes arguments, or is long. We could replace our search scope with a class method that looks like this:</p>
+
+``` /app/models/product.rb
+def self.search(query)
+  available.where("name like ?", "%#{query}%")
+end
+```
+
+<p>This has the same effect. We can do anything in a class method that we can do in a scope.</p>
+
+<h3>Using Arel</h3>
+
+<p>Scopes can only take us so far. We&rsquo;re still writing raw SQL code and it&rsquo;s important to remember that different databases have slightly different syntax. If we were to switch this application to use Postgres the search query above would be case-sensitive and we&rsquo;d need to use <code>ilike</code> to make the it case-insensitive. Differences like this can cause problems and are easy to overlook and this is where <a href="https://github.com/rails/arel">Arel</a> comes in handy. ActiveRecord uses this under the hood to generate its SQL but it has a lot of features that ActiveRecord doesn&rsquo;t provide an interface for. We&rsquo;re interested in the predicates that Arel provides. We can use less than (<code>lt</code>) and greater than (<code>gt</code>) methods and more to compare columns to various values. Fortunately it&rsquo;s easy to Arel directly through ActiveRecord and we&rsquo;ll demonstrate this in the console.</p>
+
+``` console
+> t = Product.arel_table
+ => #<Arel::Table:0x007f90a4439cc0 @name="products", @engine=Product(id: integer, name: string, category_id: integer, price: decimal, released_at: datetime, discontinued_at: datetime, stock: integer, created_at: datetime, updated_at: datetime), @columns=nil, @aliases=[], @table_alias=nil, @primary_key=nil> 
+ > t[:price].lt(10)
+ => #<Arel::Nodes::LessThan:0x007f90a2ebaca0 @left=#<struct Arel::Attributes::Attribute relation=#<Arel::Table:0x007f90a4439cc0 @name="products", @engine=Product(id: integer, name: string, category_id: integer, price: decimal, released_at: datetime, discontinued_at: datetime, stock: integer, created_at: datetime, updated_at: datetime), @columns=nil, @aliases=[], @table_alias=nil, @primary_key=nil>, name=:price>, @right=10> 
+> Product.where(_)
+  Product Load (0.8ms)  SELECT "products".* FROM "products" WHERE ("products"."price" < 10)
+# List of matching products omitted
+```
+
+<p>We start here by getting the <code>arel_table</code> for the <code>Product</code> model. We can perform various actions on this table&rsquo;s attributes and we&rsquo;ve fetched the products with a price less than 10. This returns an <code>Arel::Node</code> and these can be passed directly in to a where call to return the matching products.</p>
+
+<p>Arel doesn&rsquo;t have extensive documentation so it&rsquo;s up to us to browse the source code if we want to work out everything that it&rsquo;s capable of. A good place to start is <a href="https://github.com/rails/arel/blob/master/lib/arel/predications.rb">the predications file</a> as this provides the various methods that we can call on an attribute, <code>eq</code>, <code>not_eq</code>, <code>gt</code>, <code>lt</code> etc, to figure out the different queries we can perform. For example its matches method generates a SQL <code>LIKE</code> condition, although that isn&rsquo;t obvious from the source code here which just creates a new <code>Nodes::Matches</code> object.</p>
+
+``` /lib/arel/predications.rb
+def matches other
+  Nodes::Matches.new self, other
+end
+```
+
+<p>Looking at the source code for this class won&rsquo;t help either. Instead we need to look at the source code&rsquo;s <a href="https://github.com/rails/arel/tree/master/lib/arel/visitors"><code>visitors</code> directory</a> where we&rsquo;ll find the adaptors for the various types of database that are supported. If we look at <a href="https://github.com/rails/arel/blob/master/lib/arel/visitors/postgresql.rb">the file for Postgres</a> we&rsquo;ll find a method called <code>visit_Arel_Nodes_Matches</code> and we can see that an <code>ILIKE</code> clause is used here for comparison.</p>
+
+``` lib/arel/visitors/postgresql.rb
+module Arel
+  module Visitors
+    class PostgreSQL < Arel::Visitors::ToSql
+      private
+
+      def visit_Arel_Nodes_Matches o
+        "#{visit o.left} ILIKE #{visit o.right}"
+      end
+
+      def visit_Arel_Nodes_DoesNotMatch o
+        "#{visit o.left} NOT ILIKE #{visit o.right}"
+      end
+
+      def visit_Arel_Nodes_DistinctOn o
+        "DISTINCT ON ( #{visit o.expr} )"
+      end
+    end
+  end
+end
+```
+
+<p>This class inherits from an <code>ToSql</code> class and if we look at that we&rsquo;ll see how the other nodes convert over to SQL. We can use this knowledge in the console to find all the products whose name matches a given value.</p>
+
+``` console
+> Product.where(t[:name].matches("%catan%"))
+  Product Load (0.4ms)  SELECT "products".* FROM "products" WHERE ("products"."name" LIKE '%catan%')
+# List of matching products omitted
+```
+
+<p>As we&rsquo;re using SQLite as our database this query uses the <code>LIKE</code> operator but if it was running on Postgres it would have used <code>ILIKE</code> here.</p>
+
+<p>We can now apply this to the search method in our model. Instead of using raw SQL here to find products by their name we can use the <code>matches</code> method instead.</p>
+
+``` /app/models/product.rb
+def self.search(query)
+  available.where(arel_table[:name].matches("%#{query}%"))
+end
+```
+
+<p>This is a simple change that gives us database-agnostic behaviour. We could apply this approach to the other SQL snippets in our scopes but it wouldn&rsquo;t necessarily improve things as the Arel code can often be even less readable than the SQL. Where Arel really shines is when it acts as the engine for another interface. For example we could use Arel to generate some named scopes. For example we have a scope for finding products that have been released that uses a SQL snippet.</p>
+
+``` /app/models/product.rb
+scope :released, -> { where("released_at <= ?", Time.zone.now) }
+```
+
+<p>We&rsquo;ll replace this with a new <code>released_at_lt</code> method.</p>
+
+``` /app/models/product.rb
+scope :released, -> { released_at_lt(Time.zone.now) }
+``` 
+ 
+<p>We&rsquo;ll add this functionality in a new initializer file.</p>
+
+``` /config/initializers/scope_generator.rb
+module ScopeGenerator
+  def generate_scopes
+    columns.each do |column|
+      predicates_for(column).each do |predicate|
+        scope "#{column.name}_#{predicate}", ->(value) do
+          where(arel_table[column.name].send(predicate, value))
+        end
+      end
+    end
+  end
+
+  def predicates_for(column)
+    base = [:eq, :not_eq, :in, :not_in]
+    case column.type
+    when :integer, :float, :decimal, :date, :datetime, :timestamp, :time
+      base + [:lt, :lteq, :gt, :gteq]
+    when :string, :text
+      base + [:matches, :does_not_match]
+    else
+      base
+    end
+  end
+end
+
+ActiveSupport.on_load :active_record do
+  extend ScopeGenerator
+end
+```
+
+<p>Here we define a <code>ScopeGenerator</code> module and extend <code>ActiveRecord::Base</code> with its functionality when ActiveSupport loads. This means that the methods defined here will be class methods on <code>ActiveRecord::Base</code> and available to all models.</p> 
+
+<p>The <code>generate_scopes</code> method in this module generates scopes for each column in the table. For each column we call <code>predicates_for</code>, which is also defined here, to determine the predicates for each type of column. All column types get <code>eq</code>, <code>not_eq</code>, <code>in</code> and <code>not_in</code> but other types get more. Numeric and date/time fields get predicates for comparing values while string and text types get matching predicates. For each predicate we define a new scope based on the column and predicate names and perform a where clause on the model&rsquo;s <code>arel_table</code> passing in the predicate and the value.</p>
+
+<p>We can use our <code>generate_scopes</code> method in our <code>Product</code> model to generate the scopes relevant to the column type. We could improve this method so that we can pass in a list of the columns we want to generate scopes for and a list of the scopes to generate but the code we have will work and it will create the <code>released_at_lt</code> method we&rsquo;re using in the <code>Product</code> model. We can use our new scopes to clean up our model by removing two of the scopes we created earlier and tidying up our <code>search</code> method.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :category_id, :released_at, :discontinued_at, :stock
+  
+  generate_scopes
+  
+  scope :not_discontinued,  -> { where("discontinued_at is null or discontinued_at > ?", Time.zone.now) }
+  scope :available,         -> { released_at_lteq(Time.zone.now).not_discontinued.stock_gte(2) }
+  
+  def self.search(query)
+    available.name_matches("%#{query}%")
+  end
+end
+```
+
+<p>One thing to be careful with when we use this approach is performance, especially if we have a lot of columns in a model as this will generate a large number of scopes. One way around this problem is to override <code>method_missing</code> and lazily generate the scopes only when they&rsquo;re needed.</p>
+
+<h3>Handling OR Conditions</h3>
+
+<p>One area where this approach doesn&rsquo;t help is in our not_discontinued scope. This has an OR condition to find the products where <code>discontinued_at</code> is either null or greater than the current time. Let&rsquo;s see if it&rsquo;s possible to create an OR condition on <code>ActiveRecord::Relation</code> objects so that we can write something like this:</p>
+
+``` /app/models/product.rb
+scope :not_discontinued, -> { discontinued_at_eq(nil) | discontinued_at_gt(Time.zone.now) }
+```
+
+<p>To do this is helps to have a better understanding of how Arel and ActiveRecord work together. For example if we have a query it will return an <code>ActiveRelation</code> object. If we call <code>arel.class</code> on this we&rsquo;ll see that class that&rsquo;s generated.</p>
+
+``` console
+> Product.where(stock: 2).arel.class
+ => Arel::SelectManager
+``` 
+ 
+<p>This code generates an <code>Arel::SelectManager</code>. We can call constraints on this to  return an array of <code>Arel::Nodes</code> which are the where conditions for this object.</p>
+
+``` console
+> Product.where(stock: 2).arel.constraints
+ => [#<Arel::Nodes::And:0x007f90a410b9e0 @children=[#<Arel::Nodes::Equality:0x007f90a410be18 @left=#<struct Arel::Attributes::Attribute relation=#<Arel::Table:0x007f90a44307d8 @name="products", @engine=Product(id: integer, name: string, category_id: integer, price: decimal, released_at: datetime, discontinued_at: datetime, stock: integer, created_at: datetime, updated_at: datetime), @columns=nil, @aliases=[], @table_alias=nil, @primary_key=nil>, name=:stock>, @right=2>]>]
+``` 
+ 
+<p>This means that we can take a node from this constraint and call or on it and pass it another node.</p>
+
+``` console
+ > Product.where(stock: 2).arel.constraints.first.or(Product.where(id: 1).arel.constraints.first)
+``` 
+ 
+<p>This returns a new node which is an OR condition of these two clauses. We can call <code>Product.where</code> and pass in this new node to create a SQL query that check that either of the conditions is true.</p>
+
+``` console
+> Product.where(stock: 2).arel.constraints.first.or(Product.where(id: 1).arel.constraints.first)
+> Product.where(_)
+  Product Load (104.3ms)  SELECT "products".* FROM "products" WHERE (("products"."stock" = 2 OR "products"."id" = 1))
+ => [#<Product id: 1, name: "Settlers of Catan", category_id: 2, price: #<BigDecimal:7f90a2f7fa00,'0.3495E2',18(45)>, released_at: "2012-03-15 18:58:17", discontinued_at: nil, stock: 5, created_at: "2012-06-09 18:58:17", updated_at: "2012-06-09 18:58:17">]
+``` 
+
+<p>With this concept in mind we&rsquo;ll generate an initializer file called <code>scope_operators</code> and create an OR operator here.</p>
+
+``` /config/initializers/scope_operators.rb
+module ScopeOperators
+  def or(other)
+    left = arel.constraints.reduce(:and)
+    right = other.arel.constraints.reduce(:and)
+    scope = merge(other)
+    scope.where_values = [left.or(right)]
+    scope
+  end
+  alias_method :|, :or
+end
+
+ActiveSupport.on_load :active_record do
+  ActiveRecord::Relation.send(:include, ScopeOperators)
+end
+```
+
+<p>This is a little more complex than what we did in the console because it needs to take into consideration different scenarios. Here we define a <code>ScopeOperators</code> module and load it by including it on <code>ActiveRecord::Relation</code> when <code>ActiveRecord::Base</code> loads. This means that our or method will be available on all relation objects and we&rsquo;ve aliased it as a pipe (<code>|</code>) method too. In it we call <code>arel.constraints</code> like we did in the console. This returns an array with potentially multiple constraints so we need to merge them together which we do by calling <code>reduce(:and)</code> on them. This will take the first constraint and call and passing the second then call and on that and pass it the third and so on. We do the same thing for the right side, which is the other scope that&rsquo;s passed in, then merge the two scopes and override their <code>where_values</code>. This is a variable on <code>ActiveRecord::Relation</code> that we can override to change the nodes that are used by ActiveRecord. The normal behaviour for <code>merge</code> is to <code>and</code> the values together but we want to <code>or</code> them together here and that&rsquo;s what we do when we override <code>where_values</code>.</p>
+
+<p>Let&rsquo;s try this out in the console to see if it works. We&rsquo;ll search for the products whose <code>stock</code> is 1 or whose <code>id</code> is 1.</p>
+
+```console
+> Product.where(stock: 1) | Product.where(id: 1)
+  Product Load (0.8ms)  SELECT "products".* FROM "products" WHERE (("products"."stock" = 1 OR "products"."id" = 1))
+# List of matching products omitted
+```
+
+<p>This produces the correct SQL query with an <code>OR</code> clause.</p>
+
+<p>We can take this a little further and add more operators. We&rsquo;ll add a <code>not</code> method which will do the same thing as the <code>or</code> method except that it calls <code>not</code> on the right side, and also an <code>and</code> method.</p>
+
+``` /config/initializers/scope_operators.rb
+module ScopeOperators
+  def or(other)
+    left = arel.constraints.reduce(:and)
+    right = other.arel.constraints.reduce(:and)
+    scope = merge(other)
+    scope.where_values = [left.or(right)]
+    scope
+  end
+  alias_method :|, :or
+
+  def not(other)
+    left = arel.constraints.reduce(:and)
+    right = other.arel.constraints.reduce(:and)
+    scope = merge(other)
+    scope.where_values = [left, right.not]
+    scope
+  end
+  alias_method :-, :not
+
+  def and(*args)
+    merge(*args)
+  end
+  alias_method :&, :and
+end
+
+ActiveSupport.on_load :active_record do
+  ActiveRecord::Relation.send(:include, ScopeOperators)
+end
+```
+
+<p>We can use these to merge queries in interesting ways. For example if we want to get the products whose <code>id</code> is between 1 and 5 but which isn&rsquo;t 2 we can now do this:</p>
+
+``` console
+> Product.where(id: 1..5) - Product.where(id: 2)
+```
+
+<p>This will return the products with <code>id</code>s of 1, 3, 4 and 5.</p>
+
+<h3>A Match Method</h3>
+
+<p>We&rsquo;ll finish this episode by showing one more approach for defining queries. This will work as an alternative to the scope generator we wrote earlier. Instead of having named scopes what if we could call <code>where</code> and pass in a hash? Rather than add this behaviour to the where method we&rsquo;ll create a new <code>match</code> method. How might we do this?</p> 
+
+<p>We&rsquo;ll implement this under another new initializer that we&rsquo;ll call <code>match_scope</code>. </p>
+
+
+``` /config/initializers/match_scope.rb
+module MatchScope
+  def match(matches)
+    clause = matches.map do |attribute, conditions|
+      Array.wrap(conditions).map do |predicates|
+        predicates = predicates.kind_of?(Hash) ? predicates : {eq: predicates}
+        predicates.map do |predicate, value|
+          arel_table[attribute].send(predicate, value)
+        end.reduce(:and)
+      end.reduce(:or)
+    end.reduce(:and)
+    where(clause)
+  end
+end
+
+ActiveSupport.on_load :active_record do
+  extend MatchScope
+end
+```
+
+<p>This code defines the <code>match</code> method which is extended on <code>ActiveRecord::Base</code> and so which is available as a class method on all models. The code here is a little complex for one method but then end result calls <code>where</code> on a clause which is actually an Arel node. The code builds up the <code>matches</code> hash that&rsquo;s passed in using various and and or combinations depending on what&rsquo;s passed in as the options and builds up an Arel condition through that.</p>
+
+<p>With this in place we can call match on any model passing in attributes and Arel conditions. This will generate a query matching that condition.</p>
+
+``` console
+> Product.match(stock: {lt: 3})
+  Product Load (0.7ms)  SELECT "products".* FROM "products" WHERE ("products"."stock" < 3)
+```  
+
+<p>It&rsquo;s a little bit more complicated than this as it can handle other cases where there&rsquo;s an array of values, like this which finds the products where the stock is either NULL or 3.</p>
+
+``` console
+> Product.match(stock: [nil, {lt: 3}])
+  Product Load (0.3ms)  SELECT "products".* FROM "products" WHERE (("products"."stock" IS NULL OR "products"."stock" < 3))
+```  
+
+<p>How might this affect our product search if we apply it here? We can now rewrite our search functionality like this.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :category_id, :released_at, :discontinued_at, :stock
+  
+  def self.search(query)
+    match(
+      released_at: {lteq: Time.zone.now},
+      discontinued_at: [nil, {gt: Time.zone.now}],
+      stock: {gteq: 2},
+      name: {matches: "%#{query}%"}
+    )
+  end
+end
+```
+
+<p>We now have a single <code>search</code> method with a call to <code>match</code> that handles all the search conditions. This is probably the cleanest way that we&rsquo;re going to get for this particular query. Obviously the results in your own applications will vary depending on the queries it has to make.</p>
+
+<p>Let&rsquo;s try our new method out in the console.</p>
+
+``` console
+> Product.search("catan")
+  Product Load (0.4ms)  SELECT "products".* FROM "products" WHERE ("products"."released_at" <= '2012-06-10 22:18:55.948924' AND ("products"."discontinued_at" IS NULL OR "products"."discontinued_at" > '2012-06-10 22:18:55.948955') AND "products"."stock" >= 2 AND "products"."name" LIKE '%catan%')
+```  
+  
+<p>A simple search term now generates a fairly complex query for the small hash of conditions that were passed in to search, but it returns the correct products.</p> 
+
+
+ 
+
+
+
+
+
+
+
+
+
+

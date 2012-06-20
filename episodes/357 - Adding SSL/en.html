@@ -1,0 +1,307 @@
+<p>When working with a user&rsquo;s private information in a web application it&rsquo;s important that this data is sent over a secure connection. Take for example a login form that has a username and password. The data from this form is sent in plain text unless we use the HTTPS protocol which encrypts the information before it&rsquo;s sent to the server. This applies to anything that we want kept private, from a user&rsquo;s credit card number to a session token stored in a cookie. None of this is public information and so it should be sent over a secure connection. In this episode we&rsquo;ll show you how to set up SSL and HTTPS in a Rails application.</p>
+
+<h3>Using HTTPS Connections on Our Local Machine</h3>
+
+<p>Before we start configuring a Rails application to require HTTPS we set up our development machine so that we can try it out locally. The default Rails server won&rsquo;t serve HTTPS requests so we need to run our Rails application on top of something that does and we&rsquo;ll use a combination of <a href="http://pow.cx/">Pow</a> and <a href="http://nginx.com/">Nginx</a>. Pow is a great server for running Rails applications in development and what&rsquo;s useful here is that it gives each app a consistent domain name on our local machine. Best of all it&rsquo;s easy to install and set up. To install it we just need to run this command:</p>
+
+``` terminal
+$ curl get.pow.cx | sh
+```
+
+<p>Pow requires Mac OS X but if you&rsquo;re running on another platform you can edit your HOSTS file to point a local domain name to your application. Our app is in a todo directory under our home directory so to use it with Pow we just need to move into Pow&rsquo;s directory and symlink our app&rsquo;s directory here.</p>
+
+``` terminal
+$ cd ~/.pow
+$ ln -s ~/todo
+```
+
+<p>Now, instead of accessing our app at <code>http://localhost:3000/</code> we can use the app&rsquo;s name followed by <code>.dev</code>, in this case <code>http://todo.dev/</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1211/original/E357I01.png" width="800" height="400" alt="Our login page."/>
+</div>
+
+<p>HTTPS won&rsquo;t work yet, however. To get it working we&rsquo;ll use Nginx. This is a lightweight web server and we&rsquo;ll use it here to handle the SSL communication. There are a variety of ways to download and install Nginx and you should use the one appropriate to your operating system. If you&rsquo;re running OS X the best way to install it is through Homebrew which is done by running this command.</p>
+
+``` terminal
+$ brew install nginx
+```
+
+<p>When we have Nginx installed we need to configure it to handle SSL. Its configuration directory is on our system at <code>/usr/local/etc/nginx</code>, but this may vary depending on your platform and how you installed Nginx. In it we&rsquo;ll generate the self-signed certificate needed for SSL. We&rsquo;ll discuss certificates in more detail later but for now we&rsquo;ll just run the commands to create a certificate. The first command generates two files: a private key and a certificate signing request. When we run it it will ask several questions about the certificate but we can leave these at their default as their values aren&rsquo;t important given that we&rsquo;re just using it on our local machine.</p>
+
+``` terminal
+$ openssl req -new -nodes -keyout server.key -out server.csr
+```
+
+<p>This next command generates a certificate file using the two files we created with the command above.</p> 
+
+``` terminal
+$ openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
+```
+
+<p>We&rsquo;ll configure Nginx to use this certificate. This installation is configured to run on port 8080 for HTTP but we don&rsquo;t need this so we can comment out this server section. We do want this to be an HTTPS server, though, so we&rsquo;ll uncomment that section further down and modify it for our setup.</p>
+
+``` /usr/local/etc/nginx/nginx.conf
+# HTTPS server
+    
+server {
+  listen       443;
+  server_name  *.dev;
+    
+  ssl                  on;
+  ssl_certificate      server.crt;
+  ssl_certificate_key  server.key;
+    
+  ssl_session_timeout  5m;
+    
+  ssl_protocols  SSLv2 SSLv3 TLSv1;
+  ssl_ciphers  HIGH:!aNULL:!MD5;
+  ssl_prefer_server_ciphers   on;
+    
+  location / {
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_redirect off;
+      proxy_pass http://127.0.0.1;
+  }
+}
+```
+
+<p>This section has a server listening on port 443, which is correct for HTTPS connections. The <code>server_name</code> is set to <code>localhost</code> by default but we&rsquo;ve changed it to match anything running on a local Pow server. We&rsquo;ve also changed the <code>ssl_certificate</code> and <code>ssl_certificate_key</code> settings to match the certificate files we&rsquo;ve generated. The only other part of the file that we need to change is the <code>location</code> section. We want to use Nginx as a reverse proxy and we need to set this up here. This is similar to the configuration we used in <a href="http://railscasts.com/episodes/293-nginx-unicorn">episode 293</a> and you&rsquo;ll find more information on how to set up Nginx as a reverse proxy there. Now that we&rsquo;ve configured Nginx we can try it out. First we&rsquo;ll run <code>nginx</code> with the <code>-t</code> option to test the configuration file.</p>
+
+``` terminal
+$ sudo nginx -t
+nginx: the configuration file /usr/local/etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /usr/local/etc/nginx/nginx.conf test is successful
+```
+
+<p>This is successful so we can start Nginx up.</p>
+
+``` terminal
+$ sudo nginx
+```
+
+<p>If we try to visit the HTTPS version of our site now our browser will show us a warning telling us that it can&rsquo;t verify the certificate but this is to be expected as it&rsquo;s a self-signed site.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1212/original/E357I02.png" width="800" height="411" alt="The browser warns us about our self-signed certificate."/>
+</div>
+
+<p>When we accept the certificate our site works and we can view our site over HTTPS locally. Whether you follow these steps on your local machine or on some kind of staging server it&rsquo;s nice to be able to experiment with how the application behaves while running under HTTPS before it goes into production.</p> 
+
+<h3>Restricting Access To Pages</h3>
+
+<p>Our application still works under HTTP but we want to restrict some of its pages, such as the login page, so that they&rsquo;re only available through HTTPS. We could consider making every page in our application secure. This is done in the production config file and there&rsquo;s a commented-out option in this file that we can enable to do this.</p>
+
+``` /config/production.rb
+# Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
+config.force_ssl = true
+```
+
+<p>This will make every HTTP request redirect to a secure connection but only in the production environment. We&rsquo;ll move this into the application config file so that it applies to all the environments that we want to test the SSL connection on. To make this more flexible we&rsquo;ll move the value of this setting out into an environment variable that we&rsquo;ll call <code>ENABLE_HTTPS</code>. We can&rsquo;t really represent boolean values in environment variables so we&rsquo;ll compare it with the string &ldquo;yes&rdquo; to determine whether HTTPS is enabled or not.</p>
+
+``` /config/application.rb
+module Todo
+  class Application < Rails::Application
+    config.force_ssl = (ENV["ENABLE_HTTPS"] == "yes")
+
+    # Rest of config omitted
+  end
+end
+```
+
+<p>The nice thing about this approach is that we can add this variable to Pow&rsquo;s configuration file. While we doing that we can add some other configuration options, too. We&rsquo;ll change the <code>POW_TIMEOUT</code> setting as by default it will quit an application after fifteen minutes of inactivity. We&rsquo;ll increase this to an hour.</p>
+
+``` ~/.powconfig
+export ENABLE_HTTPS="yes"
+export POW_TIMEOUT=3600
+```
+
+<p>For these settings to take effect we&rsquo;ll need to restart the Pow server. The easiest way to do this is to run the following command.</p>
+
+``` terminal
+$ launchctl stop cx.pow.powd
+```
+
+<p>This will stop the Pow process but it will start up again immediately. With these changes in effect whenever we make a request to a page in our application through HTTP we should be automatically redirected to the secure version. To get this working in production we just need to set the <code>ENABLE_HTTPS</code> environment variable to &ldquo;yes&rdquo;.</p>
+
+<p>The <code>force_ssl</code> option works by adding SSL through Rack middleware. If we enable it and run rake middleware we&rsquo;ll see <code>Rack::SSL</code> at the top of the middleware stack.</p>
+
+``` terminal
+$ ENABLE_HTTPS=yes rake middleware
+use Rack::SSL
+# Rest of stack omitted.
+```
+
+<p>The source code for <a href="https://github.com/josh/rack-ssl/blob/master/lib/rack/ssl.rb"><code>Rack::SSL</code></a> is worth reading through. It&rsquo;s less than 100 lines of code and is quite interesting. For example one of its options, called <code>default_hsts_options</code> which is enabled by default instructs the client that any requests made to this domain should always use HTTPS. This is set for a given amount of time, by default a year. If we don&rsquo;t want to lock ourselves in to SSL or make our use of it more dynamic we can configure this option. There&rsquo;s also an <code>exclude</code> option that we can use to customize when HTTPS is required for a request.</p> 
+
+<p>Near the bottom of the <code>Rack::SSL</code> source there&rsquo;s an interesting method called  <code>flag_cookies_as_secure</code> that will mark every cookie set in our application as secure. This means that the client will only send cookies back to the server over a secure connection. This is a great way to prevent session hijacking like we covered in the previous episode. If we want to configure <code>Rack::SSL</code> in our Rails application we can use the <code>config.ssl_options</code> option in the config file. For example if we want to change the <code>hsts</code> expiry value we can do so like this:</p>
+
+``` /config/application.rb
+module Todo
+  class Application < Rails::Application
+    config.force_ssl = (ENV["ENABLE_HTTPS"] == "yes")
+    config.ssl_options = {hsts: {expires: 3600}}
+    # Other config options omitted
+  end
+end
+```
+
+<h3>Making Assets Secure</h3>
+
+<p>When we&rsquo;re working with HTTPS it&rsquo;s important that all the files that a page includes  are fetched over a secure connection. This includes style sheets, JavaScript files, images and video. For example on our home page we have an image of an overweight meerkat. This image is fetched over an insecure connection and if we look in the browser&rsquo;s console we&rsquo;ll see a warning about this. Most browsers will display a warning when a secure page has insecure content.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1213/original/E357I03.png" width="800" height="682" alt="A browser warning about insecure content on a secure page."/>
+</div>
+
+<p>To fix this we need to make sure that any requests our application makes happen over HTTPS. This is easy to fix for our image.</p>
+
+``` /app/views/home/index.html.erb
+<p>
+  <%= image_tag "https://farm1.staticflickr.com/199/441091281_e0cef7bc45_z.jpg" %>
+  <i>Photo by Damien du Toit</i>
+</p>
+```
+
+<p>When we reload the page now we no longer see a warning. It&rsquo;s usually best to host all the assets on the same server as the app to avoid these problems but with videos or embedded user content this isn&rsquo;t always possible so we may want to make certain sections of our site work without SSL.</p> 
+
+<p>If we want to stick with <code>Rack::SSL</code> we can add an <code>exclude</code> option to <code>config.ssl_options</code> and pass in a proc but this can get messy unless we&rsquo;re doing something simple like excluding a subdomain from SSL. Instead it&rsquo;s better to not use <code>Rack::SSL</code> and so we&rsquo;ll comment these lines out in the configuration file.</p>
+
+``` /config/application.rb
+module Todo
+  class Application < Rails::Application
+    # config.force_ssl = (ENV["ENABLE_HTTPS"] == "yes")
+    # config.ssl_options = {hsts: {expires: 3600}}
+    # Other config options omitted
+  end
+end
+```
+
+<p>Rails provides a <code>force_ssl</code> method that we can call in our controllers for these occasions. This doesn&rsquo;t do quite what we want, however. For example it doesn&rsquo;t persist flash messages on a redirect. This has been improved in the current master branch of Rails, which will become Rails 4. Until then we&rsquo;ll have to implement this ourselves and we&rsquo;ll do so in a <code>before_filter</code> in the <code>ApplicationController</code>.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  before_filter :https_redirect
+
+private
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+  
+  def https_redirect
+    if ENV["ENABLE_HTTPS"] == "yes"
+      if request.ssl? && !use_https? || !request.ssl? && use_https?
+        protocol = request.ssl? ? "http" : "https"
+        flash.keep
+        redirect_to protocol: "#{protocol}://", status: :moved_permanently
+      end
+    end
+  end
+  
+  def use_https?
+    true # Override in other controllers
+  end  
+end
+```
+
+<p>We define two methods here. One is <code>use_https?</code> which should return <code>true</code> or <code>false</code> and which we can override in other controllers to define whether HTTPS should be used in their actions. We also have the <code>https_redirect</code> method which is called by the before filter. This checks to see if the <code>ENABLE_HTTPS</code> environment variable is set to &ldquo;yes&rdquo;. If it is we check to see if the request is secure but shouldn&rsquo;t be and vice versa. In these cases it will redirect to the correct protocol, keeping the flash message.</p> 
+
+<p>Now in another controller, such as our <code>HomeController</code>, we can override <code>use_https?</code> so that its actions don&rsquo;t use HTTPS.</p>
+
+``` /app/controllers/home_controller.rb
+class HomeController < ApplicationController
+  def index
+  end
+  
+  private
+  def use_https?
+    false
+  end
+end
+```
+
+<p>We&rsquo;ll need to restart our app server for these changes to be picked up and we can do so by touching a restart file.</p>
+
+``` terminal
+$ touch tmp/restart.txt
+```
+
+<p>If we visit our homepage under HTTPS now we&rsquo;ll be redirected to the HTTP version but if we visit one of another controller&rsquo;s actions, such as the login page which is under then <code>SessionsController</code>, we&rsquo;ll be redirected back to the HTTPS version.</p>
+
+<p>If we&rsquo;re going to use this approach we need to be aware of session hijacking attacks as we covered in <a href="http://railscasts.com/episodes/356-dangers-of-session-hijacking?view=asciicast">episode 356</a> and use secure cookies for private data. One thing that bothers some with this approach is that some links on the site will lead to a redirect. For example on the home page the link to log goes from an insecure page to a secure page. To avoid this we can explicitly define links like this to use to correct protocol for the page being liked to, like this:</p>
+
+``` /app/views/home/index.html.erb
+<%= link_to "Log In", login_url(protocol: "https") %>
+```
+
+<p>We can apply this to every link that goes across the security border. There are solutions that automate this but it can be easier to do this manually. If we miss a link it&rsquo;s not a big problem as there&rsquo;s no security risk, just an added redirect. We do need to watch out for forms that submit across the border. A redirect won&rsquo;t work here so we need to explicitly specify the protocol.</p>
+
+<h3>Certificates in Production</h3>
+
+<p>Once we have our Rails application working the way we want and we&rsquo;re ready to deploy it it&rsquo;s time to buy an SSL certificate signed by an authorized provider. Some providers can be rather expensive and this might scare you off but certificates can be found cheaply. A good place to look is your domain name provider as they often have partnership deals that let us buy certificates for good prices. For example <a href="https://dnsimple.com/">DNSimple</a> for as little as $20 a year. If this is still too much there are some free options available such as one at <a href="http://www.startssl.com/">StartSSL</a>. If you&rsquo;re looking for something that&rsquo;s a step above a self-signed certificate that won&rsquo;t cause a warning in a browser this is worth taking a look at.</p>
+
+<p>Once we sign up for a certificate we&rsquo;ll be provided with a number of files. Among these is a private key, a certificate and possibly an intermediate certificate, too. Once we have these files we can configure our server to use them. If we&rsquo;re using Apache our configuration would look something like this:</p>
+
+``` apache.conf
+# Enable mod_ssl: sudo a2enmod ssl
+<VirtualHost *:443>
+  ServerName example.com
+  DocumentRoot /path/to/current/public
+  SSLEngine on
+  SSLCertificateFile /path/to/example.com.crt
+  SSLCertificateKeyFile /path/to/example.com-private.key
+  SSLCertificateChainFile /path/to/example.com-intermediate.crt
+</VirtualHost>
+```
+
+<p>Note that we need to enable <code>mod_ssl</code> which we can do by running this command:</p>
+
+``` terminal
+$ sudo a2enmod ssl
+```
+
+<p>For Nginx the configuration is similar to what we showed earlier in this episode. We create a <code>server</code> that listens on port 443 on our site&rsquo;s domain then pass in the certificate and key files.</p>
+
+``` nginx.conf
+server {
+  listen       443
+  server_name  example.com;
+
+  ssl                  on;
+  ssl_certificate      /path/to/example.com.crt;
+  ssl_certificate_key  /path/to/example.com-private.key;
+
+  ssl_session_timeout  5m;
+
+  ssl_protocols  SSLv2 SSLv3 TLSv1;
+  ssl_ciphers HIGH:!aNULL:!MD5;
+  ssl_prefer_server_ciphers  on;
+
+  location / {
+    # ...
+  }
+}
+```
+
+<p>Note that there&rsquo;s no option for an intermediate certificate here though if have one. In this case we need to make a certificate chain file which we can do by concatenating the files together.</p>
+
+``` terminal
+$ cat example.com.crt example.com-intermediate.crt > example.com-chain.crt
+```
+
+<p>We can now use this chain file as the <code>ssl_certificate</code> in the config file.</p>
+
+``` nginx.conf
+ssl_certificate      /path/to/example.com-chain.crt;
+```
+
+<p>Finally we should lock these files down so that they&rsquo;re only readable by the root user.</p>
+
+``` terminal
+$ chmod 400 *.key *.crt
+$ sudo chown root *.key *.crt
+```

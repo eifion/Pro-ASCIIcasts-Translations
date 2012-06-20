@@ -1,0 +1,522 @@
+<p>Below is a screenshot from a Todo List application with some authentication. A user can sign up or log in and when they do they can view their list and add items to it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1192/original/E353I01.png" width="800" height="400" alt="Our Todo List application."/>
+</div>
+
+<p>Each list is unique to the user that owns it so if we log in as another user we&rsquo;ll see a different list of items. We&rsquo;d like to provide an API for this application and we already have one set up as we showed in <a href="http://railscasts.com/episodes/350-rest-api-versioning">episode 350</a> at the path <code>/api/tasks</code>. Visiting this path returns some JSON that contains all the tasks in the database but this isn&rsquo;t what we want as the lists are meant to be private. What we need to do is add a layer of authentication to our API so that it can only manage tasks for the user who has granted permission to it.</p>
+
+<p>There are many ways that we can lock down an API and we showed some of these in <a href="http://railscasts.com/episodes/352-securing-an-api">episode 352</a>. The solution that will work best with this application is <a href="http://oauth.net/">OAuth</a>, specifically OAuth 2. Even though OAuth 2 is still in draft form it&rsquo;s used by many large applications such as Facebook and Github. To integrate it into our application we&rsquo;ll use a gem called <a href="https://github.com/applicake/doorkeeper">Doorkeeper</a>. This is a Rails engine which makes it easy to turn our app into an OAuth 2 provider. It currently relies on ActiveRecord so you&rsquo;ll need to be aware of that if you&rsquo;re planning to use it.</p>
+
+<p>The contributors to Doorkeeper have done an excellent job in providing several <a href="https://github.com/applicake/doorkeeper/wiki/Example-Applications">example applications</a> and it&rsquo;s worth spending some time trying these to experiment with how it works.</p>
+
+<h3>Adding Doorkeeper To Our Application</h3>
+
+<p>We&rsquo;ll use Doorkeeper now to turn our application into an OAuth 2 provider. First  we&rsquo;ll make a quick configuration change as there can be some conflicts between Doorkeeper and the <code>active_record.whitelist_attributes</code> option. We&rsquo;ll set this to <code>false</code> here; presumably these problems will be resolved in a future version.</p>
+
+``` /config/application.rb
+config.active_record.whitelist_attributes = false
+```
+
+<p>With that change in place we can add the Doorkeeper gem to our gemfile. As ever we&rsquo;ll need to run <code>bundle</code> afterwards to install it.</p>
+
+``` /Gemfile
+gem 'doorkeeper'
+```
+
+<p>Next we&rsquo;ll need to run the Doorkeeper generator.</p>
+
+``` terminal
+$ rails g doorkeeper:install
+```
+
+<p>This creates several files, which we&rsquo;ll look at shortly, and adds a line to our routes file to mount the engine. It also provides some instructions for adjusting the configuration and tells us to migrate the database. We&rsquo;ll do this first.</p>
+
+``` terminal
+$ rake db:migrate
+==  CreateDoorkeeperTables: migrating =========================================
+-- create_table(:oauth_applications)
+   -> 0.0115s
+-- add_index(:oauth_applications, :uid, {:unique=>true})
+   -> 0.0009s
+-- create_table(:oauth_access_grants)
+   -> 0.0013s
+-- add_index(:oauth_access_grants, :token, {:unique=>true})
+   -> 0.0005s
+-- create_table(:oauth_access_tokens)
+   -> 0.0011s
+-- add_index(:oauth_access_tokens, :token, {:unique=>true})
+   -> 0.0004s
+-- add_index(:oauth_access_tokens, :resource_owner_id)
+   -> 0.0006s
+-- add_index(:oauth_access_tokens, :refresh_token, {:unique=>true})
+   -> 0.0007s
+```
+ 
+<p>Running this migration has created a number of tables for managing the apps that can connect to our API and for defining how they can access it. Next we&rsquo;ll take a look at the generated main configuration file that. This file is well commented and it&rsquo;s worth reading through these comments to see the available configuration options. The only part we&rsquo;re interested in now is the block that the <code>resource_owner_authenticator</code> method takes. By default this will raise a exception but it needs to return either the current user or redirect to a login page. There&rsquo;s a commented-out line in this block that we can modify to suit our needs.</p>
+
+``` /config/initializers/doorkeeper.rb
+Doorkeeper.configure do
+  # This block will be called to check whether the
+  # resource owner is authenticated or not
+  resource_owner_authenticator do |routes|
+    #raise "Please configure doorkeeper resource_owner_authenticator block located in #{__FILE__}"
+    # Put your resource owner authentication logic here.
+    # If you want to use named routes from your app you need
+    # to call them on routes object eg.
+    # routes.new_user_session_path
+    User.find_by_id(session[:user_id]) || redirect_to(routes.login_url)
+  end
+  # Rest of comments omitted
+end
+```
+
+<p>For our application we look for a user by their <code>id</code> which is stored in a session variable and if we don&rsquo;t find one we&rsquo;ll redirect to the <code>login_url</code>. Obviously you can alter both of these to suit your own application. After restarting our application we can test some of the functionality that Doorkeeper provides. If we make sure we&rsquo;re logged out then visit the <code>/oauth/authorize</code> path provided by Doorkeeper we&rsquo;ll be redirected to our login page. This is because visiting that path triggers the <code>resource_owner_authenticator</code> block and as there&rsquo;s no current user it will trigger the redirect instead.</p>
+
+<p>If we login and visit that URL again this time we&rsquo;ll see an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1193/original/E353I02.png" width="800" height="400" alt="Trying to authorize an application throws an error."/>
+</div>
+
+<p>This happens because Doorkeeper doesn&rsquo;t know what application the user is trying to authorize. We need to set up an application and we do that by visiting <code>/oauth/applications/</code>. Doorkeeper provides a scaffold-type interface here for creating an application and we&rsquo;ll create one so that we can try things out. We need to give it a name and a URL that the user will be redirected to after authorizing. We don&rsquo;t have an application set up yet but when we do it&rsquo;ll be at <code>http://localhost:3001</code> and the path we want to be redirected to is <code>/auth/todo/callback</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1194/original/E353I03.png" width="800" height="400" alt="Adding an application to OAuth."/>
+</div>
+
+<p>When we create our application we&rsquo;ll be shown two long hexadecimal strings, an application id and a secret. We can use these to test OAuth but it helps to have an OAuth client to interact with our provider. The <a href="https://github.com/intridea/oauth2">OAuth2 gem</a> can help us here as it allows us to interact with the OAuth2 protocol using Ruby. It&rsquo;s README has some nice instructions for acting as an OAuth 2 client and this will work well for testing Doorkeeper so we&rsquo;ll add it to our application in the usual way by adding it to the gemfile and running bundle.</p>
+
+```/Gemfile
+gem 'oauth2'
+```
+
+<p>We can now open <code>irb</code> and use this gem there.</p>
+
+``` terminal
+$ irb -r oauth2
+```
+
+<p>The client will need to know the callback URL, the application id and the secret that were generated earlier so we&rsquo;ll create variables to hold these.</p>
+
+``` console
+1.9.3p125 :001 > callback = "http://localhost:3001/auth/todo/callback"
+1.9.3p125 :002 > app_id = "2a514a754809f926b2c0fe4bb2f5f29adfa2684331b433f468f8fa4b8dbb20d5"
+1.9.3p125 :003 > secret = "ac516ef825cfc0f57f0b679dc8c2a0cf6eb79163d9b74708a205a4504b4b2a48"
+```
+
+<p>We can use the gem now to set up the client, passing in our app id and secret and the URL of the site we&rsquo;re trying to connect to.</p>
+
+``` console
+1.9.3p125 :004 > client = OAuth2::Client.new(app_id, secret, site: "http://localhost:3000/")
+```
+
+<p>We can determine the URL to redirect the user to like this:</p>
+
+``` console
+1.9.3p125 :005 > client.auth_code.authorize_url(redirect_uri: callback)
+ => "http://localhost:3000/oauth/authorize?response_type=code&client_id=2a514a754809f926b2c0fe4bb2f5f29adfa2684331b433f468f8fa4b8dbb20d5&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fauth%2Ftodo%2Fcallback"
+``` 
+ 
+<p>Now we have a URL for authorizing this client which is at the same path we visited earlier. This time, though, we have a <code>client_id</code> parameter and a URL to redirect back to. This is the URL we&rsquo;d send the user to to authorize the client and if we visit in in a browser we&rsquo;ll see this:</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1195/original/E353I04.png" width="800" height="400" alt="Authorizing our application."/>
+</div>
+
+<p>When we click &ldquo;Authorize&rdquo; we&rsquo;ll see an error message as Safari can&rsquo;t connect to the callback URL. This is to be expected as we don&rsquo;t yet have our client app running on port 3001. The callback URL includes a code parameter and our application should take this and generate an OAuth access token from it. We can generate this token from that code back in the console by calling <code>get_token</code> and passing it in along with the callback URL.</p>
+
+``` console
+1.9.3p125 :006 > access = client.auth_code.get_token('4125be61e6780812595dc275a8bf365aa5738fcf0e6d4429019ad1f68ee37363', redirect_uri: callback)
+```
+
+<p>This will return an <code>AccessToken</code> object and we can call <code>token</code> on this to see our access token.</p>
+
+``` console
+1.9.3p125 :007 > access.token
+=> "1cb2d5226e3ffba32372ff7923504e9c6e9192be48fb6252fc44519d0f7e78a8"
+```
+
+<p>By default this token will be valid for two hours before it expires.</p> 
+
+<h3>Restricting What&rsquo;s Returned by The API</h3>
+
+<p>With all this in place our client is now able to interact with our application&rsquo;s API on the user&rsquo;s behalf. Now that we&rsquo;ve authorized our application we can visit <code>http://localhost:3000/api/tasks</code> and see the JSON representation ocode the tasks. This page is still public, however, and still shows all tasks for all users so we need to restrict access to this page to those users who have signed in through OAuth. We can do this by calling <code>doorkeeper_for</code> in the controller and we&rsquo;ll pass it <code>:all</code> to restrict all the actions.</p>
+
+``` /app/controllers/api/v1/tasks_controller.rb
+module Api
+  module V1
+    class TasksController < ApplicationController
+      doorkeeper_for :all
+      respond_to :json
+
+      def index
+        respond_with Task.all
+      end
+
+      def create
+        respond_with Task.create(params[:task])
+      end
+    end
+  end
+end
+```
+
+<p>If we try reloading the page in the browser now we&rsquo;ll get an empty response. If we look at the response headers we&rsquo;ll see that we&rsquo;re getting a <code>401 Unauthorized</code> response which is what we expect as we haven&rsquo;t gone through OAuth in the browser. To get this to work we can append an access_token parameter to the URL and pass in the access token that we generated in the console. When we do we&rsquo;ll have access to our API again.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1196/original/E353I05.png" width="800" height="400" alt="If we use the access token we can now access the API again."/>
+</div>
+
+<p>We&rsquo;re still seeing all the tasks, however, and we only want to show those for the user who has authorized the access so the index action in our API&rsquo;s <code>TasksController</code> needs to return only their tasks. Doorkeeper provides a <code>doorkeeper_token</code> method which is an ActiveRecord model instance and which has some information about the token that the user is accessing the page through. This has a <code>resource_owner_id</code> method which returns the <code>id</code> of the object that&rsquo;s returned by <code>resource_owner_authenticator</code> in the configuration file. This is the user&rsquo;s <code>id</code> and so we can use it to fetch the current user and return only their tasks.</p>
+
+``` /app/controllers/api/v1/tasks_controller.rb
+module Api
+  module V1
+    class TasksController < ApplicationController
+      doorkeeper_for :all
+      respond_to :json
+
+      def index
+        user = User.find(doorkeeper_token.resource_owner_id)
+        respond_with user.tasks
+      end
+
+      def create
+        respond_with Task.create(params[:task])
+      end
+    end
+  end
+end
+```
+
+<p>Reloading the page now will show only the current user&rsquo;s tasks.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1197/original/E353I06.png" width="800" height="400" alt="We only see our own tasks now."/>
+</div>
+
+<p>We&rsquo;ll be making similar changes throughout various API controller actions so we want to be able to share this behaviour. One way to do this is to override the <code>current_user</code> method at the api controller level so that it fetches the current user from Doorkeeper. We can then use this overridden method in the <code>index</code> and <code>create</code> actions.</p>
+
+``` /app/controllers/api/v1/tasks_controller.rb
+def index
+  respond_with current_user.tasks
+end
+
+def create
+  respond_with current_user.tasks.create(params[:task])
+end
+
+private
+def current_user
+  @current_user ||= User.find(doorkeeper_token.resource_owner_id)
+end
+```
+
+<p>All the other controllers will still fetch the current user from a cookie or session variable or whatever other method our application uses to do this.</p>
+
+<h3>Accessing The API Through Ruby Code</h3>
+
+<p>When we reload the page now it still works but in general we won&rsquo;t be interacting with the API through a browser but through Ruby code instead. The OAuth2 gem can help us here too. We can call <code>get</code>, <code>post</code>, <code>put</code> and <code>delete</code> methods on the <code>access</code> object and fetch tasks this way. Calling <code>get</code> and passing a path will return a response object; calling <code>parsed</code> on this will parse the JSON and return an array.</p>
+
+``` console
+1.9.3p125 :008 > access.get('/api/tasks').parsed
+ => [{"created_at"=>"2012-06-01T17:37:36Z", "id"=>6, "name"=>"Get car from garage", "updated_at"=>"2012-06-01T17:37:36Z", "user_id"=>3}, {"created_at"=>"2012-06-01T17:37:40Z", "id"=>7, "name"=>"Walk up Snowdon", "updated_at"=>"2012-06-01T17:37:40Z", "user_id"=>3}, {"created_at"=>"2012-06-01T17:38:58Z", "id"=>8, "name"=>"Send invoices", "updated_at"=>"2012-06-01T17:38:58Z", "user_id"=>3}]
+``` 
+
+<p>We can create a task by calling the post method like this:</p>
+
+``` console
+1.9.3p125 :009 > access.post("/api/tasks", params:{task: {name: "test oauth"}})
+```
+
+<p>This gem is great and might be all we need to create a client for authenticating over OAuth and communicating with our API. If we&rsquo;re setting up a Rails application as an OAuth 2 client we should consider using <a href="https://github.com/intridea/omniauth">OmniAuth</a> which was covered in <a href="http://railscasts.com/episodes/241-simple-omniauth">episode 241</a>. If we look at the <a href="https://github.com/applicake/doorkeeper/wiki/Create-a-OmniAuth-strategy-for-your-provider">Doorkeeper wiki</a> we&rsquo;ll find documentation on creating an OmniAuth Strategy. We can copy the sample class from the wiki page and fill in the values relevant to our provider, changing the name, the URL and so on.</p> 
+
+``` ruby
+module OmniAuth
+  module Strategies
+    class Doorkeeper < OmniAuth::Strategies::OAuth2
+      # change the class name and the :name option to match your application name
+      option :name, :doorkeeper
+
+      option :client_options, {
+        :site => "http://my_awesome_application.com",
+        :authorize_path => "/oauth/authorize"
+      }
+
+      uid { raw_info["id"] }
+
+      info do
+        {
+          :email => raw_info["email"]
+          # and anything else you want to return to your API consumers
+        }
+      end
+
+      def raw_info
+        @raw_info ||= access_token.get('/api/v1/me.json').parsed
+      end
+    end
+  end
+end
+```
+
+<p>OmniAuth expects there to be some way to fetch additional information about the user through the API through its <code>raw_info</code> method. By default it calls <code>access_token.get</code> to do this which means that it uses the OAuth2 gem in the same way that we used it in the terminal. Our application doesn&rsquo;t currently provide any user information through the API so we&rsquo;ll need to add this before we can set up OmniAuth as a client. This is quite easy to do so we&rsquo;ll run through it quickly. First we&rsquo;ll add a new route that points to the <code>UsersController</code>&rsquo;s <code>show</code> action.</p>
+
+``` /config/routes.rb
+namespace :api, defaults: {format: 'json'} do
+  scope module: :v1 do
+    resources :tasks
+    match 'user', to: 'users#show'
+  end
+end
+```
+
+<p>We&rsquo;ll need to create the <code>UsersController</code> next. This will use Doorkeeper and have a <code>show</code> action that returns the current user&rsquo;s information with the exception of their password digest. We need to use the <code>current_user</code> method here but this is defined in the <code>TasksController</code>. We&rsquo;ll create a new <code>BaseController</code> class and move this method here. We can then have our other two API controllers inherit from this class.</p>
+
+``` /app/controllers/api/v1/base_controller.rb
+module Api
+  module V1
+    class BaseController < ApplicationController
+    private
+      def current_user
+        if doorkeeper_token
+          @current_user ||= User.find(doorkeeper_token.resource_owner_id)
+        end
+      end
+    end
+  end
+end
+```
+
+<p>Now we can write our <code>UsersController</code> and have inherit from this class.</p>
+
+``` /app/controllers/api/v1/users_controller.rb
+module Api
+  module V1
+    class UsersController < BaseController
+      doorkeeper_for :all
+      respond_to :json
+      
+      def show
+        respond_with current_user.as_json(except: :password_digest)
+      end
+    end
+  end
+end
+```
+
+<p>We can modify our <code>TasksController</code> now to inherit from <code>BaseController</code> and remove its own current_user method.</p>
+
+``` /app/controllers/api/v1/tasks_controller.rb
+module Api
+  module V1
+    class TasksController < BaseController
+      doorkeeper_for :all
+      respond_to :json
+
+      def index
+        respond_with current_user.tasks
+      end
+
+      def create
+        respond_with current_user.tasks.create(params[:task])
+      end
+    end
+  end
+end
+```
+
+<p>We now have a <code>UsersController</code> that will return information about the current user and we can try it out through the OAuth2 gem in the console.</p>
+
+``` console
+1.9.3-p125 :010 > access.get("/api/user").parsed
+ => {"created_at"=>"2012-06-01T17:37:28Z", "id"=>3, "name"=>"eifion", "updated_at"=>"2012-06-01T17:37:28Z"}
+``` 
+
+<p>This is exactly what we need to do in our OmniAuth strategy.</p>
+
+<p>We&rsquo;ve already created a client-side app that uses OmniAuth similar to the one we created in episode 241. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1198/original/E353I07.png" width="800" height="396" alt="Our client application."/>
+</div>
+
+<p>This runs on port 3001, but we could set it up with Pow to make it easier to have multiple Rails applications interacting on our local machine. This application has a link for signing in through our Todo list provider app. When we click it we&rsquo;ll be signed in instantly as we&rsquo;ve already authorized this application when we signed in through the command line. This client application has the same functionality as the provider app but uses the API to list and update tasks. We&rsquo;ll take a look through this app&rsquo;s source code to understand how it works.</p>
+
+<p>The app&rsquo;s gemfile includes the <code>omniauth-oauth2</code> gem which it uses for defining the strategy. The strategy itself is defined in a <code>todo.rb</code> file.</p>
+
+``` /lib/omniauth/strategies/todo.rb
+module OmniAuth
+  module Strategies
+    class Todo < OmniAuth::Strategies::OAuth2
+      option :name, :todo
+
+      option :client_options, {
+        site: "http://localhost:3000",
+        authorize_path: "/oauth/authorize"
+      }
+
+      uid do
+        raw_info["id"]
+      end
+
+      info do
+        {name: raw_info["name"]}
+      end
+
+      def raw_info
+        @raw_info ||= access_token.get('/api/user').parsed
+      end
+    end
+  end
+end
+```
+
+<p>Here we specify the provider&rsquo;s URL and the user&rsquo;s name and information which we get from the API path that we set up earlier. The provider is set up under the <code>/config/initializers</code> directory.</p> 
+
+``` /config/initializers/omniauth.rb
+require File.expand_path('lib/omniauth/strategies/todo', Rails.root)
+
+Rails.application.config.middleware.use OmniAuth::Builder do
+  provider :todo, ENV["OAUTH_ID"], ENV["OAUTH_SECRET"]
+end
+```
+
+<p>Here we load in the strategy file and specify it as a provider and we pass in the application&rsquo;s id and secret from environment variables. When the user signs in the <code>SessionsController</code>&rsquo;s <code>create</code> action is triggered.</p>
+
+``` /app/controllers/sessions_controller.rb
+def create
+  auth = request.env["omniauth.auth"]
+  user = User.find_by_provider_and_uid(auth["provider"], auth["uid"]) || User.create_with_omniauth(auth)
+  session[:user_id] = user.id
+  session[:access_token] = auth["credentials"]["token"]
+  redirect_to root_url
+end
+```
+
+<p>Here we create a user or find an existing one that matches the OmniAuth id and store the user id and access token in the session so that we can access the API. We could store this access token somewhere else, such as in the users table in the database, but for this application storing it in the session will work perfectly.</p> 
+ 
+<p>We call the API in the <code>TasksController</code>. In the <code>index</code> action we fetch the tasks through the access token that the OAuth2 gem provides (we&rsquo;ll show you how we get the token shortly). The <code>create</code> action does something similar but uses post to create a new task.</p>
+
+``` /app/controllers/tasks_controller.rb
+class TasksController < ApplicationController
+  def index
+    @tasks = access_token.get("/api/tasks").parsed if access_token
+  end
+
+  def create
+    access_token.post("/api/tasks", params: {task: {name: params[:name]}})
+    redirect_to root_url
+  end
+end
+```
+
+<p>The <code>ApplicationController</code> is where most of the work is done.</p>
+
+``` /app/views/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+
+  rescue_from OAuth2::Error do |exception|
+    if exception.response.status == 401
+      session[:user_id] = nil
+      session[:access_token] = nil
+      redirect_to root_url, alert: "Access token expired, try signing in again."
+    end
+  end
+
+private
+
+  def oauth_client
+    @oauth_client ||= OAuth2::Client.new(ENV["OAUTH_ID"], ENV["OAUTH_SECRET"], site: "http://localhost:3000")
+  end
+
+  def access_token
+    if session[:access_token]
+      @access_token ||= OAuth2::AccessToken.new(oauth_client, session[:access_token])
+    end
+  end
+
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+end
+```
+
+<p>This is where the <code>access_token</code> method that we use in the <code>TasksController</code> is defined. It creates a new <code>OAuth2::AccessToken</code> object based on the OAuth client. The client is created here in an <code>oauth_client</code> method in a way similar to what we did in the irb console earlier. At the top of this file we have a <code>rescue_from</code> to rescue from any <code>OAuth2::Error</code> in case we get an <code>Unauthorized</code> response which will happen if the token has expired. When this happens we&rsquo;ll clear the user&rsquo;s session and redirect them so that they can sign in again.</p>
+
+<p>There are probably some gems that would help to improve this client app but here we&rsquo;re focussing more on the provider and the OAuth interaction.</p> 
+
+<p>There are a few more things left to do on the provider app to improve the experience. For example if we sign out of both of the applications then try signing in again we&rsquo;ll see the login screen from the provider app which is what we expect. When we sign in, however, we&rsquo;re redirected to our todo list on the provider app rather than on the client app. Fixing this is pretty easy, thankfully. We just need to modify our Doorkeeper configuration file in the provider app and modify the line that redirects the user to the login URL if they aren&rsquo;t signed in. We can pass in additional options here and we&rsquo;ll use <code>return_to</code> to make sure that the user is redirected correctly when they sign in.</p>
+
+``` /config/doorkeeper.rb
+Doorkeeper.configure do
+  # This block will be called to check whether the
+  # resource owner is authenticated or not
+  resource_owner_authenticator do |routes|
+    #raise "Please configure doorkeeper resource_owner_authenticator block located in #{__FILE__}"
+    # Put your resource owner authentication logic here.
+    # If you want to use named routes from your app you need
+    # to call them on routes object eg.
+    # routes.new_user_session_path
+    User.find_by_id(session[:user_id]) || redirect_to(routes.login_url(return_to: request.fullpath))
+  end
+  # Rest of comments omitted
+end
+```
+
+<p>We also need to modify the <code>SessionsController</code> to handle this. </p>
+
+``` /app/controllers/sessions_controller.rb
+class SessionsController < ApplicationController
+  def new
+    session[:return_to] = params[:return_to] if params[:return_to]
+  end
+
+  def create
+    user = User.find_by_name(params[:name])
+    if user && user.authenticate(params[:password])
+      session[:user_id] = user.id
+      if session[:return_to]
+        redirect_to session[:return_to]
+        session[:return_to] = nil
+      else
+        redirect_to root_url
+      end
+    else
+      flash.now.alert = "Email or password is invalid"
+      render "new"
+    end
+  end
+
+  def destroy
+    session[:user_id] = nil
+    redirect_to login_url
+  end
+end
+```
+
+<p>This now stores the <code>return_to</code> URL in a session variable in the <code>new</code> action while in <code>create</code> it checks that session variable and if it redirects to that URL when the user logs in, after deleting the session variable. Now when we try signing in through the client app the URL to return to is included in the URL parameters and we&rsquo;ll be redirected correctly when we sign in.</p>
+
+<p>Another thing we should do in the client app is restrict access to the <code>/oauth/applications</code> path. We don&rsquo;t want this publicly available as then anyone will be able to add an application. There&rsquo;s an <code>admin_authenticator</code> block in the configuration file for doing this. We can use this to define the users who can access this page. To keep it simple we&rsquo;ll let only the user with an <code>id</code> of 1 have access.</p>
+
+``` /config/initializers/doorkeeper.rb
+# If you want to restrict the access to the web interface for
+# adding oauth authorized applications you need to declare the
+# block below
+admin_authenticator do |routes|
+  # Put your admin authentication logic here.
+  # If you want to use named routes from your app you need
+  # to call them on routes object eg.
+  # routes.new_admin_session_path
+  session[:user_id] == 1 || redirect_to(routes.login_url(return_to: request.fullpath))
+end
+```
+
+<p>Now if we&rsquo;re not logged in as the first user and we visit <code>/oauth/applications</code> we&rsquo;ll be redirected back to the login page.</p>
+
+<p>There&rsquo;s much more that Doorkeeper provides that we haven&rsquo;t covered in this episode such as authorization scopes. These provide a way to restrict what an OAuth client is able to do. The wiki has more information on how to use these.</p>
+
+<p>We&rsquo;ll finish with a quick note about security. We&rsquo;ve been using plain HTTP here but it&rsquo;s important to use a secure HTTPS connection when working with OAuth and when communicating with our API.</p>

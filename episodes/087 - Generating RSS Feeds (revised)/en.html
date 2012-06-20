@@ -1,0 +1,165 @@
+<p>Below is a page from an application that shows a list of articles. Whenever we have a page like this that display a list of items that it regularly updated we should consider creating an RSS or Atom feed as this is a great way to fetch dynamic content.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1199/original/E087RI01.png" width="800" height="500" alt="Our blog application."/>
+</div>
+
+<p>Even though feed readers may not be as popular as they were a few years ago many people still use them and its quite easy to create one in a Rails application. We&rsquo;ll show you how in this episode.</p>
+
+<h3>Creating a Feed</h3>
+
+<p>First we&rsquo;ll need to decide whether to provide an RSS or Atom feed. <a href="http://intertwingly.net/wiki/pie/Rss20AndAtom10Compared">This page</a> has a nice comparison of the two formats and provides an XML example of each one along with a nice table of tags showing the naming differences. Atom has better features but we&rsquo;ll provide source code for both formats in this episode. You should choose just one format for your application, though, as providing multiple feeds can cause confusion and almost all feed readers today will be able to read either format.</p>
+
+<p>We&rsquo;ll add an Atom feed to the page that displays the list of articles. This page is served by the <code>index</code> action of an <code>ArticlesController</code> so we&rsquo;ll modify it to handle an Atom response. We could add a <code>respond_to</code> block to the action which would handle both formats but as we&rsquo;re just serving up view templates this isn&rsquo;t necessary as Rails will automatically look up the correct view template that matches the requested format. This means that all we have to do is create a new view template for the Atom format. We could use erb to do this but instead we&rsquo;ll use the XML builder library written by Jim Weirich as this gives us an easy way to generate XML through Ruby code. This provides an XML builder object and any method called on this object will generate a tag with that name. It we also pass in a block we can nest tags. We&rsquo;ll keep our feed simple to start with and just give it a title.</p>
+
+``` /app/views/articles/index.atom.builder
+xml.feed do |feed|
+  feed.title "Superhero Articles"
+end
+```
+
+<p>We can now trigger this template by visiting the <code>/articles.atom</code> path. Safari will automatically detect that this is an Atom feed and display it as such.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1200/original/E087RI02.png" width="800" height="500" alt="Our basic feed displayed in the browser."/>
+</div>
+
+<p>If we run <code>curl</code> and pass in the feed&rsquo;s URL we&rsquo;ll see the XML that we&rsquo;ve generated.</p>
+
+``` terminal
+$ curl http://localhost:3000/articles.atom
+<feed>
+  <title>Superhero Articles</title>
+</feed>
+```
+
+<p>Now we need to fill in the rest of the XML tags to create our feed. Rails provides a helper method to make generating an Atom feed easier so we don&rsquo;t need to write all the XML from scratch. The Rails API documentation has <a href="http://api.rubyonrails.org/classes/ActionView/Helpers/AtomFeedHelper.html">a page that describes how this method works</a> and we&rsquo;ll use it in our template.</p>
+
+``` /app/views/articles/index.atom.builder
+atom_feed do |feed|
+  feed.title "Superhero Articles"
+  @articles.each do |article|
+    feed.entry article do |entry|
+      entry.title article.name
+      entry.content article.content
+      entry.author do |author|
+        author.name article.author
+      end
+    end
+  end
+end
+```
+
+<p>Here we loop through all the articles and create an entry element for each one. We then give each entry <code>title</code> and <code>content</code> elements and also an <code>author</code>. The <code>author</code> element is defined using a block as an author can have multiple details, although here we&rsquo;re just adding their name. When we reload the feed in Safari now it includes all the records and we can see the title, content and author name for each one.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1201/original/E087RI03.png" width="800" height="500" alt="The feed now shows the list of articles."/>
+</div>
+
+<p>Some elements are automatically provided for us by Rails. The publication time has been set to the <code>created_at</code> column&rsquo;s value and a <code>link</code> element has been added to each article which links to its page. If we want to customize these we can pass options to the entry method and a list of these can be found in the API documentation linked to above. Our articles have a separate <code>published_at</code> column so we&rsquo;ll use this in our feed instead of the <code>created_at</code> time.</p>
+
+``` /app/views/articles/index.atom.builder
+atom_feed do |feed|
+  feed.title "Superhero Articles"
+  @articles.each do |article|
+    feed.entry article, published: article.published_at do |entry|
+      entry.title article.name
+      entry.content article.content
+      entry.author do |author|
+        author.name article.author
+      end
+    end
+  end
+end
+```
+
+<p>Now, instead of using the time that the record was created at our <code>published_at</code> column will be used in the feed instead.</p>
+
+<h3>Validating a Feed</h3>
+
+<p>When we feel that our feed is ready it&rsquo;s a good idea to validate it. The W3C provides a <a href="http://validator.w3.org/appc/">validation service</a> which has an option to validate a feed that&rsquo;s pasted in to a text box. This is a useful option to have while a feed is still under development. We can copy our feed to the clipboard (on OS X) by running this command.</p>
+
+``` terminal
+$ curl http://localhost:3000/articles.atom | pbcopy
+```
+
+<p>Our feed has one error when we validate it as it&rsquo;s missing an updated element to say when the feed was last updated. We&rsquo;ll update our feed and set this to the time that the most recent article in the feed was updated.</p>
+
+``` /app/views/articles/index.atom.builder
+atom_feed do |feed|
+  feed.title "Superhero Articles"
+  feed.updated @articles.maximum(:updated_at)
+  # rest of code omitted
+end
+```
+
+<p>Now when we validate our feed it is valid.</p>
+
+<h3>Linking To Our Feed</h3>
+
+<p>Now that we have a valid feed we can add a link to it from our articles page. This is usually done by using a standard feed icon and we can find these at the <a href="http://feedicons.com/">Feed Icons website</a>. We&rsquo;ll download the icons and copy them into our application&rsquo;s /app/assets/images directory. Once we&rsquo;ve done that we can add a link at the top of our articles page.</p>
+
+``` /app/views/index.html.erb
+<%= link_to image_tag("feed-icon-28x28.png"), articles_url(format: "atom")%>
+```
+
+<p>Now we have a icon on the articles page that will link to our feed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1202/original/E087RI04.png" width="800" height="500" alt="Our page now has a link to the feed."/>
+</div>
+
+<p>Another thing we should do is add an auto-discovery link tag. Rails provides a helper method called <code>auto_discovery_link_tag</code> to do this. We need to pass it the format we want to use, in this case <code>:atom</code>, and a URL. This will need to go inside the <code>head</code> section of the page so we&rsquo;ll use <code>content_for</code> to put it there.</p>
+
+``` /app/views/index.html.erb
+<%= content_for :head, auto_discovery_link_tag(:atom, articles_url(format: "atom")) %>
+```
+
+<p>We&rsquo;ll need to add code to the layout to add the <code>head</code> placeholder by calling <code>yield</code>.</p>
+
+``` /app/views/layouts/application.html.erb
+<head>
+  <title>Blog</title>
+  <%= stylesheet_link_tag    "application", media: "all" %>
+  <%= javascript_include_tag "application" %>
+  <%= csrf_meta_tag %>
+  <%= yield :head %>
+</head>
+```
+
+<p>When we reload the page now we see an RSS icon in the address bar. Clicking on this will take us to our feed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1203/original/E087RI05.png" width="800" height="500" alt="The browser now detects the feed and shows an icon in the address bar."/>
+</div>
+
+<h3>Providing an RSS Feed</h3>
+
+<p>It&rsquo;s not taken us long to build a fully-valid Atom feed and to link to it from our page. As we mentioned earlier we could instead have written an RSS 2.0 feed and we&rsquo;ll write the code now to do that. All we need to do is create a builder file like we did for our Atom feed.</p>
+
+``` /app/views/articles/index.rss.builder
+xml.instruct! :xml, version: "1.0" 
+xml.rss version: "2.0" do
+  xml.channel do
+    xml.title "Superhero Articles"
+    xml.description "From Batman to Superman"
+    xml.link articles_url
+
+    @articles.each do |article|
+      xml.item do
+        xml.title article.name
+        xml.description article.content
+        xml.pubDate article.published_at.to_s(:rfc822)
+        xml.link article_url(article)
+        xml.guid article_url(article)
+      end
+    end
+  end
+end
+```
+
+<p>Rails doesn&rsquo;t offer a helper method for generating an RSS feed but it&rsquo;s easy to write from scratch through an XML builder. Note that here we create an <code>item</code> element rather than an <code>entry</code> for each article and we set various attributes for it in that block. The <code>guid</code> is an interesting element. This stands for Global Unique Identifier and is often set to the URL of the item but we need to make sure that it doesn&rsquo;t change for an article once its set as RSS feed readers use this to determine whether an item as been read or not.</p>
+
+<p>With this template in place we can visit the <code>/articles.rss</code> path and we&rsquo;ll see the same feed but in RSS format. Generally we&rsquo;ll only want to provide one format or the other but this is included so that you can decide which one to use.</p>
+
+<p>If we want our feed to be private we can password-protect it and the easiest way to do with is to use HTTP Basic authentication. We won&rsquo;t be covering this in detail here but it&rsquo;s covered in the <a href="http://api.rubyonrails.org/classes/ActionController/HttpAuthentication/Basic.html">API documentation</a> which has a good example on how to protect a feed like this. If we take this approach we&rsquo;ll need to make sure that we&rsquo;re using HTTPS to encrypt the password.</p>
