@@ -1,0 +1,214 @@
+<p>The Rails console is an extremely useful tool and most Rails developers use it all the time for debugging or experimenting with code and also as an interface for modifying the application&rsquo;s data. In this episode we&rsquo;ll give you some tips on how to get the most out of the console.</p>
+
+<p>The console can be opened from a terminal window by running <code>rails console</code>, or the shorter alternative <code>rails c</code>, in the application&rsquo;s directory. We can pass a number of options to this command; some useful ones are <code>production</code>, which will start the application in the production environment, and <code>--sandbox</code> which will wrap the console session in a database transaction so that any modifications we make are rolled back. This second option is handy if we want to experiment with something without permanently changing the database.</p> 
+
+``` terminal
+$ rails c --sandbox
+Loading development environment in sandbox (Rails 3.2.3)
+Any modifications you make will be rolled back on exit
+1.9.3-p125 :001 > Product.delete_all
+  SQL (1.1ms)  DELETE FROM "products"
+ => 29 
+1.9.3-p125 :002 > exit
+   (1.6ms)  rollback transaction
+```
+
+<h3>Useful Console Methods</h3>
+
+<p>Rails provides some useful methods specifically for use in the console. One is <code>app</code>, which is useful for interacting with our application. We can call URL helpers on this to see where a path routes to.</p>
+
+``` console
+> app.products_path
+ => "/products"
+``` 
+
+<p>We can also make requests to our application by calling <code>app.get</code> and passing in a path.</p>
+
+``` console
+> app.get app.products_path
+  Product Load (0.5ms)  SELECT "products".* FROM "products" WHERE ("products"."released_at" <= '2012-06-18 19:42:47.116943' AND ("products"."discontinued_at" IS NULL OR "products"."discontinued_at" > '2012-06-18 19:42:47.116986') AND "products"."stock" >= 2 AND "products"."name" LIKE '%%')
+ => 200
+``` 
+
+<p>In this example the <code>ProductsController</code>&rsquo;s <code>index</code> action is run. This is a great way of seeing what database queries are performed for a given request. The app method is an instance of <code>ActionDispatch::Integration::Session</code> which is something normally used for integration testing but it works perfectly well in the console too.</p>
+
+<p>If we look at <a href="http://guides.rubyonrails.org/testing.html#integration-testing">the Rails Guide for integration testing</a> we&rsquo;ll see some more of the methods that we can call on <code>app</code>. We can run <code>app.cookies</code> to see which cookies are set, or use <code>app.response.headers</code> and <code>app.response.body</code> to see the headers or body of the last response. We can even inspect the instance variables that were assigned by the controller in the last request by calling assigns and passing in the variable&rsquo;s name as a symbol.</p>
+
+``` console
+> app.assigns(:products).size
+ => 22
+``` 
+
+<p>A similarly helpful method is <code>helper</code>. This gives us access to the view context and we can execute helper methods on it to test them out.</p>
+
+``` console
+> helper.number_to_currency(12.34)
+ => "$12.34"
+``` 
+
+<p>We can also call the custom helper methods that we define in our application. One thing that won&rsquo;t work, though, is the <code>params</code> hash so if we have a helper method that references the request parameters then calling it here will raise an exception. To fix this there&rsquo;s another method that the console provides called <code>controller</code> that returns a new <code>ApplicationController</code> instance. For some reason this isn&rsquo;t hooked up to the helper but we can set it manually, along with its parameters which will then be available to the helper.</p>
+
+``` console
+> helper.controller = controller
+ => #<ApplicationController:0x007fccc88ae0c0 @_routes=nil, @_action_has_layout=true, @_headers={"Content-Type"=>"text/html"}, @_status=200, @_request=nil, @_response=nil> 
+> controller.params = {foo: "bar"}
+ => {:foo=>"bar"} 
+> helper.params
+ => {:foo=>"bar"}
+``` 
+
+<p>Another useful console method is called <code>reload!</code>. This picks up any changes we&rsquo;ve made to our application since starting the console. Let&rsquo;s say that the <code>Product</code> model&rsquo;s <code>to_param</code> method isn&rsquo;t working the way we want it to. We can make the necessary changes in the model file then run <code>reload!</code> in the console. When we run <code>to_param</code> on the product again the changes will have been picked up. This is a handy trick but it does have the occasional issue so if you want to be absolutely sure that the changes have been picked up it can be better to stop and restart the console.</p> 
+
+<h3>Customizing The .irbrc File</h3>
+
+<p>Ever since Rails 3.1 ActiveRecord logs its SQL queries to the console which is very useful. If we want to disable this feature we can do so by setting the logger level to anything above zero.</p>
+
+``` console
+> Product.count
+   (0.3ms)  SELECT COUNT(*) FROM "products" 
+ => 29 
+> ActiveRecord::Base.logger.level = 1
+ => 1 
+> Product.count
+ => 29
+``` 
+
+<p>To make this the default behaviour in the console we can set it in the <code>.irbrc</code> file in our home directory. We can put any Ruby code into this file and it will be evaluated when either irb or the console are loaded. We have some code in this file already to enable tab completion and a save history feature that keeps up 1,000 lines of history between sessions.</p>
+
+``` ~/.irbrc
+#!/usr/bin/env ruby
+require 'irb/completion'
+require 'irb/ext/save-history'
+
+IRB.conf[:PROMPT_MODE] = :SIMPLE
+IRB.conf[:SAVE_HISTORY] = 1000
+IRB.conf[:HISTORY_FILE] = "#{ENV['HOME']}/.irb_history"
+```
+
+<p>We can customize this file to make it fit our preferences. To remove the SQL query logging we can can add a line like this:</p>
+
+``` ~/.irbrc
+ActiveRecord::Base.logger.level = 1 if defined? ActiveRecord::Base
+```
+
+<p>When we start up a new console session now the SQL logging behaviour will be disabled by default. We won&rsquo;t leave this line in, however, as the logging behaviour is useful.</p>
+
+<p>We can also define methods in this file. If we want for example an easy way to display the YAML representation of objects we can define a y method, like this: </p>
+
+``` ~/.irbrc
+def y(obj)
+  puts obj.to_yaml
+end
+```
+
+<p>There used to be a method that did this but it&rsquo;s been removed from recent versions of Rails. When we restart the console now we can use this method like any other.</p>
+
+``` console
+>> y Product.first
+--- !ruby/object:Product
+attributes:
+  id: 1
+  name: Settlers of Catan
+  category_id: 2
+  price: 34.95
+  released_at: 2012-03-15 18:58:17.061596000 Z
+  discontinued_at: 
+  stock: 5
+  created_at: 2012-06-09 18:58:17.075666000 Z
+  updated_at: 2012-06-09 18:58:17.075666000 Z
+```  
+
+<p>The possibilities are almost endless here. We could even do something strange and define a <code>mate</code> method on every object that will open up that method in TextMate.</p>
+
+``` ~/.irbrc
+class Object
+  def mate(method_name)
+    file, line = method(method_name).source_location
+    `mate '#{file}' -l #{line}`
+  end
+end
+```
+
+<p>When we reopen the console now and run the code below, TextMate will open up the source code at the correct line.</p>
+
+``` console
+>> helper.mate(:number_to_currency)
+```
+
+<h3>Gems That Work With irb</h3>
+
+<p>There are a lot of gems designed to work with irb. A good one is <a href="http://tagaholic.me/2009/03/13/hirb-irb-on-the-good-stuff.html">Hirb</a> which will display ActiveRecord data in a table. We can install this gem in the usual way.</p>
+
+``` terminal
+$ gem install hirb
+```
+
+<p>If we open the console now and run <code>require &#x27;hirb&#x27;</code> this won&rsquo;t work, however. This is because Bundler locks down the gems that we can use in our Rails app to those listed in the gemfile. We could add a reference to Hirb at the bottom of our app&rsquo;s gemfile for just the development group but we&rsquo;d have to do this for every Rails app that we want to use Hirb with. Also other developers working on the same project may not want this installed. This is something we want to add to our development environment rather than to specific applications. Thankfully there&rsquo;s a hack we can add to our irbrc file that can help with this.</p>
+
+``` ~/.irbrc
+# Break out of the Bundler jail
+# from https://github.com/ConradIrwin/pry-debundle/blob/master/lib/pry-debundle.rb
+if defined? Bundler
+  Gem.post_reset_hooks.reject! { |hook| hook.source_location.first =~ %r{/bundler/} }
+  Gem::Specification.reset
+  load 'rubygems/custom_require.rb'
+end
+```
+
+<p>This resets the gem specifications without the Bundler hook. There don&rsquo;t appear to be any side-effects from using this and it works well. If we require Hirb in the console now it will work.</p>
+
+``` console
+>> require 'hirb'
+=> true
+>> Hirb.enable
+=> true
+>> Product.limit(5)
+  Product Load (0.3ms)  SELECT "products".* FROM "products" LIMIT 5
++----+---------+--------+--------+---------+--------+-------+--------+---------+
+| id | name    | cat... | price  | rele... | dis... | stock | cre... | upda... |
++----+---------+--------+--------+---------+--------+-------+--------+---------+
+| 1  | Sett... | 2      | 34.95  | 2012... |        | 5     | 201... | 2012... |
+| 2  | Red ... | 3      | 12.49  | 2012... |        | 5     | 201... | 2012... |
+| 3  | Oak ... | 4      | 223.99 | 2012... |        | 5     | 201... | 2012... |
+| 4  | Tech... | 2      | 27.99  | 2012... |        | 5     | 201... | 2012... |
+| 5  | Oh's... | 5      | 3.95   | 2012... |        | 5     | 201... | 2012... |
++----+---------+--------+--------+---------+--------+-------+--------+---------+
+5 rows in set
+```
+
+<p>If we want Hirb to always be available in the console we can do that by adding the following code.</p>
+
+``` ~/.irbrc
+if defined? Rails
+  begin
+    require 'hirb'
+    Hirb.enable
+  rescue LoadError
+  end
+end
+```
+
+<p>This checks to see if Rails is defined then requires and enables Hirb if so. Note that we rescue any <code>LoadError</code> just incase we switch to another version of Ruby that doesn&rsquo;t have the Hirb gem installed.</p>
+
+<p>Other useful gems include <a href="https://github.com/michaeldv/awesome_print">Awesome Print</a>, which gives us an ap method that will show models&rsquo; attributes nicely formatted and with colour. The <a href="https://github.com/janlelis/clipboard">Clipboard gem</a> enables us to interact with the system&rsquo;s clipboard by giving us Clipboard.copy and Clipboard.paste methods. <a href="https://github.com/citizen428/methodfinder">MethodFinder</a> is another handy gem that can help us if we know there&rsquo;s a method that does something but can&rsquo;t remember what it&rsquo;s called. For example if we know that there&rsquo;s a method on the String object that will return &ldquo;ABC&rdquo; when we pass it &ldquo;abc&rdquo; we can use MethodFinder to find it.</p>
+
+``` console
+>> require 'methodfinder'
+=> true
+>> "abc".find_method("ABC")
+=> ["String#swapcase", "String#swapcase!", "String#upcase", "String#upcase!"]
+```
+
+<p><a href="https://github.com/janlelis/fancy_irb">FancyIrb</a> is another good gem. This will display output results inline if they fit.</p>
+
+``` console
+>> require 'fancy_irb'
+=> true
+>> FancyIrb.start
+=> "Enjoy your FancyIrb :)"
+>> 3 + 4 #=> 7
+```
+
+<p>The <a href="https://github.com/janlelis/wirb">Wirb gem</a> will colourize output, too, if you want that. There&rsquo;s a compilation of many of these utility gems called <a href="https://github.com/janlelis/irbtools">irbtools</a>. Even if you don&rsquo;t install this gem there&rsquo;s a great list of other utility gems listed in its README.</p>
+
+<p>Finally, we can&rsquo;t finish without mentioning <a href="http://pry.github.com/">Pry</a>. This is a replacement for irb with many extra features. It was covered in <a href="http://railscasts.com/episodes/280-pry-with-rails">episode 280</a> and there&rsquo;s much more information about it there.</p>

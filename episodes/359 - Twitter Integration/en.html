@@ -1,0 +1,290 @@
+<p>In this week&rsquo;s episode we&rsquo;ll show you a few different ways to integrate Twitter into a Rails app. We&rsquo;ll start with something simple by adding some quotes from Twitter users who are saying good things about our application to the page below.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1217/original/E359I01.png" width="800" height="500" alt="Our application."/>
+</div>
+
+<p>We want an easy way to do this and one way is to use favourites. We can set up a Twitter account for our app and mark those tweets that we want to appear in our app as favourites. Once we&rsquo;ve done that we need a way to fetch and display these tweets on the page. Twitter provides some widgets that make it easy to do this including a <a href="https://twitter.com/about/resources/widgets/widget_faves">Faves Widget</a> which will display favourites from a given account. We can configure this widget&rsquo;s appearance and settings then, when we&rsquo;re happy with them, click the &ldquo;Finish &amp; Grab Code&rdquo; button to get an HTML snippet that we can paste into our application. We want to add the widget to the index page so we&rsquo;ll paste the code from Twitter in here.</p>
+
+
+``` /app/views/home/index.html.erb
+<div id="testimonies">
+<script charset="utf-8" src="http://widgets.twimg.com/j/2/widget.js"></script>
+<script>
+new TWTR.Widget({
+  version: 2,
+  type: 'faves',
+  rpp: 10,
+  interval: 30000,
+  title: 'What people are saying about',
+  subject: 'RailsCasts',
+  width: 250,
+  height: 300,
+  theme: {
+    shell: {
+      background: '#adadad',
+      color: '#ffffff'
+    },
+    tweets: {
+      background: '#ffffff',
+      color: '#444444',
+      links: '#3f89ba'
+    }
+  },
+  features: {
+    scrollbar: true,
+    loop: false,
+    live: true,
+    behavior: 'all'
+  }
+}).render().setUser('railscasts').start();
+</script>
+</div>
+```
+
+<p>When we reload the page now we&rsquo;ll see our widget on the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1218/original/E359I02.png" width="800" height="600" alt="The page now includes the Twitter Faves widget."/>
+</div>
+
+<h3>Interacting Directly With Twitter</h3>
+
+<p>The widget is easy to add but it isn&rsquo;t that flexible. If we want to have more control over the look of our list of tweets and we don&rsquo;t want the user to make a separate request to Twitter to fetch the quotes we&rsquo;ll need to interact with Twitter directly from our Rails application. We&rsquo;ll focus on how this is done for the rest of this episode.</p> 
+
+<p>We&rsquo;ll be communicating with Twitter through its APIs so it helps to have the <a href="https://dev.twitter.com/docs/api">documentation</a> to hand and to familiarize ourselves with what it can do. There&rsquo;s <a href="https://dev.twitter.com/docs/api#favorites">a section on favourites</a> we can use to fetch favourites for a given user which lists the options we can pass in along with an example that we can try. This returns a JSON response giving us details about the selected tweets which that user has made favourites.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1219/original/E359I03.png" width="800" height="465" alt="The JSON response from the API."/>
+</div>
+
+<p>We could make this request and parse the response on our own but why bother doing all that work when we can use the <a href="https://github.com/jnunemaker/twitter">Twitter gem</a>? This gem makes it easy to communicate with Twitter&rsquo;s REST API directly from Ruby; to use it we just need to add it to the gemfile and run bundle. To keep this episode up to date we&rsquo;ll use version 3 of this gem, which is currently at Release Candidate 1, but most of what we do here will work perfectly well in version 2.</p>
+
+``` /Gemfile
+gem 'twitter', '3.0.0.rc.1'
+```
+
+<p>A good place to look for documentation about this gem is the RDocs for the <a href="http://rdoc.info/gems/twitter/Twitter/Client"><code>Twitter::Client</code> class</a>. This class has a whole list of methods which line up nicely with the APIs. For example there&rsquo;s a <code>favourites</code> method which we can use to fetch favourites for a given user and that&rsquo;s what we&rsquo;re interested in here. As we&rsquo;ve installed the gem we can try it out in the Rails console. If we just want a certain number of tweets returned we can use the count option. We&rsquo;ll get the first one and assign it to a variable so that we can look at what it contains.</p>
+
+``` console
+>> Twitter.favorites("railscasts", count: 1)
+# Response omitted.
+>> t = _.first
+```
+
+<p>There are methods we can call on this tweet to get its various properties.</p>
+
+``` console
+>> t.text
+=> "God bless @railscasts"
+>> t.id
+=> 215414113193566208
+>> t.created_at
+=> 2012-06-20 13:01:41 +0100
+```
+
+<p>We can also get information about the tweet&rsquo;s user.</p>
+
+``` console
+>> t.user.name
+=> "raf szalansky"
+>> t.user.screen_name
+=> "szalansky"
+>> t.user.profile_image_url
+=> "http://a0.twimg.com/profile_images/1623467724/szalansky_1318367044_92_normal.jpg"
+```
+
+<p>We&rsquo;ll apply this now to our application, replacing the code that displays the widget with some that displays information about the 3 most-recent favourite tweets.</p>
+
+``` /app/views/home/index.html.erb
+<div id="testimonies">
+ <% Twitter.favorites("railscasts", count: 3).each do |tweet| %>
+   <blockquote><%= tweet.text %></blockquote>
+   <div class="from">&mdash; @<%= tweet.user.screen_name %></div>
+ <% end %>
+</div>
+```
+
+<p>When we reload our home page now we&rsquo;ll see the quotes fetched from the API. We&rsquo;ve already added some styling to this page to make the quotes look prettier.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1220/original/E359I04.png" width="800" height="500" alt="The most recently-favourited tweets are now embedded in the page."/>
+</div>
+
+<p>The problem with this approach is that when we call <code>Twitter.favorites</code> a synchronous request is made to the API. This can slow down the response or even cause the server to not respond at all. We also need to be aware of Twitter&rsquo;s rate limiting. Twitter has some strict limits on how often we can call their API. For unauthenticated requests such as we&rsquo;ve been making here we can only make 150 requests an hour. If we authenticate (and we&rsquo;ll discuss this later) we can make 350 requests an hour. If we want to see how many requests we have left to make we can call <code>Twitter.rate_limit_status</code> to get more information about the limits.</p>
+
+``` console
+>> Twitter.rate_limit_status
+=> #<Twitter::RateLimitStatus:0x007f8b225f6f18 @attrs={"reset_time_in_seconds"=>1340400098, "reset_time"=>"Fri Jun 22 21:21:38 +0000 2012", "remaining_hits"=>130, "hourly_limit"=>150}>
+```
+
+<p>To get around this limit we can add caching so that the API request doesn&rsquo;t need to happen every time the page is loaded. The easiest way to do this would be to use fragment caching. We&rsquo;ll pass the current date into the cache&rsquo;s name so that it automatically expires each day.</p>
+
+``` /app/views/home/index.html.erb
+<div id="testimonies">
+<% cache "testimonies#{Date.today}" do %>
+<% Twitter.favorites("railscasts", count: 3).each do |tweet| %>
+   <blockquote><%= tweet.text %></blockquote>
+   <div class="from">&mdash; @<%= tweet.user.screen_name %></div>
+ <% end %>
+<% end %>
+</div>
+```
+
+<p>With this code in place the only time the Twitter API is triggered is when the first request is made each day. This solves a lot of problems but it&rsquo;s not the perfect solution. If Twitter is down when the first request of the day is made the cache will never be generated and the page will be broken for everyone. Falling back to an older version of the cache can be tricky so instead we&rsquo;ll cache the data in the database. We&rsquo;ll generate a new model called Testimony that will store the information we want to display about each tweet.</p>
+
+``` terminal
+$ rails g model testimony tweet_id screen_name content:text
+$ rake db:migrate
+```
+
+<p>We now need a way to create a new record for each favourited tweet and so this in the <code>Testimony</code> model.</p>
+
+``` /app/models/testimony.rb
+class Testimony < ActiveRecord::Base
+  attr_accessible :content, :screen_name, :tweet_id
+
+  def self.pull_tweets
+    Twitter.favorites("railscasts").each do |tweet|
+      unless exists?(tweet_id: tweet.id)
+        create!(
+          tweet_id: tweet.id,
+          content: tweet.text,
+          screen_name: tweet.user.screen_name,
+        )
+      end
+    end
+  end
+end
+```
+
+<p>In our new <code>pull_tweets</code> method we call <code>Twitter.favorites</code> and loop through each tweet, creating a new record unless one already exists for that given <code>tweet_id</code>. To populate this table we&rsquo;ll run this method from the terminal but we can do this from wherever we want. We could add it to a Rake task and call it through <code>cron</code> or use the Resque scheduler gem and set it up in a background process.</p>
+
+``` console
+>> Testimony.pull_tweets
+```
+
+<p>This creates a new <code>Testimony</code> record for each favourited tweet. If we call the same method again it won&rsquo;t generate any more records as they already exist, unless some new items have been favourited. The Twitter API call we&rsquo;re making is still returning Tweets that we&rsquo;ve already added to the database. To reduce the amount of content returned we can use the <code>since_id</code> option and set it to the latest tweet&rsquo;s id in the database.</p>
+
+``` /app/models/testimony.rb
+def self.pull_tweets
+  Twitter.favorites("railscasts", since_id: maximum(:tweet_id)).each do |tweet|
+    unless exists?(tweet_id: tweet.id)
+      create!(
+        tweet_id: tweet.id,
+        content: tweet.text,
+        screen_name: tweet.user.screen_name,
+      )
+    end
+  end
+end
+```
+
+<p>This will reduce the amount of traffic that&rsquo;s returned quite substantially. All that&rsquo;s left to do now is to display these testimonies in the view.</p> 
+
+``` /app/views/home/index.html.erb
+<div id="testimonies">
+<% cache "testimonies#{Date.today}" do %>
+<% Testimony.order("tweet_id desc").limit(3).each do |testimony| %>
+   <blockquote><%= testimony.content %></blockquote>
+   <div class="from">&mdash; @<%= testimony.screen_name %></div>
+ <% end %>
+<% end %>
+</div>
+```
+
+<p>When we reload the page now it looks just the same. Nothing has changed from the user&rsquo;s perspective but now that the tweets are served from the database we&rsquo;re no longer as dependent on Twitter being up. This is also a more flexible approach: we could now add testimonies from other sources or edit a testimony to include just a snippet or anything else we want.</p>
+
+<h3>Authenticated Requests</h3>
+
+<p>All the requests we&rsquo;ve made to the Twitter API so far have been unauthenticated. If we want to have access to private content or maybe post tweets we&rsquo;ll need to let Twitter know about our application first by <a href="https://dev.twitter.com/apps/new">creating an app</a> at the Twitter developer site. Once we&rsquo;ve done this we&rsquo;ll be given a consumer key and a consumer secret for our application and we&rsquo;ll need these to make authenticated requests to the API. In order to act as the owner of the Twitter account owner we&rsquo;ll also need to supply the access token and access token secret. If we want to allow our app to post Tweets as the account owner we&rsquo;ll need to give the access token read and write permissions and this can be configured on the settings tab for the application.</p>  
+
+<p>The <a href="https://github.com/jnunemaker/twitter#usage-examples">Usage Examples section</a> of the Twitter gem&rsquo;s README shows how to use these authentication tokens can be passed in through a configure block which we can do inside an initializer. We&rsquo;ll create a new initializer file in our app to do this.</p>
+
+``` /config/initializers/twitter.rb
+Twitter.configure do |config|
+  config.consumer_key = ENV["TWITTER_CONSUMER_KEY"]
+  config.consumer_secret = ENV["TWITTER_CONSUMER_SECRET"]
+  config.oauth_token = ENV["TWITTER_OAUTH_TOKEN"]
+  config.oauth_token_secret = ENV["TWITTER_OAUTH_TOKEN_SECRET"]
+end
+```
+
+<p>Here we set the keys based on environment variables that are set elsewhere. This initializer file will become unnecessary in future versions of the Twitter gem as it will automatically look in these environment variables for the authentication.</p> 
+
+<p>With this in place all API requests will now be authenticated. This means that we can call methods like <code>favorites</code> without a username and they&rsquo;ll default to the authenticated user.</p>  
+
+``` console
+>> Twitter.favorites(count: 1)
+# Response omitted.
+```
+
+<p>As we have read/write permissions we can even now post Tweets from our app.</p>
+
+``` console
+>> Twitter.update("This is a Tweet from the Twitter gem.")
+# Response omitted.
+```
+
+<p>We now know how to authenticate as the application&rsquo;s owner but how do we access the API as a user whose signed in to our app through Twitter? We&rsquo;ve added the ability for other users to sign in to our application with OmniAuth, like we showed in <a href="http://railscasts.com/episodes/241-simple-omniauth">episode 241</a> and there&rsquo;s now a &ldquo;Sign in&rdquo; link on the home page that when clicked will take the user to the Twitter website so that they can authorize our application. When they do so they&rsquo;ll be giving our application permission to post tweets.</p>
+
+<p>How does our application access the Twitter API through the user who&rsquo;s signed in? When we use OmniAuth in a Rails app it provides a hash of details about each user who signs in. We pass this hash to the User model in a <code>from_omniauth</code> class method.</p>
+
+``` /app/models/user.rb
+def self.from_omniauth(auth)
+  where(auth.slice("provider", "uid")).first || create_from_omniauth(auth)
+end
+```
+
+<p>To see what&rsquo;s in this hash we&rsquo;ll raise an exception in this model that displays it in YAML format.</p>
+
+``` /app/models/user.rb
+def self.from_omniauth(auth)
+  raise auth.to_yaml
+  where(auth.slice("provider", "uid")).first || create_from_omniauth(auth)
+end
+```
+
+<p>Now when we sign in through Twitter we&rsquo;ll be immediately signed in and we&rsquo;ll see some interesting information about the user who has signed in, specifically a <code>credentials</code> hash which contains the OAuth <code>token</code> and <code>secret</code>. We can use these to authenticate as this user through the twitter API. We&rsquo;ll need to store these values in the <code>User</code> model so that we can access them later so we&rsquo;ll generate a migration to add some new fields to that model.</p>
+
+``` terminal
+$ rails g migration add_oauth_to_user oauth_token oauth_secret
+$ rake db:migrate
+```
+
+<p>In the <code>User</code> model we now need to set these columns when the user signs in. We could do this when we create the user record but we&rsquo;ll do it every time they sign in so that if the token is reset we&rsquo;ll always have the current version. When a user signs in our <code>from_omniauth</code> method returns a User record that we can now set the <code>oauth_token</code> and <code>oauth_secret</code> for. We&rsquo;ll then save the record and return it.</p>
+
+``` /app/models/user.rb
+def self.from_omniauth(auth)
+  user = where(auth.slice("provider", "uid")).first || create_from_omniauth(auth)
+  user.oauth_token = auth["credentials"]["token"]
+  user.oauth_secret = auth["credentials"]["secret"]
+  user.save!
+  user
+end
+```
+
+<p>This method is beginning to get a little long and complex so we could refactor part of it out but we&rsquo;ll leave it as it is here. With this code in place we can access the Twitter API through this user&rsquo;s credentials. To do that we&rsquo;ll create a new <code>twitter</code> method.</p>
+
+``` /app/models/user.rb
+def twitter
+  if provider == "twitter"
+    @twitter ||= Twitter::Client.new(oauth_token: oauth_token, oauth_token_secret: oauth_secret)
+  end
+end
+```
+
+<p>Here we create a new <code>Twitter::Client</code> instance, passing in the user&rsquo;s token and secret and cache the result in and instance variable, but only if the current provider is Twitter. If we sign in through Twitter now the token and secret will be stored in the <code>User</code> record. We can now use the Twitter API with this user and we&rsquo;ll demonstrate this in the console.</p>
+
+``` console
+>> u = User.first
+  User Load (0.2ms)  SELECT "users".* FROM "users" LIMIT 1
+>> u.twitter
+=> #<Twitter::Client:0x007fd945995ba8 @adapter=:net_http, @connection_options={}, @consumer_key=nil, @consumer_secret=nil, @endpoint="https://api.twitter.com", @gateway=nil, @oauth_token="14246143-h0CTvnpNUYXjEmnf1YcmMHGk7ftx4EW60hYJQZF10", @oauth_token_secret="IXbVzWIk1RdmKUW77zpVAf9fXOiQCktg7XHuU7EP1c", @proxy=nil, @search_endpoint="https://search.twitter.com", @user_agent="Twitter Ruby Gem 3.0.0.rc.1", @media_endpoint="https://upload.twitter.com">
+```
+
+<p>When we fetch a user now we have a twitter method that we can call on them that will return a <code>Twitter::Client</code> object. We can call methods on this object just like we&rsquo;ve done with the Twitter gem so far. For example we can call <code>favorites</code> to get the user&rsquo;s favourites or update to post a tweet as that user. </p>
+
+<p>A quick word now about requiring read/write access when users sign in to our app through Twitter. We should be careful not to abuse this. If we are posting tweets under someone&rsquo;s account we should be sure that they know about this and that they can see any messages before authorizing them as an app can get a bad name if it posts to its users&rsquo; accounts without their explicit permission. If an app can work with only read-only permission then it&rsquo;s best to stick to this as a lot of users will be reluctant to authorize a third party app to write to their account.</p>
+
+<p>Twitter allows us to change our app&rsquo;s permissions dynamically when a user signs in and we can do this with OnmiAuth. The &ldquo;Sign in&rdquo; link points to the <code>/auth/twitter</code> path and we can pass in an <code>x_auth_access_type</code> parameter to this and give it a value of <code>read</code>, <code>write</code> or whatever we want to set the permissions to. This will take us to Twitter where a user can sign in with just read permissions and so our app will only be able to access the user&rsquo;s account with read permissions. This is handy if we want to have different Twitter permissions for different types of user.</p>

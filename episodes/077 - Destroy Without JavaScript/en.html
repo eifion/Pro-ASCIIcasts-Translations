@@ -1,0 +1,197 @@
+<p>If we look at almost any Rails application we&rsquo;re likely to find a &ldquo;Destroy&rdquo; link to remove an item. These links require JavaScript to work.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1221/original/E077RI01.png" width="800" height="451" alt="The confirmation message that shows when we delete an item."/>
+</div>
+
+<p>We have JavaScript enabled in our browser so if we click one of the &ldquo;Destroy&rdquo; links we&rsquo;ll be asked if we&rsquo;re sure we want to delete that item. When we confirm that we do the item is deleted. If, however, we disable JavaScript in the browser and try to destroy a product we&rsquo;ll be taken to that product&rsquo;s page instead and this behaviour can be confusing for users.</p>
+
+<p>Nearly all users have JavaScript enabled so we might not consider this to be a problem. What&rsquo;s more likely, however, are cases when the JavaScript doesn&rsquo;t load properly. A user may be on a slow or flaky connection and there are also edge cases when, even with JavaScript enabled, we&rsquo;ll see an item&rsquo;s page rather than deleting  it. One of these cases can be triggered if we right click on a &ldquo;destroy&rdquo; link and open the link in a new window or tab from there. In these cases the JavaScript won&rsquo;t be fired and we&rsquo;ll see the page for the item we tried to delete.</p>
+
+<h3>How a Destroy Link Works</h3>
+
+<p>In this episode we&rsquo;ll demonstrate a couple of ways to make this behaviour degrade gracefully. Before we do that we&rsquo;ll get a better understanding of how a &ldquo;destroy&rdquo; link works.</p>
+
+<p>We can see one of these links in the <code>ProductsController</code>&rsquo;s <code>index</code> view template.</p>
+
+``` /app/views/products/index.html.erb
+<%= link_to "Destroy", product, method: :delete, data: {confirm: "Are you sure?"} %>
+```
+
+<p>This link points to that product which will normally trigger the show action. As we&rsquo;ve set the method option to <code>delete</code> a DELETE request will be made instead which will trigger the <code>destroy</code> action. We also use the <code>data</code> hash to supply a <code>confirm</code> option so that a confirmation message is shown when the link is clicked. In earlier versions of Rails we could pass a <code>confirm</code> option without the <code>data</code> hash and while this still works in Rails 3 this will be deprecated in Rails 4 so we should use the data hash at all times.</p>
+
+<p>If we view the source of this page we&rsquo;ll see the generated HTML for the link. This is a standard anchor element with <code>data-confirm</code> and <code>data-method</code> attributes.</p>
+
+``` html
+<a href="/products/1" data-confirm="Are you sure?" data-method="delete" rel="nofollow">Destroy</a>
+```
+
+<p>These attributes on their own don&rsquo;t do anything special but one of the JavaScript files that&rsquo;s included, <code>jquery_ujs.js</code>, has code that detects these links and turns them into DELETE requests when they&rsquo;re clicked. Without this JavaScript these links are treated like every other and just make GET requests. One of the easiest solutions to this problem is to change the link into a button by using <code>button_to</code>. This will also create a form that is capable of doing more than just making a GET request.</p>  
+
+``` /app/views/products/index.html.erb
+<%= button_to "Destroy", product, method: :delete, data: {confirm: "Are you sure?"} %>
+```
+
+<p>Now when we reload the page each product has a &ldquo;destroy&rdquo; button instead of a link.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1222/original/E077RI02.png" width="800" height="400" alt="The destroy links are now replaced by buttons."/>
+</div>
+
+<p>These don&rsquo;t look as pretty as the links but we can go a long way to improving this with some CSS.</p> 
+
+``` /app/assets/stylesheets/layout.css.scss
+form.button_to {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  div { display: inline; }
+  input[type=submit] {
+    margin: 0;
+    padding: 0;
+    -webkit-appearance: caret;
+    background: none;
+    border: none;
+    font-size: inherit;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    color: #0000FF;
+  }
+}
+```
+
+<p>This CSS rule targets the <code>button_to</code> class which is assigned to any buttons generated with the <code>button_to</code> method. If we reload the page now the button will look just like the link we had before. Of course you can style the button to suit the needs of your application. If we click our new button to delete a product while we have JavaScript disabled it will work as we expect and the product will be removed. We won&rsquo;t, however, be asked if we&rsquo;re sure if we want to remove the product so this solution may not be ideal for you.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1223/original/E077RI03.png" width="800" height="400" alt="The product has now been deleted."/>
+</div>
+
+<h3>Adding a Confirmation Step</h3>
+
+<p>The simplicity of this <code>button_to</code> approach makes it easy to implement but if having a confirmation step when JavaScript isn&rsquo;t enabled is important we could implement an undo system like the one we covered in <a href="http://railscasts.com/episodes/255-undo-with-paper-trail">episode 255</a>. There&rsquo;s another approach that we could use and we&rsquo;ll show you that next. It&rsquo;s a little more complicated but it means that we can return to using <code>link_to</code> instead of a button.</p>
+
+``` /app/views/products/index.html.erb
+<%= link_to "Destroy", product, method: :delete, data: {confirm: "Are you sure?"} %>
+```
+
+<p>Next we&rsquo;ll add a new action to the <code>ProductsController</code> called <code>delete</code>. This sits nicely alongside the new and edit actions and will ask for confirmation for the destroy behaviour.</p>
+
+``` /app/controllers/products_controller.rb
+def delete
+  @product = Product.find(params[:id])    
+end
+```
+
+<p>In this action we fetch the product which has been selected for deletion. We&rsquo;ll need a template to go with this action which will ask the user if they&rsquo;re sure they want to delete that item.</p>
+
+``` /app/views/products/delete.html.erb
+<%= form_for @product, html: {method: :delete} do |f| %>
+  <h2>Are you sure you want to delete this product?</h2>
+  <p><%= f.submit "Destroy" %> or <%= link_to "cancel", products_path %></p>
+<% end %>
+```
+
+<p>This form simply makes a form for the product with a method of DELETE which will trigger the <code>destroy</code> action when the form is submitted. Alternatively the user can click the &ldquo;cancel&rdquo; link to return to the list of products. We still need a way to access this action as it&rsquo;s not set up in our routes. We&rsquo;ll modify the routes file now to add it.</p>
+
+``` /config/routes.rb
+Example::Application.routes.draw do
+  resources :categories
+  resources :products do
+    member { get :delete }
+  end
+  root to: 'products#index'
+end
+```
+
+<p>Finally we need to modify the &ldquo;destroy&rdquo; link so that it points to the <code>delete</code> action.</p>
+
+``` /app/views/products/index.html.erb
+<%= link_to "Destroy", [:delete, product] %>
+```
+
+<p>Note that we&rsquo;ve removed the <code>method</code> option and the <code>data</code> hash so that the link behaves the same way whether JavaScript is enabled or not. Now when we click the &ldquo;destroy&rdquo; link for an item we&rsquo;ll be taken to our new confirmation screen and clicking the button will delete the item.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1224/original/E077RI04.png" width="800" height="309" alt="Our new confirmation page"/>
+</div>
+
+<p>What if we only want to fall back to this behaviour when JavaScript is disabled and stick to the usual confirmation alert otherwise? There are a couple of ways that we can do this. One option is to detect the &ldquo;destroy&rdquo; link with some jQuery code and strip off the <code>/delete</code> portion of the URL and add back the data attributes. The other approach doesn&rsquo;t require any jQuery and brings back the data attributes in the link. We&rsquo;ll implement this second solution in our application and start by putting these attributes back into our link.</p>
+
+``` /app/views/products/index.html.erb
+<%= link_to "Destroy", [:delete, product], method: :delete, data: {confirm: "Are you sure?"} %>
+```
+
+<p>In our routes file we&rsquo;ll add another route to listen for a DELETE request to the <code>delete</code> action and map it to the <code>destroy</code> action.</p>
+
+``` /config/routes.rb
+Example::Application.routes.draw do
+  resources :categories
+  resources :products do
+    member do 
+      get :delete
+      delete :delete, action: :destroy
+    end
+  end
+  root to: 'products#index'
+end
+```
+
+<p>This doesn&rsquo;t really follow REST but our <code>delete</code> action isn&rsquo;t true REST either so we&rsquo;ll go for what&rsquo;s simple and practical in this situation. Now if we click a &ldquo;destroy&rdquo; link with JavaScript enabled we&rsquo;ll see the JavaScript confirmation but if JavaScript isn&rsquo;t enabled or if we open the link in a new window it will fall back to our <code>delete</code> action where we can confirm the deletion on a separate page.</p>
+
+<h3>Applying This Approach to All Resources</h3>
+
+<p>Our approach works well but what if we want to apply it to another resource? Our application also has a page that displays a list of categories which can be edited or destroyed so how do we add this same behaviour here? While we could copy the <code>delete</code> action and its template into the other controller this would create a lot of duplication which it&rsquo;s best to avoid. Instead we&rsquo;ll make the <code>delete</code> action more generic so that it&rsquo;s not specific to a product. This means that we&rsquo;ll also need to change the view template, too.</p>
+
+``` /app/views/application/delete.html.erb
+<%= form_tag request.url, html: {method: :delete} do %>
+  <h2>Are you sure you want to delete this record?</h2>
+  <p>
+    <%= f.submit "Destroy" %>
+    <% if request.referrer.present? %>
+     or <%= link_to "cancel", products_path %>
+    <% end %>
+  </p>  
+<% end %>
+```
+
+<p>Now instead of using <code>form_for</code> we use <code>form_tag</code> and the form will send a DELETE request to the form&rsquo;s URL which given the modifications we&rsquo;ve made to the routes file will trigger the <code>destroy</code> action. Note that we only display the &ldquo;cancel&rdquo; link if a referrer is present and this link points to the referring page.</p>
+
+<p>To share this template across all controllers we&rsquo;ve created a new application directory under <code>/app/views</code>. We have an <code>ApplicationController</code> that other controllers inherit from and similarly we can put view templates in this new directory that will also be available to all controllers. To use this we need to modify any &ldquo;destroy&rdquo; links so that they point to this shared <code>delete</code> action.</p>
+
+``` /app/views/categories/index.html.erb
+<%= link_to "Destroy", [:delete, category], method: :delete, data: {confirm: "Are you sure?"} %>
+```
+
+<p>Next we&rsquo;ll just need to modify the routes. We could duplicate the block we wrote for the <code>products</code> resource for the other resources but again this will lead to duplication so instead we&rsquo;ll modify the way that <code>resources</code> works so that it automatically adds the extra routes. We&rsquo;ll do this inside a new initializer file that we&rsquo;ll call <code>delete_resource_route</code>.</p>
+
+``` /config/initializers/delete_resource_route.rb
+module DeleteResourceRoute
+  def resources(*args, &block)
+    super(*args) do
+      yield if block_given?
+      member do
+        get :delete
+        delete :delete, action: :destroy
+      end
+    end
+  end
+end
+
+ActionDispatch::Routing::Mapper.send(:include, DeleteResourceRoute)
+```
+
+<p>In this file we define a <code>DeleteResourceRoute</code> module and include this module in the <code>Routing::Mapper</code> class which is where the <code>resources</code> method is defined. In our module we override this method. In our version we call super to get the behaviour from the overridden method and pass in a block to this. Inside the block we <code>yield</code> to any block that&rsquo;s passed to resources then add our own behaviour to add the <code>delete</code> action for both GET and DELETE requests. With this in place any call to <code>resources</code> will automatically inherit this additional functionality so we no longer need to specify it in our routes file.</p>
+
+``` /config/routes.rb
+Example::Application.routes.draw do
+  resources :categories
+  resources :products 
+  root to: 'products#index'
+end
+```
+
+<p>As we&rsquo;ve added an initializer we&rsquo;ll need to restart our Rails app. Once we have when we try to destroy a category we&rsquo;ll see the JavaScript confirmation box. If we disable JavaScript and try again the app falls back and degrades gracefully and shows us the <code>delete</code> template.</p>
+
+<p>This entire process might have seemed rather complicated but in the end we only  need three things: the initializer file to add the <code>delete</code> routes, the <code>delete</code> template 
+in the <code>/app/views/application</code> directory and to modify any &ldquo;destroy&rdquo; links to point to the <code>delete</code> action. With these in place we&rsquo;ll have graceful degradation for destroy links. If you want something simpler there&rsquo;s always the <code>button_to</code> approach instead.</p>
