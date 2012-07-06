@@ -1,0 +1,228 @@
+<p>In the previous episode we modified a Rails application to allow signing in through Facebook. To do this we registered our application with Facebook and used the OmniAuth Facebook gem to handle authentication on the server, along with an optional client-side authentication process which used the Facebook JavaScript SDK. Now that we&rsquo;re able to authenticate users through Facebook we have a variety of opportunities to integrate Facebook further into our app.</p>
+
+<h3>Using Koala To Access The Facebook API</h3>
+
+<p>We&rsquo;ll use the <a href="https://github.com/arsduo/koala">Koala gem</a> to communicate with Facebook&rsquo;s API. The documentation for this gem is good and the gem is easy to use so we&rsquo;ll install it then try it out to see what we can do with it. We&rsquo;ll start by adding Koala to the gemfile and then running <code>bundle</code>.</p>
+
+``` /Gemfile
+gem 'koala'
+```
+
+<p>Next in our <code>User</code> model we&rsquo;ll make a <code>facebook</code> method for interacting with the Facebook API with a user&rsquo;s credentials. In this method we&rsquo;ll create a new <code>Koala::Facebook::API</code> instance, passing the user&rsquo;s <code>oauth_token</code> attribute, which is saved when the user authenticates. We&rsquo;ll cache the result of this method in an instance variable so that it&rsquo;s only created once.</p>
+
+``` /app/models/user.rb
+def facebook
+  @facebook ||= Koala::Facebook::API.new(oauth_token)
+end
+```
+
+<p>In the console we can now fetch any user that&rsquo;s signed in to our application through Facebook and use methods on the <code>facebook</code> method to access the API through Koala. We&rsquo;ll use it to get the current user&rsquo;s profile.</p>
+
+``` console
+>> u = User.first
+>> u.facebook.get_object("me")
+#<User id:2, provider: "facebook", uid: "1843562551", name: "Ryan Bates", # Rest of response omitted>
+```
+
+<p>To do this Koala uses <a href="https://developers.facebook.com/docs/reference/api">Facebook&rsquo;s Graph API</a> and it helps to understand that we&rsquo;ll be interacting with two different types of things. We can interact with objects, such as users, pages, events and so on or we can interact with the connections that link objects together, for example a user&rsquo;s friends, likes and so on. Each type of object has its own separate documentation page which lists the types of attributes that are returned when we make a request for that object, along with the permissions that are required to access that attribute. We&rsquo;ll discuss permissions later.</p>
+
+<p>When we call Koala&rsquo;s <code>get_object</code> method and pass in &quot;<code>me</code>&quot; it fetches the information for the current user through the Graph API. To get an object&rsquo;s connections we can call <code>get_connection</code>. This takes two arguments: the object we want to get the connections for and the type of connection we want. We&rsquo;ll use this to see what television shows the current user likes.</p>
+
+``` console
+>> u.facebook.get_connection("me", "television")
+=> [{"name"=>"The Big Bang Theory", "Category"=>"Tv show", "id" => "22934684677", "created_time"=>"2009-09-10T01:30:34+0000"}]
+```
+
+<p>This returns an array of objects, although only one is listed here. Each object returned has an id attribute returned and we can pass this to get_object to get more information about what a given connection has.</p>
+
+console
+&gt;&gt; u.facebook.get_object(&quot;22934684677&quot;)
+# Response omitted.This provides us with a full description, a picture URL and so on. Some objects have a <code>username</code> attribute that we can use instead of an <code>id</code> and we can use this to get the same information.
+
+``` console
+>> u.facebook.get_object("TheBigBangTheory")
+# Response omitted.
+```
+
+<p>Another good way to experiment with the Graph API is to use the <a href="https://developers.facebook.com/tools/explorer">Graph API Explorer</a>. This allows us to access the public API by default, but if we paste in an OAuth token from a <code>User</code> record we can authorize with these credentials. We can use this go get information about objects and see the connections between them.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1231/original/E361I01.png" width="960" height="600" alt="Using the Graph API Explorer."/>
+</div>
+
+<p>The <code>id</code> of any object returned is clickable and so we can easily see further details of anything we&rsquo;re interested in. This is a great way to learn more about the Graph API and is well-worth bookmarking if you&rsquo;ll be working with the API a lot.</p>
+
+<h3>Modifying a User&rsquo;s Data</h3>
+
+<p>If we want to do more than just fetch information about objects the <a href="https://github.com/arsduo/koala/wiki/Graph-API">Graph API section</a> of the Koala wiki shows the methods we call call to create wall posts, delete objects, like things and more. The <a href="http://rubydoc.info/github/arsduo/koala/master/Koala/Facebook/GraphAPIMethods">RDocs for Koala&rsquo;s GraphAPIMethods module</a> has documentation on each of the methods that we can call to access the Graph API. We&rsquo;ll use one of these methods now to post to a user&rsquo;s wall.</p>
+
+``` console
+>> u.facebook.put_wall_post("testing")
+Koala::Facebook::APIError: OAuthException: (#200) The user hasn't authorized the application to perform this action
+```
+
+<p>When we do this we get an exception telling us that we&rsquo;re not authorized to perform this action. This is because the user hasn&rsquo;t given our application permission to post to their wall. Each authentication token has a set of permissions assigned to it and there&rsquo;s documentation on the Facebook Developers site which lists the various permissions and what they allow. One of these is <code>publish_stream</code> and it&rsquo;s this permission that is stopping us from posting content to the user&rsquo;s wall. We can determine the permissions programatically like this:</p>
+
+``` console
+>> u.facebook.get_connection("me", "permissions")
+=> [{"installed"=>1}]
+```
+
+<p>We only have the <code>installed</code> permission which means that this user has installed this application into their Facebook account. To gain permissions we have to request them from the user when they authenticate. To do this with the Facebook OmniAuth gem we need to modify the initializer where we set up OmniAuth and use the <code>scope</code> option to set a comma separated list of the permissions we want to request from the user. We&rsquo;ll request the permissions for viewing their email address and posting to their stream.</p>
+
+``` /config/omniauth.rb
+OmniAuth.config.logger = Rails.logger
+
+Rails.application.config.middleware.use OmniAuth::Builder do
+  provider :facebook, ENV['FACEBOOK_APP_ID'], ENV['FACEBOOK_SECRET'], scope: "email, publish_stream"
+end
+```
+
+<p>As we&rsquo;re also using the JavaScript SDK for authentication we&rsquo;ll need to add this option there too.</p>
+
+``` /app/assets/javascripts/facebook.js.coffee
+window.fbAsyncInit = ->
+  FB.init(appId: '<%= ENV["FACEBOOK_APP_ID"] %>', cookie: true)
+
+  $('#sign_in').click (e) ->
+    e.preventDefault()
+    FB.login (response) ->
+      window.location = '/auth/facebook/callback' if response.authResponse
+    , scope: "email,publish_stream"
+
+  $('#sign_out').click (e) ->
+    FB.getLoginStatus (response) ->
+      FB.logout() if response.authResponse
+    true
+```    
+
+<p>When a user tries to sign in to our application for the first time now they&rsquo;ll be told that our application is requesting their email address. When they log in they&rsquo;ll be told that our app is requesting permission to post on their behalf.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1232/original/E361I02.png" width="960" height="600" alt="Our app now asks for permission to post on the user&rsquo;s behalf."/>
+</div>
+
+<p>The user has the ability to choose which of the requested permissions they want to allow, so they don&rsquo;t have to let our application have the ability to post to their wall. If we deny this permission we&rsquo;ll still be signed in to the app but it won&rsquo;t have the ability to post to our wall. This means that our app will need to be aware that different users may have different sets of permissions and be able to handle that.</p>
+
+<h3>Setting up Test Accounts</h3>
+
+<p>When we have an application that has the ability to post content we don&rsquo;t want to test this behaviour on a real Facebook account. We can set up some test accounts by going to the Roles section of our app&rsquo;s Facebook page and adding some test users and we can add as many of these as we want for our app. We&rsquo;ll add three users, each of which will behave like a full Facebook account. We can manage these users, make them friends with each other, if we want to test that behaviour, and even switch to one so that our app behaves as if we were signed in as that user. We&rsquo;ll do this now and give our application permission to post to this test user&rsquo;s wall.</p> 
+
+<p>Once we&rsquo;ve logged in as this user we can test this functionality out in the console. If we fetch the test user we&rsquo;ve just logged-in as and look their permissions we&rsquo;ll see that we have much more permissions than we did when we checked our own.</p>
+
+``` console
+>> u = User.last
+>> u.facebook.get_connection("me", "permissions")
+=> [{"installed"=>1, "status_update"=>1, "photo_upload"=>1, "video_upload"=>1, "email"=>1, "create_note"=>1, "share_item"=>1, "publish_stream"=>1, "publish_actions"=>1}]
+```
+
+<p>We now have permissions to write to the user&rsquo;s stream, upload photos and video and change the user&rsquo;s status as the publish stream permission includes all these. We can test this by writing to this user&rsquo;s wall.</p>
+
+``` console
+>> u.facebook.put_wall_post("testing")
+```
+
+<p>This time we don&rsquo;t get an exception so this has worked. We can check this by viewing that user&rsquo;s wall.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1233/original/E361I03.png" width="960" height="600" alt="Our application has posted to a test user&rsquo;s wall."/>
+</div>
+
+<h3>FQL</h3>
+
+<p>One thing we haven&rsquo;t discussed yet is Facebook Query Language, FQL. This allows us to write queries that look similar to SQL and which allow us to access data in a way that&rsquo;s not really possible through the Graph API. We can run FQL queries in the Graph API Explorer If we want to get, say, the pictures for the Amazon and Google accounts we can run this query:</p>
+
+``` FQL
+select pic from page where username=‘amazon’ or username=‘google’
+```
+
+<p>This will return a JSON data hash contain each picture&rsquo;s URL. We can also run these queries in our Rails application and we&rsquo;ll demonstrate this in the console.</p>
+
+``` console
+>> u.facebook.fql_query("select pic from page where username=‘amazon’ or username=‘google’")
+=> [{"pic”=> "http://profile.aj.fbcdn.net/hprofile-ak-snc4/373031_9465008123_1931347389_s.jpg"},
+{"pic”=> "http://profile.aj.fbcdn.net/hprofile-ak-snc4/373048_104958162837_1813677875_s.jpg"}]
+```
+
+<p>There&rsquo;s more information about FQL <a href="https://developers.facebook.com/docs/reference/fql/">in the documentation</a> and here you&rsquo;ll find more information about the different queries we can perform and a reference to the tables that can be queried against and their columns.</p> 
+
+<h3>Error Handling</h3>
+
+<p>We&rsquo;ll finish off this episode by talking about error handling. We&rsquo;ve logged out of our application and from Facebook and when this happens all the access tokens that were associated with our account are invalidated. If we try to access the Facebook API now to get an object for the current user a <code>Koala::Facebook::APIError</code> exception will be raised telling us that the session is invalid as the user has logged out. We don&rsquo;t want error like these throwing <code>500</code> errors in our application so how should we handle them?</p>
+
+<p>We&rsquo;ll illustrate this problem in the app rather than in the console. Let&rsquo;s say that we want to display the number of friends that a user has on the page. To do this we&rsquo;ll add a <code>friends_count</code> method to the <code>User</code> model.</p> 
+
+``` /app/models/user.rb
+def friends_count
+  facebook.get_connection("me", "friends").size
+end
+```
+
+<p>Now in the <code>index</code> template we&rsquo;ll display this value.</p>
+
+``` /app/views/movies/index.html.erb
+<h1>Movies</h1>
+
+<% if current_user %>
+  Number of Friends: <%= current_user.friends_count %>
+<% end %>
+
+<%= render @movies %>
+```
+
+<p>Now when a user signs in through Facebook the page should display the number of friends that user has. If a user visits Facebook and logs out then revisits our application we&rsquo;ll have a problem, however. We still have a <code>current_user</code> in our app but, because they&rsquo;ve signed out of Facebook, we&rsquo;ll see the same <code>Koala::Facebook::APIError</code> we saw in the console. We could modify our <code>friends_count</code> method to handle this error, like this:</p>
+
+``` /app/models/user.rb
+def friends_count
+  facebook.get_connection("me", "friends").size
+rescue Koala::Facebook::APIError
+  logger.info e.to_s
+  nil
+end
+```
+
+<p>If we won&rsquo;t want to just return <code>nil</code> here we could make a custom null object to represent the idea that the API has returned an error. This would also have the advantage of being able to access the error from this object. Even if we don&rsquo;t do this at least when we reload the page now it will load correctly, even if it displays nothing where the number of friends should be.</p>
+
+<p>If we find that we&rsquo;re doing this kind of thing a lot in our application we could move this rescue code in to the <code>facebook</code> method and use a block when we call it.</p>
+
+``` /app/models/user.rb
+def facebook
+  @facebook ||= Koala::Facebook::API.new(oauth_token)
+  block_given? ? yield(@facebook) : @facebook
+rescue Koala::Facebook::APIError
+  logger.info e.to_s
+  nil
+end
+  
+def friends_count
+  facebook { |fb| fb.get_connection("me", "friends").size }
+end
+```
+
+<p>This way the block will be triggered from within the <code>facebook</code> method and the exception will be caught. Our page still has the same functionality it had before but the code if now a little cleaner. Another thing we could do is automatically sign the user out from our application if they&rsquo;re not currently signed in Facebook. We can do this with some JavaScript code, like this:</p>
+
+``` /app/assets/javascripts/facebook.js.coffee
+window.fbAsyncInit = ->
+  FB.init(appId: '<%= ENV["FACEBOOK_APP_ID"] %>', cookie: true)
+
+  $('#sign_in').click (e) ->
+    e.preventDefault()
+    FB.login (response) ->
+      window.location = '/auth/facebook/callback' if response.authResponse
+    , scope: "email,publish_stream"
+
+  $('#sign_out').click (e) ->
+    FB.getLoginStatus (response) ->
+      FB.logout() if response.authResponse
+    true
+
+  if $('#sign_out').length > 0
+    FB.getLoginStatus (response) ->
+      window.location = $('#sign_out').attr('href') if !response.authResponse
+```      
+
+<p>The new code is the three lines at the bottom. Here we check to see if there&rsquo;s a sign out link on the page, which indicates that the current user is signed in to our app. if there is we get their Facebook login status. If they&rsquo;re not logged in then we set the window&rsquo;s location to the sign out page. If we try this, though, it doesn&rsquo;t work and this is because our app is running in Sandbox Mode which makes it invisible to all public users so when we sign our of our app it doesn&rsquo;t properly initialize with the JavaScript SDK. If we go to our app&rsquo;s page on Facebook and disable sandbox mode, then go back to our application and reload the page the &ldquo;Sign out&rdquo; link will be triggered and we&rsquo;ll be signed out.</p> 
+
+<p>That&rsquo;s it for this episode but there&rsquo;s more to the Facebook API than we&rsquo;ve covered here. One thing we haven&rsquo;t covered are realtime updates. There&rsquo;s more information about this on the Koala gem&rsquo;s README page but essentially this feature allows us to subscribe and listen to event changes and fire a callback information when an event fires.</p> 
+
+<p>We&rsquo;ve covered a lot in this episode but there&rsquo;s still more we can do to integrate Facebook into our application. For example when a user writes a review of a film it could notify other Facebook users about that review so that they can come to our application and read it. We could post to the user&rsquo;s wall when they write a review but this is poor behaviour. There must be a better way to do this and there is: using the Open Graph protocol. We won&rsquo;t cover this here, but it will be covered in a future episode.</p>
