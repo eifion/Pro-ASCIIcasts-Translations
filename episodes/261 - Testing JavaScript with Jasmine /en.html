@@ -1,0 +1,279 @@
+<p>With Web applications becoming increasingly complicated it&rsquo;s a good idea to write automated tests for JavaScript code. <a href="http://pivotal.github.com/jasmine/">Jasmine</a> is a nice tool for doing this. It has an interface similar to RSpec&rsquo;s with <code>describe</code> and <code>it</code> calls for defining the JavaScript&rsquo;s behaviour. In this episode we&rsquo;ll use Jasmine to test-drive a new JavaScript feature in a Rails application.</p>
+
+<h3>Test-Driving a Credit Card Form</h3>
+
+<p>The application we&rsquo;ll be working with is an order form. The user can enter a credit card number in this form and when they do so we want to have some client-side validation to check the number using a mod 10 algorithm.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1234/original/E261RI01.png" width="800" height="400" alt="Our credit card form."/>
+</div>
+
+<p>We want to be sure that this code is correct so we&rsquo;ll add this feature using test-driven development with Jasmine. There are many Ruby gems available for integrating Jasmine into Rails; the one we&rsquo;ll use is called <a href="https://github.com/bradphelan/jasminerice">Jasminerice</a>. This has excellent support for the Rails asset pipeline and has <a href="https://github.com/velesin/jasmine-jquery/">jasmine-jquery</a> built-in. To set it up we need to add its gem to the development and test groups in our application and then run bundle to install it.</p>
+
+``` /Gemfile
+group :development, :test do
+  gem 'jasminerice'
+end
+```
+
+<p>Next we&rsquo;ll make a new <code>spec/javascripts</code> directory in our application.</p>
+
+``` terminal
+$ mkdir -p spec/javascripts
+```
+
+<p>RSpec also uses the <code>spec</code> directory but this completely independent of that and Jasmine doesn&rsquo;t require RSpec. In this directory we&rsquo;ll create a <code>spec.js.coffee</code> file. This will be the central file and here we can require any other JavaScript files that we want to use in our specs. We do this using Sprockets so it works the same way as the Rails asset pipeline.</p>
+
+<p>We could require the whole application&rsquo;s JavaScript in this file but it can be better to pick and choose exactly what we want to require so that we can focus on what&rsquo;s needed inside our specs. For now we&rsquo;ll include the <code>jquery</code> file and use <code>require_tree</code> to include all the other specs we&rsquo;ll write.</p>
+
+``` /spec/javascripts/spec.js.coffee
+#= require jquery
+#= require_tree .
+```
+
+<h3>Our First Spec</h3>
+
+<p>We&rsquo;ll write the specs for our credit card validation behaviour in a new file called <code>credit_card_spec.js.coffee</code>. It&rsquo;s not essential to use CoffeeScript but the specs look much nicer written this way than they do written in JavaScript. The first test we&rsquo;ll write checks that the JavaScript code strips out any spaces and dashes from the entered number.</p>
+
+``` /spec/javascripts/credit_card_spec.js.coffee
+describe "CreditCard", ->
+  it "strips our speces and dashes from number", ->
+    card = new CreditCard("1 2-3")
+    expect(card.number).toBe("123")
+```    
+
+<p>If our Rails app is running we can run the specs by visiting the <code>/jasmine</code> path.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1235/original/E261RI02.png" width="800" height="338" alt="Our first spec fails as expected."/>
+</div>
+
+<p>This shows that our one spec is failing as it can&rsquo;t find the <code>CreditCard</code> class which is  to be expected as we haven&rsquo;t yet defined it. We&rsquo;ll define the class in the <code>app/assets/javascripts</code> directory.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class CreditCard
+```
+
+<p>We&rsquo;ll need to make this class available to our specs by adding it to the spec file.</p>
+
+``` /spec/javascripts/spec.js.coffee
+#= require jquery
+#= require credit_card
+#= require_tree .
+```
+
+<p>When we reload the specs page we see the same error. This is because CoffeeScript 
+wraps each file within a scope so that variables defined in a file are not available globally. To remedy this we can set our <code>CreditCard</code> class to a global variable.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class CreditCard
+  
+@CreditCard = CreditCard
+```
+
+<p>Another way to do this is to put an at sign in front of the class name, but this technique doesn&rsquo;t appear to be used much so we&rsquo;ll stick with what we have. When we reload our specs now we get a different error message: <code>Expected undefined to be &#x27;123&#x27;</code>. This is expected as we aren&rsquo;t saving the number in the class. To fix this we&rsquo;ll add a constructor that takes a number and which sets an instance variable set to that number with any spaces or dashes removed.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class CreditCard
+  constructor: (number) ->
+    @number = number.replace(/[ -]/, '')
+  
+@CreditCard = CreditCard
+```
+
+<p>When we reload the specs now the error is <code>Expected &#x27;12-3&#x27; to be &#x27;123&#x27;</code>. The specs have already found a bug in our code. By default JavaScript&rsquo;s <code>replace</code> function will only replace the first match it finds; we&rsquo;ll need to alter our regular expression to replace all matches.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class CreditCard
+  constructor: (number) ->
+    @number = number.replace(/[ -]/g, '')
+  
+@CreditCard = CreditCard
+```
+
+<p>When we reload our specs page now the specs all pass.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1236/original/E261RI03.png" width="800" height="338" alt="Our spec now passes."/>
+</div>
+
+<p>This is a typical workflow in Jasmine. If we look at <a href="http://pivotal.github.com/jasmine/">the site&rsquo;s documentation</a> we&rsquo;ll see that it includes actual executable specs which show us the different matchers. All these specs are executed at the bottom of the page to show that they all pass with Jasmine.</p> 
+
+<h3>Adding Mod 10 Validation</h3>
+
+<p>We still have more to do in our application so we&rsquo;ll add some more specs to define our <code>CreditCard</code> class. Next we&rsquo;ll add a spec to test the mod 10 validation.</p>
+
+``` /spec/javascripts/credit_card_spec.js.coffee
+describe "CreditCard", ->
+  it "strips our speces and dashes from number", ->
+    card = new CreditCard("1 2-3")
+    expect(card.number).toBe("123")
+    
+  it "validates number using mod 10", ->
+    validCard = new CreditCard("4111-1111-1111 1111")
+    invalidCard = new CreditCard("4111111111111112")
+    expect(validCard.validNumber()).toBeTruthy()
+    expect(invalidCard.validNumber()).toBeFalsy()
+```    
+
+<p>As expected this spec fails when we run it as we haven&rsquo;t yet defined the <code>validNumber</code> function that we use in the spec. We&rsquo;ll add that now.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class CreditCard
+  constructor: (number) ->
+    @number = number.replace(/[ -]/g, '')
+    
+  validNumber: ->
+    total = 0
+    for i in [(@number.length-1)..0]
+      n = +@number[i]
+      if (i+@number.length) % 2 == 0
+        n = if n*2 > 9 then n*2 - 9 else n*2
+      total += n
+    total % 10 == 0
+  
+@CreditCard = CreditCard
+```
+
+<p>When we rerun our specs now they pass again.</p> 
+
+<p>Even though most of the logic is implemented now we still need to present this behaviour to the user when they enter their credit card number. We can do this with some jQuery code but how can we test-drive this behaviour? The jasmine-jquery project can help here. It allows us to define HTML fixture files which we can load in to specs and provides matchers that we can use to check the jQuery behaviour. This is included with jasminerice so we don&rsquo;t need to install anything else to use it. Instead we can jump right in and start creating fixture files. We&rsquo;ll create a <code>fixtures</code> directory under <code>/spec/javascripts</code> and create an <code>order_form.html</code> file in it. This file should contain some code that simulates the HTML produced by our application. We&rsquo;ll add a simple form with a text field for the card number and a <code>div</code> to display any errors.</p>
+
+``` /spec/javascripts/fixtures/order_form.html
+<form>
+  <input type="text" id="card_number">
+  <div class="error"></div>
+</form>
+```
+
+<p>Now we can write the spec.</p>
+
+``` /spec/javascripts/credit_card_spec.js.coffee
+describe "CreditCard", ->
+  # Other specs omitted 
+   
+  it "validates number when field loses focus", ->
+    loadFixtures "order_form"
+    field = $('#card_number')
+    field.val('123')
+    field.blur()
+    expect(field.next('.error')).toHaveText("Invalid card number.")
+```    
+    
+<p>Here we load the fixture field, find the card number text box, enter an invalid credit card number into it, and then call <code>blur()</code> on it to simulate the user moving on to the next field. When this happens we expect the error <code>div</code> to contain the text &ldquo;Invalid card number.&rdquo;. We have to add one more step to this process as the jQuery code that fires when the text box isn&rsquo;t loaded. It needs to be attached to the fixture that&rsquo;s loaded in the spec. Normally when testing jQuery it&rsquo;s easiest to make a jQuery plugin so that we can inject the functionality after the fixture has loaded. If our text field had a <code>validateCreditCardNumber</code> function that jQuery functionality would be added when this code runs.</p>
+
+``` /spec/javascripts/credit_card_spec.js.coffee
+describe "CreditCard", ->
+  # Other specs omitted 
+   
+  it "validates number when field loses focus", ->
+    loadFixtures "order_form"
+    field = $('#card_number')
+    field.validateCreditCardNumber()
+    field.val('123')
+    field.blur()
+    expect(field.next('.error')).toHaveText("Invalid card number.")
+```    
+    
+<p>When we run our specs now they fail, as expected, as that function isn&rsquo;t yet defined. We&rsquo;ll implement this inside the <code>credit_card</code> file.</p> 
+
+``` /app/assets/javascripts/credit_card.js.coffee
+$.fn.validateCreditCardNumber = ->
+  @each ->
+    $(this).blur ->
+      card = new CreditCard(@value)
+      if !card.validNumber()
+        $(this).next('.error').text("Invalid card number.")
+```        
+      
+<p>This code loops through all the matching elements and listens to each one&rsquo;s <code>blur</code> event. When this event fires a new <code>CreditCard</code> instance is created and the text field&rsquo;s value is validated. If the validation fails an error message is displayed. When we run the specs again now they all pass.</p>
+
+<p>We can use our new jQuery plugin to add this behaviour to our order form. All of our tests are currently passing, however, so how do we ensure that our plugin is actually working on the page? The Jasmine specs we&rsquo;ve been writing so far aren&rsquo;t particularly good for testing acceptance-level behaviour and we&rsquo;d be better using Capybara with a JavaScript driver such as Selenium or Headless Webkit. There&rsquo;s more detail on how to do this in <a href="http://railscasts.com/episodes/257-request-specs-and-capybara">episode 257</a>. We&rsquo;ll carry on and add this behaviour as if we had some acceptance tests in place.  First we&rsquo;ll modify our form and add a span element so that the error messages have a place to be displayed.</p>
+
+``` /app/views/orders/new.html.erb
+<h1>New Order</h1>
+
+<%= form_for @order do |f| %>
+  <div class="field">
+    <%= f.label :card_number, "Credit Card Number" %><br />
+    <%= f.text_field :card_number %>
+    <span class="error"></span>
+  </div>
+  <div class="field">
+    <%= f.label :card_expires_on, "Credit Card Expiration" %><br />
+    <%= f.date_select :card_expires_on, add_month_numbers: true, start_year: Time.now.year, order: [:month, :year] %>
+  </div>
+  <div class="actions"><%= f.submit %></div>
+<% end %>
+```
+
+<p>In our <code>orders.js.coffee</code> file we can now add the plugin&rsquo;s behaviour to the credit card number field when the DOM has loaded.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  $('#order_card_number').validateCreditCardNumber()
+```  
+  
+<p>We can now try this our in the browser. If we reload the page and enter an invalid card number we should see an error message when we move out of that text field.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1237/original/E261RI04.png" width="800" height="400" alt="The error message now shows on the page."/>
+</div>
+
+<p>This works, but when we go back to that text field, enter a valid card number then tab out of that field again the error message remains. We have a bug in our jQuery plugin but before we fix it we&rsquo;ll duplicate it in a failing spec.</p>
+
+``` /spec/javascripts/credit_card_spec.js.coffee
+describe "CreditCard", ->
+  # Other specs omitted.
+    
+  it "validates number when field loses focus", ->
+    loadFixtures "order_form"
+    field = $('#card_number')
+    field.validateCreditCardNumber()
+    field.val('123')
+    field.blur()
+    expect(field.next('.error')).toHaveText("Invalid card number.")
+    field.val('4111-1111-1111 1111')
+    field.blur()
+    expect(field.next('.error')).toHaveText("")
+```    
+
+<p>As expected our specs now fail again when we run them. This is easy to fix in our plugin: we&rsquo;ll just add code to clear the error message when a valid credit card number has been entered.</p>
+
+``` /app/assets/javascripts/credit_card.js.coffee
+$.fn.validateCreditCardNumber = ->
+  @each ->
+    $(this).blur ->
+      card = new CreditCard(@value)
+      if !card.validNumber()
+        $(this).next('.error').text("Invalid card number.")
+      else
+        $(this).next('.error').text("")
+```        
+
+<p>Our specs all pass again now and if we try it in the browser it now works as expected too. There&rsquo;s more we could do here such as cancelling the form submission if the number is invalid but we have a good start.</p>
+
+<h3>Running Tests Automatically With Guard::Jasmine</h3>
+
+<p>We&rsquo;ll finish off this episode by showing the <a href="https://github.com/netzpirat/guard-jasmine">Guard::Jasmine gem</a>. This gives us a great way to run our specs continuously as we work. Guard::Jasmine works headlessly and relies on Phantom.JS so we&rsquo;ll need to install this first. If you&rsquo;re running Mac OS X the easiest way to do this is to install it through Homebrew.</p>
+
+``` terminal
+$ brew install phantomjs
+```
+
+<p>In our application&rsquo;s gemfile we can now add then gem then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+group :development, :test do
+  gem 'jasminerice'
+  gem 'guard-jasmine'
+end
+```
+
+<p>To set up the guardfile we can run this command:</p>
+
+``` terminal
+$ guard init jasmine
+```
+
+<p>Now when we run guard it will monitor the <code>spec/javascript</code> directory for changes.</p>
