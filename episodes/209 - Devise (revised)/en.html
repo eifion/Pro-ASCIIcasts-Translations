@@ -1,0 +1,227 @@
+<p><a href="https://github.com/plataformatec/devise/">Devise</a> is one of the most popular authentication solutions in Rails and is a great option if you don&rsquo;t want to build your own authentication from scratch. It&rsquo;s a Rails engine which means that it manages the entire process for us, including the view layer. Devise is also customizable: at its core it&rsquo;s made up of twelve modules that we can choose from to fully control the user&rsquo;s authentication experience. In this episode we&rsquo;ll show you how to add Devise to an existing Rails application and what better app to use than a blogging application?</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1248/original/E209RI01.png" width="800" height="500" alt="Our blogging app."/>
+</div>
+
+<p>There&rsquo;s currently no user authentication on our blog. Our goal is to add &ldquo;Log in&rdquo; and &ldquo;Register&rdquo; links on the page. The first step is to add the devise gem which is added in the usual way by adding it to the gemfile and running bundle.</p>
+
+``` /Gemfile
+gem 'devise'
+```
+
+<p>Next we&rsquo;ll run Devise&rsquo;s installer generator to generate some configuration files.</p>
+
+``` terminal
+$ rails g devise:install
+  create  config/initializers/devise.rb
+  create  config/locales/devise.en.yml
+```  
+  
+<p>This generator will also give us some instructions on the rest of the setup that needs to be completed. We need to add a line to our development config file, make sure we have a root route and that our application displays flash notices called <code>notice</code> and <code>alert</code>. There&rsquo;s also a configuration setting that we&rsquo;ll need to set if we want to deploy our application to Heroku. We only need to do the first of these in our application to set a host for the mailer.</p>
+
+``` /config/development.rb
+config.action_mailer.default_url_options = { :host => 'localhost:3000' }
+```
+
+<p>Before we put our application into production we&rsquo;ll need to add this configuration option there too, setting it to the domain name that our application will be using in production. The installer also generated an initializer. This is too long to view here but there&rsquo;s one part of it we&rsquo;ll need to set: the <code>mailer_sender</code> setting. All the configuration options are well-commented and it&rsquo;s worth taking the time to read through the rest of this file to see what they do.</p>
+
+``` /config/initializers/devise.rb
+config.mailer_sender = "please-change-me-at-config-initializers-devise@example.com"
+```
+
+<p>With Devise set up we can generate a Devise model to handle the authentication. This is often called <code>user</code> but we can call it whatever we like. If we already have an existing model with this name it will add Devise to that model instead of generating a new one.</p>
+
+``` terminal
+$ rails g devise user
+```
+
+<p>This generates several files; lets take a look at some of them.</p> 
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  # Include default devise modules. Others available are:
+  # :token_authenticatable, :confirmable,
+  # :lockable, :timeoutable and :omniauthable
+  devise :database_authenticatable, :registerable,
+         :recoverable, :rememberable, :trackable, :validatable
+
+  # Setup accessible (or protected) attributes for your model
+  attr_accessible :email, :password, :password_confirmation, :remember_me
+  # attr_accessible :title, :body
+end
+```
+
+<p>The <code>User</code> model is a normal <code>ActiveRecord::Base</code> subclass but it has a call to a <code>devise</code> method. This method allows us to choose the modules we want to use to customize the authentication experience and these are all listed in the README. There are options for recovering and resetting passwords, for remembering passwords and many more. The README has information about each option and we can view the source code for each option to see exactly what it does. This way if we wanted to manage, say, validations ourself we can remove that module and add them manually. This makes Devise quite flexible and allows us to pick and choose exactly what we want to use. That said we have to be careful that if we change the modules that we use we also look at the migrations that were generated. These list the columns required for each module and we can add or remove these as needed before we run the migrations. Once we&rsquo;ve decided which modules we&rsquo;re going to use we can migrate the database.</p>
+
+``` terminal
+rake db:migrate
+```
+
+<p>We&rsquo;re almost there now but we still need to add links to allow the user to sign up. We&rsquo;ll add these to the application&rsquo;s layout file.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="container">
+  <div id="user_nav">
+    <% if user_signed_in? %>
+      Logged in as <strong><%= current_user.email %></strong>.
+      <%= link_to 'Edit profile', edit_user_registration_path %> |
+      <%= link_to "Logout", destroy_user_session_path, method: :delete %>
+    <% else %>
+      <%= link_to "Sign up", new_user_registration_path %> |
+      <%= link_to "Login", new_user_session_path %>
+    <% end %>
+  </div>
+
+  <% flash.each do |name, msg| %>
+    <%= content_tag :div, msg, id: "flash_#{name}" %>
+  <% end %>
+
+  <%= yield %>
+</div>
+```
+
+<p>There are several helper methods that Devise provides that we use here. First we use <code>user_signed_in?</code> to see if the current user is signed in. If they are we display their email address and linked to edit their profile and sign out. If they aren&rsquo;t signed in we display links to allow them to sign up or log in. We&rsquo;ll need to start our Rails app for all these changes to be picked up but once we do and reload the page we&rsquo;ll see the links.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1249/original/E209RI02.png" width="800" height="500" alt="The page now has &ldquo;Sign up&rdquo; and &ldquo;Login&rdquo; links."/>
+</div>
+
+<p>We&rsquo;ll use the &ldquo;Sign up&rdquo; link to create a new account. We&rsquo;ll need to provide an email address and a password to do so and once we have we&rsquo;ll be signed in. Now we can edit our profile or log out.</p> 
+
+<h3>Customizing Flash Messages</h3>
+
+<p>We now have a full authentication solution set up with just a new steps. Next we&rsquo;ll customize this to make it look and work the way we want. We&rsquo;ll start by changing the way the flash messages look. This can be done in the <code>config/locales</code> directory . There&rsquo;s a <code>devise.en.yml</code> file here where we can configure the wording of the various messages. We could create files for other languages here too to support internationalization, but we&rsquo;ll just change a few of the English messages.</p>
+
+``` /config/locales/devise.en.yml
+# Additional translations at https://github.com/plataformatec/devise/wiki/I18n
+
+en:
+  errors:
+    messages:
+      expired: "has expired, please request a new one"
+      not_found: "not found"
+      already_confirmed: "was already confirmed, please try signing in"
+      not_locked: "was not locked"
+      not_saved:
+        one: "1 error prohibited this %{resource} from being saved:"
+        other: "%{count} errors prohibited this %{resource} from being saved:"
+
+  devise:
+    failure:
+      already_authenticated: 'You are already logged in.'
+      unauthenticated: 'You need to log in or sign up before continuing.'
+```      
+      
+<p>We&rsquo;ve changed each &ldquo;sign in&rdquo; or &ldquo;signed in&rdquo; to &ldquo;log in&rdquo; or &ldquo;logged in&rdquo; so now when we log in we get the message we want. There are still several views that have the other wording, however. For example if we try logging in now we&rsquo;ll still see &ldquo;Sign in&rdquo; in the view template as the internationalization file only covers so much. To configure the views we&rsquo;ll need to make templates to override them and we can do so with the devise:views generator.</p> 
+
+``` terminal
+$ rails g devise:views
+```
+
+<p>This copies a number of files over from the engine that we can customize to our heart&rsquo;s content. We&rsquo;ll change the <code>devise/sessions/new</code> template to better suit our application.</p>
+
+``` /app/views/devise/sessions/new.html.erb
+<h2>Login</h2>
+
+<%= form_for(resource, :as => resource_name, :url => session_path(resource_name)) do |f| %>
+  <div class="field"><%= f.label :email %><br />
+  <%= f.text_field :email %></div>
+
+  <div class="field"><%= f.label :password %><br />
+  <%= f.password_field :password %></div>
+
+  <% if devise_mapping.rememberable? -%>
+    <div class="field"><%= f.check_box :remember_me %> <%= f.label :remember_me %></div>
+  <% end -%>
+
+  <div class="field"><%= f.submit "Login" %></div>
+<% end %>
+
+<%= render "devise/shared/links" %>
+```
+
+<p>We can, of course, customize this form further if we want to. The page looks much better now but its URL still ends in <code>sign_in</code> where we want it to end with <code>login</code>. To change this we need to look at the routes file. Here we&rsquo;ll find a call to <code>devise_for</code> which was added by the generator and we can pass in various options to this to customize the authentication&rsquo;s routing. </p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  devise_for :users, path_names: {sign_in: "login", sign_out: "logout"}
+
+  resources :articles
+  root to: 'articles#index'
+end
+```
+
+<p>Clicking the &ldquo;Login&rdquo; link now will take us to the <code>/users/login</code> path.</p>
+
+<p>The <a href="http://rdoc.info/github/plataformatec/devise/ActionDispatch/Routing/Mapper#devise_for-instance_method">RDocs</a> are the best place to go for documentation on the <code>devise_for</code> method. It tells us the routes that it generates and the options that we can use to configure it.</p>
+
+<h3>Changing Authentication Fields</h3>
+
+<p>What do we do if we want to customize the fields that are used for authentication? We&rsquo;ve been using an email and password but say we want to use a username instead of the email address. We&rsquo;ll need to store this new value in the database so we&rsquo;ll start by generating a migration to create it.</p>
+
+``` terminal
+$ rails g migration add_username_to_users username
+$ rake db:migrate
+```
+
+<p>In the new session template we&rsquo;ll change the email field to a username field.</p>
+
+``` /app/views/devise/sessions/new.html.erb
+<%= form_for(resource, :as => resource_name, :url => session_path(resource_name)) do |f| %>
+  <div class="field"><%= f.label :username %><br />
+  <%= f.text_field :username %></div>
+
+  # Other fields omitted.
+<% end %>
+```
+
+<p>We&rsquo;ll need to add this username field to the edit and new registration templates too and make some changes to the Devise initializer config file, too, where we&rsquo;ll need to uncomment the <code>config.authentication_keys</code> option and set it to username instead of email. We&rsquo;ll also need to set the <code>case_insensitive_keys</code> and <code>strip_whitespace_keys</code>.</p> 
+
+``` /config/initializers/devise.rb
+config.authentication_keys = [ :username ]
+config.case_insensitive_keys = [ :username ]
+config.strip_whitespace_keys = [ :username ]
+```
+
+<p>Finally we need to add this field to the list of accessible fields in the <code>User</code> model so that it can be set through mass-assignment and add a validator for it too.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  # Include default devise modules. Others available are:
+  # :token_authenticatable, :confirmable,
+  # :lockable, :timeoutable and :omniauthable
+  devise :database_authenticatable, :registerable,
+         :recoverable, :rememberable, :trackable, :validatable
+
+  # Setup accessible (or protected) attributes for your model
+  attr_accessible :email, :password, :password_confirmation, :remember_me, :username
+  validates_presence_of :username
+end
+```
+
+<p>We can test this out now by creating a new user with a username. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1250/original/E209RI03.png" width="800" height="500" alt="Logging in with a username."/>
+</div>
+
+<h3>Checking That a User is Logged In</h3>
+
+<p>We&rsquo;ll finish off this episode by showing you how you can check that a user is logged in before performing certain controller actions. Let&rsquo;s say that we only want users who are logged in to be able to create new articles. This can be done by adding a before filter to the controller and pointing it to a method that Devise provides called <code>authenticate_user!</code>.</p>
+
+``` /app/controllers/articles_controller.rb
+class ArticlesController < ApplicationController
+  before_filter :authenticate_user!, except: [:index, :show]
+
+  # Actions omitted
+end
+```
+
+<p>Now if we log out and try to create a new article we&rsquo;re redirected to the login page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1251/original/E209RI04.png" width="800" height="500" alt="If we try to create an article while logged-out now we're redirected to the login page."/>
+</div>
+
+<p>That&rsquo;s it for our look at Devise. One thing we haven&rsquo;t mentioned is that it&rsquo;s based on Warden, which is a Rack-based authentication system. This was covered in more detail in <a href="http://railscasts.com/episodes/305-authentication-with-warden">episode 305</a>. This is useful if we need to authenticate outside our Rails application, maybe through some middleware or other engines.</p>

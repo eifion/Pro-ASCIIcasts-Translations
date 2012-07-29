@@ -1,0 +1,231 @@
+<p>A few weeks ago Aaron Patterson, a.k.a. Tenderlove, wrote <a href="http://tenderlovemaking.com/2012/06/18/removing-config-threadsafe.html">a blog post</a> about the <code>threadsafe</code> option in Rails and how it is likely to be enabled by default in production mode in Rails 4.0. In this episode we&rsquo;ll explain what this option does and  how it might affect deployment and development when it&rsquo;s enabled. To demonstrate this we&rsquo;ll create a new Rails application called thready. </p>
+
+``` terminal
+$ rails new thready
+$ cd thready
+```
+
+<p>If we look at this application&rsquo;s production config file we&rsquo;ll see that this option is commented-out; in a new Rails 4 application this probably won&rsquo;t be the case.</p>
+
+``` /config/environments/production.rb
+# Enable threaded mode
+# config.threadsafe!
+```
+
+<p>It&rsquo;s important to understand that enabling this option doesn&rsquo;t mean that our application magically becomes multi-threaded, so what does this setting do? If we look at the source code for the <code>threadsafe!</code> method we&rsquo;ll see that it just sets four other options.</p>
+
+``` ruby
+def threadsafe!
+  @preload_frameworks = true
+  @cache_classes      = true
+  @dependency_loading = false
+  @allow_concurrency  = true
+  self
+end
+```
+
+<p>The first three of these have to do with how the application loads, basically telling it to do eager loading so that it preloads the entire Rails application when it starts up instead of relying on autoloading behaviour which is not thread-safe. The fourth option, <code>allow_concurrency</code>, tells Rails to not use the <code>Rack::Lock</code> middleware. If we run <code>rake middleware</code> in development we&rsquo;ll see that <code>Rack::Lock</code> is one of the first pieces of middleware that a request encounters.</p>
+
+``` terminal
+$ rake middleware
+use ActionDispatch::Static
+use Rack::Lock
+# Rest of stack omitted.
+```
+
+<p>If we enable the threadsafe option in production mode then run <code>rake middleware RAILS_ENV=production</code> we won&rsquo;t see this middleware listed. So what does <code>Rack::Lock</code> do? Let&rsquo;s take a look at <a href="https://github.com/rack/rack/blob/master/lib/rack/lock.rb">the source code for it</a>.</p>
+
+``` /lib/rack/lock.rb
+require 'thread'
+require 'rack/body_proxy'
+
+module Rack
+  class Lock
+    FLAG = 'rack.multithread'.freeze
+
+    def initialize(app, mutex = Mutex.new)
+      @app, @mutex = app, mutex
+    end
+
+    def call(env)
+      old, env[FLAG] = env[FLAG], false
+      @mutex.lock
+      response = @app.call(env)
+      response[2] = BodyProxy.new(response[2]) { @mutex.unlock }
+      response
+    rescue Exception
+      @mutex.unlock
+      raise
+    ensure
+      env[FLAG] = old
+    end
+  end
+end
+```
+
+<p>When a new request comes in the <code>call</code> method is run and this calls <code>lock</code> on a mutex object before handling the request then unlocking that mutex. This ensures that only one request is processed at a time. We&rsquo;ll test this behaviour to better understand what&rsquo;s going on and we&rsquo;ll start by generating a new controller with a single action so that we can experiment with it.</p>
+
+``` terminal
+$ rails g controller foo bar
+```
+
+<p>In our new action we&rsquo;ll sleep the current thread for a second then render some text.</p>
+
+``` /app/controllers/foo_controller.rb
+class FooController < ApplicationController
+  def bar
+    sleep 1
+    render text: "foobar\n"
+  end
+end
+```
+
+<p>We&rsquo;ll start up the server for this application in development mode (note that this is the WEBrick server). In a separate tab we&rsquo;ll make a <code>curl</code> request to this action. As expected there&rsquo;ll be a pause of a second or so before we see the response.</p>
+
+``` terminal
+$ curl http://localhost:3000/foo/bar
+foobar
+```
+
+<p>Next we&rsquo;ll run the same command five times and use an ampersand so that it forks off the process each time so that all the requests are made asynchronously. (To do this OS X you&rsquo;ll need to run this under ZSH rather than bash.)</p>
+
+``` terminal
+% repeat 5 (curl http://localhost:3000/foo/bar &)
+% foobar
+foobar
+foobar
+foobar
+foobar
+```
+
+<p>You can&rsquo;t see this here but each response is processed separately so this command will take just over five seconds to run, even through the requests were all made at the same time. Next we&rsquo;ll close the Rails server down then restart it in production mode and then run the <code>curl</code> command again.</p>
+
+``` terminal
+% rails s -e production
+% repeat 5 (curl http://localhost:3000/foo/bar &)
+```
+
+<p>As we have the <code>threadsafe!</code> configuration option enabled the response come back without the one second pause between them. The <code>Rack::Lock</code> middleware isn&rsquo;t included in the middleware stack in production mode so now the requests are processed asynchronously.</p> 
+
+<p>If this option allows requests to come in concurrently do we now have to start writing thread-safe code? Not necessarily, this depends entirely on our production setup. Most of the popular Rails servers today, including Unicorn or Phusion Passenger, will only pass one request at a time to each worker process. This means that even with this option enabled requests will still be handled separately. We can try this out by enabling Unicorn which we do by uncommenting it in our application&rsquo;s gemfile then running bundle to install it.</p>
+
+``` /Gemfile
+# Use unicorn as the app server
+gem 'unicorn'
+```
+
+<p>We can now use the <code>unicorn</code> command to start up our Rails application in production mode.</p>
+
+``` terminal
+$ unicorn -E production -p 3000
+```
+
+<p>If we run our <code>curl</code> command again now each request is processed individually as this is how Unicorn works when it only has one worker. In a way the Web server takes on the role of the mutex lock here and if we did have <code>Rack::Lock</code> in place this would be an unnecessary overhead when used with Unicorn. This is why the <code>threadsafe!</code> option will be enabled by default in production: it moves the decision to process requests concurrently to our production environment. Don&rsquo;t forget, though, that this config option does more than just remove the Mutex lock, it also adds eager loading behaviour which could cause some unexpected side-effects depending on our app. This means that if you plan to use this option in your apps you should test it thoroughly in a staging environment first. Note also that there is talk about renaming this option in Rails 4 to better clarify what it does.</p>
+
+<p>We know that Unicorn and Passenger don&rsquo;t support multiple threads, but what if we do want to run our application in a multi-threaded environment? One option is to use the <a href="http://puma.io/">Puma server</a>. This is a Web server based on Mongrel that can run any Rack application concurrently. It supports JRuby, Rubinius and even MRI so we&rsquo;ll try running our application on it. We&rsquo;ll need to uncomment Unicorn in the gemfile, add Puma and then run bundle again.</p>
+
+``` /Gemfile
+# Use unicorn as the app server
+# gem 'unicorn'
+gem 'puma'
+```
+
+<p>We can now start up the server in the production environment.</p>
+
+``` terminal
+$ rails s puma -e production
+```
+
+<p>When we run our <code>curl</code> command now the results come back almost instantly as the requests are processed concurrently through threads thanks to Puma.</p>
+
+<p>Puma is a little constrained under MRI due to MRI&rsquo;s Global Interpreter Lock. We might still need to start up multiple processes running Puma to take full advantage of the CPU, especially if have a CPU with multiple cores. JRuby and Rubinius have better thread support so Puma should perform better under these environments.</p>
+
+<p>If we are using a server that supports multiple threads we have to be careful to ensure that all code in our application is thread-safe. Here&rsquo;s a slightly contrived example of unsafe code.</p>
+
+``` /app/controllers/foo_controller.rb
+class FooController < ApplicationController
+  @@counter = 0
+  def bar
+    counter = @@counter
+    sleep 1
+    counter += 1
+    @@counter = counter
+    render text: "#{@@counter}\n"
+  end
+end
+```
+
+<p>In the controller we now have a class variable called <code>@@counter</code> and we increment this every time the <code>bar</code> action is called. In the action we read the variable&rsquo;s value, then sleep for a second before incrementing and writing it back. To see how this works we&rsquo;ll first start the server in development mode with the default single-threaded Rails server.</p>
+
+``` terminal
+$ rails s
+```
+
+<p>When we run the <code>curl</code> command to call the action four times we&rsquo;ll see <code>1 2 3 4</code> printed out with a second&rsquo;s delay between each one and each request is processed synchronously.</p>
+
+``` terminal
+% repeat 4 (curl http://localhost:3000/foo/bar &)
+% 1
+2
+3
+4
+```
+
+<p>We&rsquo;ll stop the server now and start up Puma in production mode.</p>
+
+``` terminal
+$ rails s puma -e production
+```
+
+<p>When we run the <code>curl</code> command now we&rsquo;ll see different output.</p>
+
+``` terminal
+% repeat 4 (curl http://localhost:3000/foo/bar &)
+% 1
+1
+1
+1
+```
+
+<p>The requests are now processed concurrently and so the last request is made before the first one has had time to increment the counter. This is why we need to be careful when we work with data in memory that&rsquo;s shared between threads such as our <code>@@counter</code> variable. To get around this problem we can set up a mutex lock similar to how the <code>Rack::Lock</code> middleware works,</p>
+
+``` /app/controllers/foo_controller.rb
+class FooController &lt; ApplicationController
+  @@counter = 0
+  @@mutex = Mutex.new
+
+  def bar
+    @@mutex.synchronize do
+      counter = @@counter
+      sleep 1
+      counter += 1
+      @@counter = counter
+    end
+    render text: &quot;#{@@counter}\n&quot;
+  end
+end
+```
+
+<p>To do this we create a new <code>Mutex</code> and whenever we read from or write to shared data we use the <code>synchronize</code> method to create a lock, wrapping that code in its block. When the block ends the mutex will be unlocked. If we restart the Puma server now and run the <code>curl</code> command again we&rsquo;ll see that the counter is incremented correctly this time as the mutex lock waits for any other requests to complete before running the code in its block.</p>
+
+<p>The things we should look out for in our Rails applications and wrap in a mutex lock are class variables like our counter, instance variables at the class level, global variables and constants. Constants can be changed in Ruby, although a warning is issued when we do so and don&rsquo;t forget that a value of a constant can be mutable as well. Strings are mutable in Ruby so we should call <code>freeze</code> on make them immutable. We also need to remember that the code inside the class itself is also shared memory so we should avoid inserting methods into a class dynamically after the application has loaded.</p>
+
+<p>Thankfully making a Rails application thread-safe may not be as big a job as it might seem. Most of the time we don&rsquo;t need to share mutable data like this and if we are we doing this we should look for an alternative approach as there&rsquo;s probably a better way to do what we&rsquo;re trying to achieve. The most difficult part of this process is to ensure that the gems that our application uses, and their dependencies, are thread-safe. One way to do this is to check each gem&rsquo;s README and see if it mentions and thread-safety issues. If not then it&rsquo;s worth posting something on that gem&rsquo;s issue tracker.</p>
+
+<p>Something else to be aware of when working with a multi-threaded Rails application is the database connection pool. This determines how many database connections are available at any one time in a Rails process and by default this is set to five. To see this in effect we&rsquo;ll comment-out our mutex block so that we can make many requests at once.</p> 
+
+``` /app/controllers/foo_controller.rb
+def bar
+  #@@mutex.synchronize do
+    counter = @@counter
+    sleep 1
+    counter += 1
+    @@counter = counter
+  #end
+  render text: "#{@@counter}\n"
+end
+```
+
+<p>As before making four requests at once works without a problem but if we try to make, say, twelve requests at once we&rsquo;ll see that four requests are made at a time as that&rsquo;s the limit to the number of database connections we can make simultaneously.  Even though this action doesn&rsquo;t use the database Rails will still reserve a connection for the duration of each request and if one isn&rsquo;t available it will wait until one is or time out if a connection doesn&rsquo;t become available. This means that if a request takes a while to run we will start to get timeout errors as other requests fall foul of the timeout before a database connection is available. If we want to support more than five simultaneous requests at one time on a single process, this connection pool setting may become our application&rsquo;s bottleneck. We can increase this value as long as we&rsquo;re happy to have that many simultaneous database connections. If we increase this value to <code>15</code> then make twelve simultaneous requests they&rsquo;ll all come back at once (and all with the counter variable having a value of <code>1</code> as we removed the mutex lock).</p>
+
+<p>That&rsquo;s it for our episode on the <code>threadsafe!</code> option. Keep in mind that the effect of enabling this option depends greatly on the web server setup we have in production. If we go with a multi-threaded setup we&rsquo;ll need to be sure that our app is thread-safe and also the gems that it depends on.</p>

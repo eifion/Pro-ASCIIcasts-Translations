@@ -1,0 +1,185 @@
+<p>In last week&rsquo;s episodes we showed how to authenticate a user through Facebook and request certain permissions. One they had signed in we showed how to communicate with Facebook&rsquo;s Graph API to fetch and post content as that user.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1241/original/E363I01.png" width="960" height="600" alt="Our movie review site."/>
+</div>
+
+<p>In this week&rsquo;s episode we&rsquo;ll build on this example app and integrate Facebook further by using the Open Graph protocol. When a user writes a review for a film in our application we want to add a notification on Facebook so that that user&rsquo;s friends can read the review and add a review of their own.</p>
+
+<p>Any page in our application can be treated as an object by the <a href="http://ogp.me/">Open Graph Protocol</a> and this allows users to interact with it. To do this we need to add meta tags to the page which describe it as an object. Facebook parses these which allows us to treat it as an object in the Graph API. We&rsquo;ll use these within our application. As we&rsquo;ll be jumping between testing an application and editing its settings it&rsquo;s useful to use a separate browser so that we can be signed in as a test user in one browser and still edit the application&rsquo;s configuration under our primary account in the other. To edit our application&rsquo;s settings we need to go to the Open Graph section where we can define the action that&rsquo;s performed on our site along with the object that the action is performed on. For our example app we&rsquo;ll allow users to review a movie.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1242/original/E363I02.png" width="960" height="600" alt="Editing our application&rsquo;s Open Graph settings."/>
+</div>
+
+<p>After we click &ldquo;Get Started&rdquo; here we&rsquo;ll be taken to a page where we can customize this action by changing the various tenses, changing how it looks and so on. We&rsquo;ll leave everything at the default value and save the changes. This will take us to a page where we can edit the object and this page will tell us what properties are required on our pages&rsquo; meta tags and which optional properties we can use. We can also add our own custom properties if we want to. Again we&rsquo;ll leave everything at the defaults. The last step is aggregation. When a user performs multiple actions on our app, such as reviewing multiple movies, Facebook will aggregate these together. On this page we need to set what we want the aggregation to focus on, in this case the &ldquo;review&rdquo; action. We can then set a layout style and some other configuration on how the aggregation will look. When we save this we&rsquo;ll have an action and a object that we can use in our application.</p>
+
+<p>Some examples are provided to demonstrate how we can use these. A number of <code>curl</code> commands are shown that we can use to post a new review, delete one, or list all the reviews. There are a couple of things to note here. One is that the URL here has a path that ends with <code>cinematron:review</code>, i.e. application&rsquo;s namespace followed by the action. The URL for the movie would normally be a URL in our application but an example URL is provided instead.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1243/original/E363I03.png" width="960" height="600" alt="The curl commands for working with reviews."/>
+</div>
+
+<p>If we visit this example URL we&rsquo;ll be taken to a page which is an example object that we can use for testing. If we view the source of this page we&rsquo;ll see the Open Graph meta tags in the <code>head</code> section which means that we can be treated as an Open Graph object. This is useful as when we pass a URL to Facebook it will need to be able to parse these meta tags which can be difficult to do in our development environment. We can use this sample page as data that we can pass to Facebook.</p>
+
+<p>The code in the screenshot above shows how we can publish actions through the <code>curl</code> command, but how do we do this in our Rails app with the Koala gem instead?  We&rsquo;ll show this in the console.</p>
+
+``` console
+>> u = User.last
+>> u.facebook.put_connections("me", "cinematron:review", movie: "http://samples.ogp.me/457069940972565")
+=> {"id"=>"106998912778423"}
+```
+
+<p>Here we fetch a <code>User</code> record from a user that has signed in through Facebook. We then call <code>facebook</code> on this user to instantiate a Koala client. To publish an action we call <code>put_connections</code> passing in who the connection is for, the action&rsquo;s name, and the object that the action acts on. For the last parameter we pass the URL of the example movie we saw earlier. We get an <code>id</code> back from running this so it appears to have run successfully. We can check this by looking at the user&rsquo;s timeline. This won&rsquo;t be enabled by default but if we visit <code>/about/timeline</code> while logged in as that user we can enable it. Once we&rsquo;ve done so this action will appear in that user&rsquo;s recent activity.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1244/original/E363I04.png" width="960" height="600" alt="The review now appears in the user&rsquo;s recent activity."/>
+</div>
+
+<h3>Making Our Review Page an Open Graph Object</h3>
+
+<p>Instead of reviewing a sample movie we&rsquo;ll review one of the movies from our application. To do this we&rsquo;ll need to add meta tags to each movie so that it will work with Open Graph.  These need to go in the <code>head</code> section, which is defined in our application&rsquo;s layout file. We&rsquo;ll add a call to <code>yield</code> in here so that we can insert content from other templates.</p>
+
+``` /app/views/layouts/application.html.erb
+<head>
+  <title>Cinematron</title>
+  <%= stylesheet_link_tag    "application", media: "all" %>
+  <%= javascript_include_tag "application" %>
+  <%= csrf_meta_tag %>
+  <%= yield :head %>
+</head>In our movies’ show template we can now add the necessary meta tags.
+
+/app/views/movies/show.html.erb
+<% content_for :head do %>
+  <%= tag :meta, property: "fb:app_id", content: ENV["FACEBOOK_APP_ID"] %>
+  <%= tag :meta, property: "og:site_name", content: "Cinematron" %>
+  <%= tag :meta, property: "og:type", content: "cinematron:movie" %>
+  <%= tag :meta, property: "og:title", content: @movie.name %>
+  <%= tag :meta, property: "og:url", content: movie_url(@movie) %>
+  <%= tag :meta, property: "og:image", content: request.protocol + request.host_with_port + image_path(@movie.image) %>
+<% end %>
+```
+
+<p>When we reload the page for a given movie now and view the source we&rsquo;ll see that it has right the meta tags.</p>
+
+``` html
+<meta property="fb:app_id" />
+<meta content="Cinematron" property="og:site_name" />
+<meta content="cinematron:movie" property="og:type" />
+<meta content="The Dark Knight Rises" property="og:title" />
+<meta content="http://localhost:3000/movies/1" property="og:url" />  
+<meta content="http://localhost:3000/assets/dark_knight_rises.jpg" property="og:image" />
+```
+
+<p>There is a problem here, however. There&rsquo;s no way for Facebook to be able to access this page and parse its content as it&rsquo;s hosted on our local machine. One solution is to deploy our application somewhere, but this isn&rsquo;t always practical. The other solution is to use SSH tunnelling which is what we&rsquo;ll do. There are many services 
+available to help with tunnelling; we&rsquo;ll use <a href="http://progrium.com/localtunnel/">localtunnel</a> which comes as a gem so which  is very easy to install.</p>
+
+``` terminal
+$ gem install localtunnel
+```
+
+<p>If you&rsquo;re using rbenv you&rsquo;ll need to run <code>rbenv rehash</code> so that you can use the <code>localtunnel</code> command. We can now use this command, passing in the port that we want to make public. This first time we run this we&rsquo;ll need to pass in the <code>-k</code> option and point it to our public key.</p>
+
+``` terminal
+$ localtunnel -k ~/.ssh/rsa_id.pub 3000
+```
+
+<p>Our Rails app should now be publicly available at a <code>localtunnel.com</code> subdomain. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1245/original/E363I05.png" width="960" height="600" alt="Viewing out site through localtunnel."/>
+</div>
+
+<p>Bear in mind that anyone will be able to access this web application which is currently running in development. This means that if an exception is raised it might display sensitive information so we should consider running our app in production mode or on a staging environment when we do this. Next we need to edit our Facebook app&rsquo;s settings and set this domain as our application&rsquo;s domain and for the authentication domain. Remember, though, that if we close this tunnel or if it times out then our app will probably have a different domain the next time we open up the tunnel. We can try this out in the Rails console. Instead of publishing a review for the sample movie we&rsquo;ll use our tunnel domain instead.</p>
+
+``` console
+>> u = User.last
+>> u.facebook.put_connections("me", "cinematron:review", movie: "http://3exu.localtunnel.com/movies/3")
+=> {"id"=>"106998912778754"}
+```
+
+<p>Again we get an <code>id</code> back so it looks like this has worked and if we visit the user&rsquo;s time line again we&rsquo;ll see that their review has been added. If we click the link in their review we&rsquo;ll be taken to that movie&rsquo;s page in our application.</p>
+
+<h3>Adding This to Our Application</h3>
+
+<p>Now that we have this working we&rsquo;ll add this behaviour to our application. This should happen when a user posts a review, so when the review is saved we&rsquo;ll check to see that there&rsquo;s a current user and, if so, do the same that we did in the console to save the review to the user&rsquo;s timeline.</p>
+
+``` /app/controllers/reviews_controller.rb
+class ReviewsController < ApplicationController
+  def create
+    @movie = Movie.find(params[:movie_id])
+    @review = @movie.reviews.create!(params[:review])
+    if current_user
+      current_user.facebook.put_connections("me", "cinematron:review", movie: movie_url(@movie))
+    end
+    redirect_to @review.movie, notice: "Review has been created."
+  end
+end
+```
+
+<p>We can try this now. If we sign in to our app through Facebook and create a review our app will communicate with Facebook and wait for a response. This time this takes a while to complete so it looks as if something is incorrect and when the response finally completes we get an error.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1246/original/E363I06.png" width="960" height="600" alt="Saving a review throws an error."/>
+</div>
+
+<p>The error message says that Koala could not retrieve data from a URL so for some reason Facebook wasn&rsquo;t able to connect to our application. The problem is that our Rails application is running on a single thread in development. When we communicate with Facebook to publish the action it tries to communicate back to our app to parse the meta tags. This can&rsquo;t happen, however, as our app is still processing the <code>create</code> action and multiple actions can&rsquo;t be processed at once.</p>
+
+<p>We should be communicating with Facebook through a background process. If we do so and the job fails the user won&rsquo;t affected and we can retry the job later. There are a number of gems that can handle background jobs in Rails and many of them have been covered in past episodes. In this episode we&rsquo;ll be using Delayed Job as it has very few dependencies but you can choose whichever gem you prefer. To use it we&rsquo;ll add it to the application&rsquo;s gemfile and run <code>bundle</code>.</p>
+
+``` /Gemfile
+gem 'delayed_job_active_record'
+```
+
+<p>After the gem installs we&rsquo;ll need to run the generator it provides to create the database migrations it uses to create its database table, migrate the database then run the Rake task to start the worker.</p>
+
+``` terminal
+$ rails g delayed_job:active_record
+$ rake db:migrate
+$ rake jobs:works
+```
+
+<p>We&rsquo;ll move the Facebook communication behaviour from the <code>ReviewsController</code> into a new <code>share_review</code> class method in the <code>User</code> model to make it easier to move it into the background. To call this method as a background method we call <code>delay</code> before calling the method.</p>
+
+``` /app/controllers/reviews_controller.rb
+class ReviewsController < ApplicationController
+  def create
+    @movie = Movie.find(params[:movie_id])
+    @review = @movie.reviews.create!(params[:review])
+    if current_user
+      User.delay.share_review(current_user.id, movie_url(@movie))
+    end
+    redirect_to @review.movie, notice: "Review has been created."
+  end
+end
+```
+
+<p>Next we&rsquo;ll add the <code>share_review</code> to <code>User</code>.</p>
+
+``` /app/models/user.rb
+def self.share_review(user_id, movie_url)
+  user = User.find(user_id)
+  user.facebook.put_connections("me", "cinematron:review", movie: movie_url)
+end
+```
+
+<p>With all this in place and the Rails application restarted we can try submitting another review as your test user. This time we&rsquo;re immediately retuned back to the page and told that the review is created. If we look in the terminal window where we started the background worker we should see that the job has been processed.</p>
+
+``` terminal
+$ rake jobs:work
+[Worker(host:eifion.local pid:53133)] Starting job worker
+[Worker(host:eifion.local pid:53133)] Class#share_review completed after 2.1245
+[Worker(host:eifion.local pid:53133)] 1 jobs processes at 0.4527 j/s, 0 failed ...
+```
+
+<p>If we look at the user&rsquo;s profile now we&rsquo;ll see the review they&rsquo;ve added.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1247/original/E363I07.png" width="960" height="600" alt="The review is now added."/>
+</div>
+
+<h3>Debugging</h3>
+
+<p>Sometime when working with Open Graph things don&rsquo;t go smoothly. In these cases the <a href="http://developers.facebook.com/tools/debug">Facebook Debugger Tool</a> can be a great help to determine what&rsquo;s gone wrong. We can pass this a URL to an Open Graph page and it will tell us whether Facebook was able to parse that page and if it encountered any problems when it did so. Any warnings will also be shown here, along with the object&rsquo;s properties that were parsed correctly and the raw meta tags that were found on the page.</p>
+
+<p>We should also be aware of Open Graph Permissions. We&rsquo;ll need to have a <code>publish_actions</code> scope when authenticating a user so that we can share their activity. These are covered in more detail in episode 361. It&rsquo;s a good idea to tell the user what activity we&rsquo;ll be sharing on Facebook and provide an option to turn this off from within our application. Once we&rsquo;re ready to go live we&rsquo;ll need to submit our actions for approval as otherwise they&rsquo;ll only be available to the developers and testers of our application. This process will tell us anything else we need to do make our application approved.</p>
