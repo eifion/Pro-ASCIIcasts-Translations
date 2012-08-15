@@ -1,0 +1,190 @@
+<p>In the previous <a href="http://railscasts.com/episodes/368-miniprofiler">episode</a> we used MiniProfiler to find the slow portions of a Rails application and optimize them. Improving the performance of the code on the server is only half the battle, however, much of what makes a web page feel slow can be on the client side in the loading and parsing of the resources. In this episode we&rsquo;ll show you several tools for analyzing what&rsquo;s going on in the browser and give you some tips on how to improve performance so that your site will feel even faster.</p>
+
+<p>We&rsquo;ll demonstrate this using the <a href="http://railscasts.com/">Railscasts site</a>. Our goal is to determine what goes on when its home page loads and what we can do to improve its performance. We&rsquo;ll use Google Chrome to do this as it has useful developer tools for analyzing a web page. The first thing we&rsquo;ll look at is the network tab. If we click this then reload the page we&rsquo;ll see a waterfall report showing what happened while the page loaded.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1278/original/E369I01.png" width="960" height="600" alt="Google Chrome&rsquo;s Network Tool."/>
+</div>
+
+<p>The page took just over a second to load completely and we can see the various requests here and how long each one took to process. Each bar in the timeline is made up of two parts. The first lighter section shows the time between the request being made and the response beginning while the second section shows the time spend processing the response. We can hover over any of the bars for more details about where the request spent the most time. As far as Rails is concerned this request took around 200ms to process this time and while this time could probably be improved that&rsquo;s only a fraction of the total time that the page took to load. We&rsquo;ll take a look at what happens during the rest of this time.</p>
+
+<p>There&rsquo;s more to this story than what we see here. If we hover over a lot of the bars the darker section shows 0ms and this is because Chrome is reading files from the cache instead of using the full response from the server. This means that we&rsquo;re not getting an accurate representation of the performance that someone coming to the site for the first time will experience. This is even more obvious if we visit this page by clicking a link to it instead of reloading it. If we do this most of the page&rsquo;s assets will be fetched from the cache without making a request to the server.</p> 
+
+<p>It&rsquo;s useful to see how caching affects performance but if we want to get the perspective of a first-time visitor we can turn off caching in the developer tools&rsquo; settings. If we do this then reload the page again the cache won&rsquo;t be used. This time the page takes around 1.3 seconds to load and the dark sections of the bars are longer as everything is loaded in from the server.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1279/original/E369I02.png" width="960" height="600" alt="The network tool showing how long the page takes to load with caching turned off."/>
+</div>
+
+<p>There are several ways that we can analyze this output to help us improve the page&rsquo;s performance, but before we do that we&rsquo;ll show another way to generate a waterfall report without using Chrome. On the <a href="http://www.webpagetest.org/">WebPageTest site</a> we can enter a URL and specify a location and browser and the site will tell us how the page loads for those settings. We can even customize other settings such the connection speed. The test make take a minute or so to run but once it completes we&rsquo;ll see the results. The test loads the page twice. In this case the first view took around 2.5 seconds while the second took around 1.2 seconds thanks to caching. There are also waterfall graphs for each load along with a screenshot.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1280/original/E369I03.png" width="960" height="600" alt="The results of running the page on webpagetest.org."/>
+</div>
+
+<p>If we click on the first waterfall graph we&rsquo;ll be taken to a page similar to the graph we saw in Chrome. WebPageTest does more than just this, though, it also grades our application in a variety of areas. The Railscasts site does well in all areas apart from caching static content so lets take a look at that. We can click on the area that has scored badly to get more details about why it has done so and when we do it turns out that a lot of the images on the page don&rsquo;t have a <code>Max-Age</code> or <code>Expires</code> header in their response. This is something that the asset pipeline helps us with but we aren&rsquo;t using it for all the images. To fix this we could configure the web server to add an <code>Expires</code> header for these images. To learn more about HTTP caching and how response headers work take a look at <a href="http://railscasts.com/episodes/321-http-caching">episode 321</a>.There&rsquo;s much more information in the test results about each request and whether they pass certain tests.</p> 
+
+<p>There are other tools that give this kind of information and one of these is available within Chrome&rsquo;s Developer Tools. If we click the &ldquo;Audits&rdquo; icon then reload the page we want to analyze we&rsquo;ll be given several suggestions as to how we can improve the page&rsquo;s performance, including the one we saw earlier about using browser caching.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1281/original/E369I04.png" width="960" height="600" alt="Chrome&rsquo;s audits tool shows a list of recommendations for speeding up the page."/>
+</div>
+
+<p>This tool also suggests that we move some of the assets to different domain names so that their downloading can be done in parallel by opening more connections. On a similar note if we move the static assets to a domain which doesn&rsquo;t match the cookies then the client won&rsquo;t send the cookies for each request to the static assets. This is more critical is we have a lot of large cookies matching the domain.</p> 
+
+<p>The tool also warns us about images that don&rsquo;t have their width and height specified in the HTML. Fixing this will make the layout more consistent while the page loads. Another useful feature it has is the ability to find the CSS rules that aren&rsquo;t used on the page. Unless they&rsquo;re used elsewhere we should consider removing these to reduce the size of our application&rsquo;s stylesheets. <a href="http://railscasts.com/episodes/180-finding-unused-css">Episode 180</a> covers this is more detail.</p>
+
+<p>That&rsquo;s it for the audit tool but there are other tools that we can use to analyze our page. One of these is Google&rsquo;s <a href="https://developers.google.com/speed/">PageSpeed Insights</a>. This can be used online or as a browser extension. We&rsquo;ll install the extension for Chrome; Once we&rsquo;ve done so the best way to use it is in the Developer Tools. There&rsquo;ll be a new PageSpeed button on its toolbar and if we click it it will analyze the current page and generate a report. Some of the things mentioned in this report are the same as we&rsquo;ve seen in other tools but there are other suggestions listed such as combining images into CSS sprites. The report even lists the images that we should be combining. Each the suggestions this tool makes links to a page that has more information about that optimization, why we should use it and the tools we can use to implement it. <a href="http://railscasts.com/episodes/334-compass-css-sprites">Episode 334</a> has more information on CSS sprites.</p>
+
+<p>PageSpeed also gives us tips on optimizing images. A number of images on the page can be compressed further without any loss in quality and PageSpeed will list these, along with a indication of how by how much the image can be reduced in file size. There&rsquo;s even a link to the compressed version of the image.</p> 
+
+<h3>Optimizing How JavaScript Loads</h3>
+
+<p>PageSpeed is a very useful tool and is well worth using with your web sites to see how they can be optimized. One last suggestion it makes that we&rsquo;ll look at is deferring the parsing of JavaScript. We haven&rsquo;t looked at the application&rsquo;s JavaScript much yet but we can do a lot to optimize it and this plays a critical part in  how fast a page feels. Before tackling this issue it helps to get a better understanding of how JavaScript is loaded in. When the page loads the other resources are prevented from loading while the JavaScript loads. Even worse the rendering of the HTML stops at this point as well so the user will see a blank screen until the JavaScript has finished loading. We&rsquo;ll demonstrate this problem in a simple Rails app that&rsquo;s designed to manage projects and tasks.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1282/original/E369I05.png" width="800" height="500" alt="Our projects application."/>
+</div>
+
+<p>We include this application&rsquo;s JavaScript in its layout file. </p>
+
+``` /app/views/layouts/application.html.erb
+<head>
+  <title>Example</title>
+  <%= stylesheet_link_tag "application", media: "all" %>
+  <%= javascript_include_tag "application" %>
+  <%= csrf_meta_tag %>
+</head>
+```
+
+<p>We&rsquo;ll find code like this in a lot of Rails applications. The problem with this approach is that everything stops rendering while the JavaScript loads. To demonstrate this we&rsquo;ll change the <code>javascript_include_tag</code> to point to an action that sleeps for two seconds.</p>
+
+```/app/views/layouts/application.html.erb
+<head>
+  <title>Example</title>
+  <%= stylesheet_link_tag "application", media: "all" %>
+  <%= javascript_include_tag "/sleep" %>
+  <%= csrf_meta_tag %>
+</head>
+```
+
+<p>When we reload the page now there&rsquo;s a two second pause before the page renders. If we load the page in Chrome with the Network we&rsquo;ll see that we don&rsquo;t see anything on the page until the slow-loading JavaScript file completes loading.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1283/original/E369I06.png" width="799" height="779" alt="The page now remains blank until the slow-loading JavaScript file has completely loaded."/>
+</div>
+
+<p>In a real application no JavaScript file should take this long but even a 200ms delay can have an impact on how fast a site feels. There are several solutions to this problem. One is to move the JavaScript out of the head section and to place it at the bottom of the page&rsquo;s body. This way it won&rsquo;t block the rendering of the page.</p> 
+
+``` /app/views/layouts/application/html.erb
+<body>
+  <div id="container">
+    <% flash.each do |name, msg| %>
+      <%= content_tag :div, msg, id: "flash_#{name}" %>
+    <% end %>
+    <%= yield %>
+  </div>
+  <%= javascript_include_tag "/sleep" %>
+</body>
+```
+
+<p>When we reload the page now it renders instantly even through the JavaScript still takes two seconds to load. Alternatively we can load the JavaScript asynchronously. To do this reliably across all browsers is a little messy as we need to replace the <code>javascript_include_tag</code> in the layout with this.</p>
+
+``` /app/views/layouts/application/html.erb
+<script type="text/javascript">
+  (function() {
+    var script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.async = true;
+    script.src = '<%= j javascript_path("/sleep") %>';
+    var other = document.getElementsByTagName('script')[0];
+    other.parentNode.insertBefore(script, other);
+  })();
+</script>
+```
+
+<p>This is an inline script that inserts another script tag for the JavaScript that we want to load in and loads it asynchronously so that the rest of the page isn&rsquo;t blocked. To demonstrate this we&rsquo;ll remove the <code>javascript_include_tag</code> from the end of body and put this new code in the head section. When we reload the page now the view renders almost instantly, even though the JavaScript is taking two seconds to load as it&rsquo;s done asynchronously. Now that we have this working we can replace the <code>sleep</code> action with our application&rsquo;s actual JavaScript file so that loading the JavaScript won&rsquo;t block the rendering.</p>
+
+``` /app/views/layouts/application/html.erb
+script.src = '<%= j javascript_path("application") %>';
+```
+
+<p>When we do this we need to watch out for other JavaScript files that exist. If they rely on jQuery then we&rsquo;ll have a problem as we won&rsquo;t know when jQuery will be available and fully loaded given that it happens asynchronously. When possible we should move scripts into the asset pipeline so that they&rsquo;re all loaded within the <code>application.js</code> file. There are also tools that can help with these dependency issues, such as <a href="http://requirejs.org/">RequireJS</a>.</p>
+
+<p>Another thing to watch our for when loading JavaScript asynchronously is the increased chance that a user might do something on the page that requires JavaScript before the scripts have fully loaded. For example the &ldquo;Destroy&rdquo; links on our page require JavaScript to work correctly. We should change this behaviour so that it degrades gracefully like we showed in <a href="http://railscasts.com/episodes/77-destroy-without-javascript-revised">episode 77</a>.</p>
+
+<p>The code that loads the script asynchronously looks fairly messy in the layout file so it would be best to move it out into a partial. The important part of this code, the path to the JavaScript file, is rather hidden amongst the rest of it and moving it into a partial would help to emphasise it again.</p>
+
+``` /app/views/layouts/application/html.erb
+<%= render "layouts/async_javascript", path: "application" %>
+```
+
+<p>Our new partial file looks like this:</p>
+
+``` /app/views/layouts/_async_javascript.html.erb
+<script type="text/javascript">
+  (function() {
+    var script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.async = true;
+    script.src = '<%= j javascript_path(path) %>';
+    var other = document.getElementsByTagName('script')[0];
+    other.parentNode.insertBefore(script, other);
+  })();
+</script>
+```
+
+<h3>JavaScript Performance</h3>
+
+<p>We&rsquo;ll finish off this episode by looking at JavaScript performance and profiling. If we go to a specific project on our site we&rsquo;ll see a list of tasks that we can check off. When we check off a task it instantly moves to the completed tasks list and the application has some JavaScript which makes an AJAX call to achieve this.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1284/original/E369I07.png" width="822" height="450" alt="The page for adding and viewing tasks."/>
+</div>
+
+<p>We&rsquo;ll take a look at some of the JavaScript, specifically this code below.</p>
+
+``` /app/assets/javascripts/projects.js.coffee
+jQuery ->
+  $('#tasks input[type=checkbox]').click ->
+      $(this.form).submit()
+      true
+```      
+      
+<p>This code listens to each checkbox&rsquo;s <code>click</code> event and when this fires the form that the checkbox is on is submitted. As the form is marked as <code>remote</code> this triggers the AJAX functionality. If we had a thousand tasks we&rsquo;d want to improve the JavaScript performance for this scenario so we&rsquo;ll do some profiling to see how it performs. There are several profiling tools and one of them is available within Chrome&rsquo;s developer tools. We just need to click the &ldquo;Profile&rdquo; tab, select &ldquo;Collect JavaScript CPU Profile&rdquo;,  click &ldquo;Start&rdquo;, reload the page and then click &ldquo;Stop&rdquo; when it finishes loading.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1285/original/E369I08.png" width="822" height="759" alt="Chrome&rsquo;s profiling tool."/>
+</div>
+
+<p>This bottom-up view tells us which parts of the JavaScript took the longest time to run. If we instead select the top-down view we can drill down to see the calls that were made. By default the time taken is shown as a percentage but we can change this to see the absolute time. The <code>jQuery.extend.ready</code> callback which triggers the code we showed earlier takes around 31ms. This isn&rsquo;t too bad but we can probably reduce it. Instead of manually triggering the profiler we&rsquo;ll trigger it in code. This is done by calling <code>console.profile</code> and passing in a name to start profiling and then calling <code>console.profileEnd</code> to stop profiling.</p>
+
+```/app/assets/javascripts/projects.js.coffee
+jQuery ->
+  console.profile("Task checkboxes")
+  $('#tasks input[type=checkbox]').click ->
+      $(this.form).submit()
+      true
+  console.profileEnd();
+```  
+
+<p>Now we don&rsquo;t even have to start the profiler. If we reload the page it will now insert a profile entry automatically. This shows this code taking 22ms to run this time and what&rsquo;s nice about this approach is that it isolates just the code we&rsquo;re interested in. With this focussed profiling in place we can experiment with performance. Instead of listening to the checkboxes&rsquo; <code>click</code> event we&rsquo;ll use on, like this:</p>
+
+``` /app/assets/javascripts/projects.js.coffee
+jQuery ->
+  console.profile("Task checkboxes")
+  $('#tasks').on 'click', 'input[type=checkbox]' ->
+      $(this.form).submit()
+      true
+  console.profileEnd();
+```  
+
+<p>When we reload the page now it will run the profiler again and now this piece of code only takes 2ms to process. This seems to be much faster but it might just be deferring the time until the <code>click</code> event happens.</p>
+
+<p>To help us to work this out we can use another tool for analyzing performance called <a href="https://developers.google.com/web-toolkit/speedtracer/">Speed Tracer</a>. This is another Chrome extension and once we&rsquo;ve installed it we&rsquo;ll have a button in the toolbar that we can click to start it recording. Once it&rsquo;s running we&rsquo;ll click one of the checkboxes on the page then click it again to stop it. We can now see all the events that took place while Speed Tracer was running. One of these was the <code>click</code> event and Speed Tracer will show us the details of what happened for this event.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1286/original/E369I09.png" width="850" height="609" alt="Chrome's SpeedTracer tool."/>
+</div>
+
+<p>The time shown here to do the JavaScript callback is fast. Comparisons with the click function in jQuery show that the times are quite similar so there doesn&rsquo;t appear to be much difference in time between the two ways of wiring up the <code>click</code> event in this application.</p> 

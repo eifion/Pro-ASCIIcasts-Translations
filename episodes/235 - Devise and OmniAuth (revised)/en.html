@@ -1,0 +1,269 @@
+<p>In last week&rsquo;s <a href="http://railscasts.com/episodes/209-devise-revised">revised episode</a> we used Devise to add authentication to an application. In this episode we&rsquo;ll add OmniAuth support to this existing Devise setup so that users can authenticate through services like Twitter or Facebook.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1256/original/E235RI01.png" width="800" height="500" alt="Our blogging application."/>
+</div>
+
+<p>If you&rsquo;re unfamiliar with OmniAuth take a look at <a href="http://railscasts.com/episodes/241-simple-omniauth">episode 241</a> where we add it to an application from scratch as in this episode we&rsquo;ll concentrate more on the Devise-specific details.</p> 
+
+<h3>Adding Twitter Support</h3>
+
+<p>To authenticate through Twitter we&rsquo;ll need to visit the <a href="https://dev.twitter.com/">Twitter Developer site</a> and sign up our application. This will give us a consumer key and secret that we&rsquo;ll need to use in our Rails application and once we&rsquo;ve done this we can get started. The first step is to add the omniauth-twitter gem to the application&rsquo;s gemfile and then run bundle to install it.</p> 
+
+``` /Gemfile
+gem 'omniauth-twitter'
+```
+
+<p>Next we&rsquo;ll modify the Devise initializer file and configure OmniAuth here. There&rsquo;s a commented-out section of this file what we can modify and use. We&rsquo;ve stored our key and secret in environment variables so we&rsquo;ll use these here.</p>
+
+``` /config/initializiers/devise.rb
+config.omniauth :twitter, ENV["TWITTER_CONSUMER_KEY"], ENV["TWITTER_CONSUMER_SECRET"]
+```
+
+<p>Now that this is configured we&rsquo;ll need to add the omniauthable model to the devise method in our <code>User</code> model.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  devise :database_authenticatable, :registerable, :omniauthable,
+         :recoverable, :rememberable, :trackable, :validatable
+
+attr_accessible :email, :password, :password_confirmation, :remember_me, :username
+  
+  validates_presence_of :username
+  validates_uniqueness_of :username
+end
+```
+
+<p>When we restart the server and visit the sign-up page now we&rsquo;ll see that Devise has added a &ldquo;Sign in with Twitter&rdquo; link on this page and on the login page, too.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1257/original/E235RI02.png" width="800" height="500" alt="The signup form now has a link for signing in through Twitter."/>
+</div>
+
+<p>We want this link to be in the layout file so that it shows up on every page so we&rsquo;ll add a link there. This will point to the <code>user_omniauth_authorize_path</code>, which is a path that Devise sets up for us and we need to pass the name of the provider in as an argument.</p>
+
+``` /app/views/layouts/application.html.erb
+<div id="user_nav">
+  <% if user_signed_in? %>
+    Logged in as <strong><%= current_user.email %></strong>.
+    <%= link_to 'Edit profile', edit_user_registration_path %> |
+    <%= link_to "Logout", destroy_user_session_path, method: :delete %>
+  <% else %>
+    <%= link_to "Sign up", new_user_registration_path %> |
+    <%= link_to "Login", new_user_session_path %> |
+    <%= link_to "Sign in with Twitter", user_omniauth_authorize_path(:twitter) %>
+  <% end %>
+</div>
+```
+
+<p>When we reload the page now we&rsquo;ll see the new link and when we click it we&rsquo;ll be taken to the Twitter site where we can give authorize our application to access our account. After we do so we&rsquo;re redirected back to our account where we&rsquo;ll see an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1258/original/E235RI03.png" width="800" height="309" alt="We see an error when we try to sign in through Twitter."/>
+</div>
+
+<p>This happens because we need to create a controller to handle the OmniAuth callback. We&rsquo;ll do that now.</p>
+
+``` terminal
+$ rails g controller omniauth_callbacks
+```
+
+<p>Next we&rsquo;ll modify our routes file and tell Devise to use this controller in the <code>devise_for</code> call. We can do this by passing in a controllers option and setting <code>omniauth_callbacks</code>.</p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  devise_for :users, path_names: {sign_in: "login", sign_out: "logout"}, controllers: {omniauth_callbacks: "omniauth_callbacks"}
+
+  resources :articles
+  root to: 'articles#index'
+end
+```
+
+<p>This option might seem a little bit strange but what we&rsquo;re doing here is telling Devise not to use the Devise namespace for this controller. Next we&rsquo;ll add some actions to this controller to handle the callback.</p>
+
+``` /app/controllers/omniauth_callbacks_controller.rb
+class OmniauthCallbacksController < Devise::OmniauthCallbacksController
+  def all
+    raise request.env["omniauth.auth"].to_yaml
+  end
+  alias_method :twitter, :all
+end
+```
+
+<p>This controller needs to inherit from <code>Devise::OmniAuthCallbacksController</code> instead of the usual <code>ApplicationController</code> so that it has some extra features such as handling failures. We can define an action for each provider that we want to support but the logic for each different type of provider is pretty similar so instead of creating an action for each provider we create a single action called <code>all</code> and use <code>alias_method</code> to point each provider to this action. In all we have access to the usual OmniAuth hash of details and for now we&rsquo;ll just <code>raise</code> this to make sure that everything is working as it should be. When we try signing in through Twitter now that callback action is triggered and we&rsquo;ll see the contents of the hash.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1259/original/E235RI04.png" width="800" height="500" alt="The hash of information that is returned by OmniAuth."/>
+</div>
+
+<p>Instead of raising these details we&rsquo;ll need to either find or create a user that matches the hash. We&rsquo;ll do this using a new <code>from_omniauth</code> method that we&rsquo;ll write shortly.</p>
+
+```/app/controllers/omniauth_controller.rb
+class OmniauthCallbacksController < Devise::OmniauthCallbacksController
+  def all
+    user = User.from_omniauth(request.env["omniauth.auth"])
+  end
+  alias_method :twitter, :all
+end
+```
+
+<p>Before we write this method we&rsquo;ll generate a new migration file to add some OmniAuth details to the <code>users</code> table so that we can persist them.</p>
+
+``` terminal
+$ rails g migration add_omniauth_to_users provider uid
+$ rake db:migrate
+```
+
+<p>An alternative solution here is to create a separate authentication model and then store these credentials there. The advantage of this approach is that a user can then authenticate through multiple providers with a single account. This extra complexity isn&rsquo;t always necessary and we won&rsquo;t be covering this here but this option is worth considering if you want to support more than a single provider.</p>
+
+<p>Now we can write the from_omniauth method in the <code>User</code> model.</p>
+
+``` /app/models/user.rb
+def self.from_omniauth(auth)
+  where(auth.slice(:provider, :uid)).first_or_create do |user|
+    user.provider = auth.provider
+    user.uid = auth.uid
+    user.username = auth.info.nickname
+  end
+end
+```
+
+<p>Here we look for a user with a <code>provider</code> and <code>uid</code> that matches the details from the hash and if one isn&rsquo;t found we&rsquo;ll create one with the relevant attributes from the hash. We can now complete the sign-in process back in the controller we can complete the sign-in process for the user record that&rsquo;s returned.</p>
+
+``` /app/controllers/omniauth_callbacks_controller.rb
+class OmniauthCallbacksController < Devise::OmniauthCallbacksController
+  def all
+    user = User.from_omniauth(request.env["omniauth.auth"])
+    if user.persisted?
+      sign_in_and_redirect user, notice: "Signed in!"
+    else
+      redirect_to new_user_registration_url
+    end
+  end
+  alias_method :twitter, :all
+end
+```
+
+<p>There&rsquo;s a chance that the validations fail and that the user isn&rsquo;t created so we first check that the user has been persisted to the database. If they have then we can call a method that Devise provides called <code>sign_in_and_redirect</code> to sign them in. If the user wasn&rsquo;t created successfully we redirect them to the new user registration page so that they can complete the registration process and fix any validation errors.</p>
+
+<p>If we click the &ldquo;Sign in with Twitter&rdquo; link on the homepage now we&rsquo;re taken back to the callback controller and this brings us to the signup page as for some reason our user validations have failed. No validation error is shown, though, so the user has no idea as to what has gone wrong. We need a way to persist the user&rsquo;s attributes when the validations fail and we&rsquo;ll do this in the session. If we create a session variable whose name begins with <code>devise.</code> Devise will automatically clean it up for us so that we don&rsquo;t have to remove the session later. We create a session variable in the <code>OmniAuthCallbacksController</code> to store the user&rsquo;s attributes when user hasn&rsquo;t been persisted.</p>
+
+``` /app/controllers/omniauth_callbacks_controller.rb
+def all
+  user = User.from_omniauth(request.env["omniauth.auth"])
+  if user.persisted?
+    sign_in_and_redirect user, notice: "Signed in!"
+  else
+    session["devise.user_attributes"] = user.attributes
+    redirect_to new_user_registration_url
+  end
+end
+```
+
+<p>Now all we have to do is set these attributes back on the model and validate it on the sign-up form. Thankfully Devise has a hook for doing this in the <code>User</code> model. All we have to do is override a class method called <code>new_with_session</code> which takes a params hash and the session.</p>
+
+``` /app/models/user.rb
+def self.new_with_session(params, session)
+  if session["devise.user_attributes"]
+    new(session["devise.user_attributes"], without_protection: true) do |user|
+      user.attributes = params
+      user.valid?
+    end
+  else
+    super
+  end    
+end
+```
+
+<p>Here we check for the session variable that is set if the user wasn&rsquo;t persisted and if we find it we create a new <code>User</code> record based on the value of this variable. We don&rsquo;t  want to run this through mass-assignment protection as we already trust this hash so we use the <code>without_protection</code> option here. We then pass the user instance into a block and set its attributes based on the values in the params hash which contains the values entered in the form. Finally we validate the user to ensure that any validation errors are displayed.</p>
+
+<p>If the session variable doesn&rsquo;t exist we call super which will falls back to the normal Devise behaviour of creating a new User instance. When we click the &ldquo;Sign in with Twitter&rdquo; link now we&rsquo;re taken back to the signup form and we see the validation errors.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1260/original/E235RI05.png" width="800" height="500" alt="Signing in through Twitter shows validation errors."/>
+</div>
+
+<p>A password isn&rsquo;t required when a user signs in through Twitter so we&rsquo;ll fix this next. We can override a method on the <code>User</code> model called <code>password_required?</code> to do this. We&rsquo;ll modify this so that its default behaviour is only triggered if the provider is blank.</p>
+
+``` /app/models/user.rb
+def password_required?
+  super && provider.blank?
+end
+```
+
+<p>When we reload the page now we only see an error related to the email field. The password fields still show, however, so we&rsquo;ll hide them when they&rsquo;re not required. We do this inside one of the Devise templates that we generated in <a href="http://railscasts.com/episodes/209-introducing-devise">episode 209</a> by using <code>password_required?</code> to see if the password is required.</p>
+
+``` /app/views/devise/registrations/new.html.erb
+<h2>Sign up</h2>
+
+<%= form_for(resource, :as => resource_name, :url => registration_path(resource_name)) do |f| %>
+  <%= devise_error_messages! %>
+
+  <div class="field"><%= f.label :email %><br />
+  <%= f.email_field :email %></div>
+
+  <div class="field"><%= f.label :username %><br />
+  <%= f.email_field :username %></div>
+
+  <% if f.object.password_required? %>
+    <div class="field"><%= f.label :password %><br />
+    <%= f.password_field :password %></div>
+
+    <div class="field"><%= f.label :password_confirmation %><br />
+    <%= f.password_field :password_confirmation %></div>
+  <% end %>
+
+  <div class="field"><%= f.submit "Sign up" %></div>
+<% end %>
+
+<%= render "devise/shared/links" %>
+```
+
+<p>The password fields will now be hidden when we&rsquo;re logging in through Twitter. All we have left to fix is the email validation that shows. We could override the <code>email_required?</code> method like we did with the password but we&rsquo;ll leave this as it is for now and have the user enter their email address.</p> 
+
+<p>When we enter our email address now and submit the form we&rsquo;re successfully signed in to the site. If we log out then click the &ldquo;Sign in&rdquo; link again we&rsquo;ll be logged in automatically but we don&rsquo;t get a flash message telling us that we&rsquo;ve signed in. The <code>sign_in_and_redirect</code> method doesn&rsquo;t support the <code>notice</code> option so we&rsquo;ll need to set the flash message separately.</p>
+
+``` /app/controllers/omniauth_callbacks_controller.rb
+class OmniauthCallbacksController < Devise::OmniauthCallbacksController
+  def all
+    user = User.from_omniauth(request.env["omniauth.auth"])
+    if user.persisted?
+      flash.notice = "Signed in!"
+      sign_in_and_redirect user
+    else
+      session["devise.user_attributes"] = user.attributes
+      redirect_to new_user_registration_url
+    end
+  end
+  alias_method :twitter, :all
+end
+```
+
+<p>Now when we log in the flash message is displayed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1261/original/E235RI06.png" width="800" height="500" alt="We can now sign in through Twitter."/>
+</div>
+
+<p>There&rsquo;s one problem remaining with our application. When a user edits their profile our application requires them to enter their current password but users who have signed up through Twitter won&rsquo;t have a password to enter here. We can change this behaviour in the <code>User</code> model by overriding the <code>update_with_password</code> method.</p> 
+
+``` /app/models/user.rb
+def update_with_password(params, *options)
+  if encrypted_password.blank?
+    update_attributes(params, *options)
+  else
+    super
+  end
+end
+```
+
+<p>Here we check to see if the user has a password and if not we update the attributes directly. If they do have a password we&rsquo;ll fall back to the default behaviour of checking that it matches. We&rsquo;ll also update the template to hide the field for the current password if the user doesn&rsquo;t need to enter it.</p>
+
+``` /app/views/devise/registrations/edit.html.erb
+<% if f.object.encrypted_password.present? %>
+  <div class="field"><%= f.label :current_password %> <i>(we need your current password to confirm your changes)</i><br />
+  <%= f.password_field :current_password %></div>
+<% end %>
+```
+
+<p>Now when we edit our profile we can update our details without entering a password.</p>

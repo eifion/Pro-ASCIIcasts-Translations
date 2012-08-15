@@ -1,0 +1,263 @@
+<p>Virtual attributes are something that can be used in almost any Rails application. Sometimes we want to make changes to a user interface that don&rsquo;t map directly to database fields and as an example we have a form below for editing a product.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1265/original/E016RI01.png" width="800" height="500" alt="The form for editing a product."/>
+</div>
+
+<p>This form currently has four fields and these map directly to fields in the database. If we look at the schema file we&rsquo;ll see the columns that the <code>products</code> table has.</p>
+
+``` /db/schema.rb
+create_table "products", :force => true do |t|
+  t.string   "name"
+  t.integer  "price_in_cents"
+  t.datetime "released_at"
+  t.integer  "category_id"
+  t.datetime "created_at",     :null => false
+  t.datetime "updated_at",     :null => false
+end
+```
+
+<p>The table has four columns (excluding the automatically-generated <code>created_at</code> and <code>updated_at</code> fields) and these are mapped directly to fields in our form. This approach doesn&rsquo;t always lead to the best user experience, however. For example the price is stored in cents but it&rsquo;s more convenient for the user to enter it in dollars. We can use virtual attributes to do this and we&rsquo;ll show you how in this episode.</p>
+
+<h3>Adding a Virtual Attribute For a Price</h3>
+
+<p>The view template for the form renders the <code>price_in_cents</code> field like this.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :price_in_cents %><br />
+  <%= f.text_field :price_in_cents %>
+</div>
+```
+
+<p>We&rsquo;ll replace it with a virtual <code>price_in_dollars</code> field.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :price_in_dollars %><br />
+  <%= f.text_field :price_in_dollars %>
+</div>
+```
+
+<p>In the <code>Product</code> model we&rsquo;ll need to add getter and setter methods to handle the conversion between dollars and cents.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :price_in_dollars, :released_at, :category_id
+  belongs_to :category
+  has_many :taggings
+  has_many :tags, through: :taggings
+  
+  def price_in_dollars
+    price_in_cents.to_d / 100 if price_in_cents
+  end
+  
+  def price_in_dollars=(dollars)
+    self.price_in_cents = dollars.to_d * 100 if dollars.present?
+  end
+end
+```
+
+<p>As we&rsquo;ve changed a form field we&rsquo;ve also changed the fields in <code>attr_accessible</code> to match. When we reload the page now the product has its price displayed in dollars.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1266/original/E016RI02.png" width="800" height="500" alt="The price is now displayed in dollars."/>
+</div>
+
+<p>We can now enter a different amount in dollars in this form ad the product&rsquo;s price will be updated correctly.</p> 
+
+<h3>A Better Date Field</h3>
+
+<p>With just a couple of methods tucked away in the model we&rsquo;ve improved the user interface so next we&rsquo;ll look at the Release Date &amp; Time field.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :released_at, "Release Date & Time" %><br />
+  <%= f.datetime_select :released_at %>
+</div>
+```
+
+<p>Using select menus to set the time isn&rsquo;t the most efficient way to enter a time value so we&rsquo;ll replace this with a text field that we&rsquo;ll call <code>released_at_text</code>.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :released_at_text, "Release Date & Time" %><br />
+  <%= f.text_field :released_at_text %>
+</div>
+```
+
+<p>Again, we&rsquo;ll need to add getter and setter methods in the model and update the fields in <code>attr_accessible</code>.</p>
+
+``` /app/models/product.rb
+attr_accessible :name, :price_in_dollars, :released_at_text, :category_id
+
+def released_at_text
+  released_at.try(:strftime, "%Y-%m-%d %H:%M:%S")
+end
+  
+def released_at_text=(time)
+  self.released_at = Time.zone.parse(time) if time.present?
+end
+```
+
+<p>We use <code>strftime</code> to convert the time into a string here but you can handle this conversion however you like. There&rsquo;s a chance that this attribute may be <code>nil</code> so we use <code>try</code> so that the attribute returns <code>nil</code> if this is the case. The setter accepts the time value that was typed in as a string and we want to convert this to a datetime value so we use <code>Time.parse</code> here. (It&rsquo;s important to use <code>Time.zone</code> so that Rails&rsquo; active timezone is taken into consideration.) Note that we only do this if a time value is present and that we&rsquo;ve changed the attributes listed in <code>attr_accessible</code> again to reflect our new field. When we reload the page now the release time is shown in a text field displayed in the format that we specified in the getter method.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1267/original/E016RI03.png" width="800" height="500" alt="The release date is now displayed in a text field."/>
+</div>
+
+<p>We aren&rsquo;t restricted to this format when we set the time. We could enter, say, &ldquo;March 22 8 AM&rdquo; and this will be parsed correctly and the time set. If we want to go further with the string to time conversion we can use the <a href="https://github.com/mojombo/chronic/">Chronic gem</a>. This allows users to enter relative values such as &ldquo;tomorrow&rdquo; or &ldquo;yesterday at 4:00&rdquo;. We won&rsquo;t use this here but it would be quite easy to add this functionality to our application.</p>
+
+<p>One issue with our current datetime parser is that it doesn&rsquo;t like out-of-range values. If we try to set an invalid period this will raise an &ldquo;invalid date&rdquo; exception. To fix this we can <code>rescue</code> from the error in the setter and make the <code>released_at</code> field blank.</p>
+
+``` /app/models/product.rb
+def released_at_text=(time)
+  self.released_at = Time.zone.parse(time) if time.present?
+rescue ArgumentError
+  self.released_at = nil
+end
+```
+
+<p>It&rsquo;s a good idea to add a validation to ensure the <code>released_at</code> attribute is set. This way the user has a chance to correct it if it is formatted incorrectly.</p>
+
+``` /app/models/product.rb
+validates_presence_of :released_at
+```
+
+<p>If we enter an invalid date value now we&rsquo;ll see a validation error.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1268/original/E016RI04.png" width="800" height="500" alt="A missing date will now show an error."/>
+</div>
+
+<p>This isn&rsquo;t the best use experience as the invalid date the user entered isn&rsquo;t displayed so that it can be fixed. This is a fundamental issue with how we&rsquo;re handling this virtual attribute. The time value that&rsquo;s entered by the user is lost by the time it reaches the validations, but for the best user experience it should be available. To fix this we need to change the order in which things are done. Instead of having a setter method containing the parsing logic we&rsquo;ll set an instance variable through an <code>attr_writer</code>. We can then check this variable in the <code>released_at_text</code> method to see if it&rsquo;s set or fall back to the actual <code>released_at</code> datetime. The setter logic can now happen through a callback after the validations take place so we use a <code>before_save</code> callback in the model and call <code>save_released_at_text</code> after the model is saved. Here we set the released_at value based on the instance variable. Rescuing from the <code>ArgumentError</code> now fits better in the validation step instead of in the callback so instead of using <code>validates_presence_of</code> we write a custom validator that checks that the <code>@released_at_text</code> value is present and tries to parse it if it is. If not an appropriate validation message is shown.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :price_in_dollars, :released_at_text, :category_id
+  belongs_to :category
+  has_many :taggings
+  has_many :tags, through: :taggings
+  
+  attr_writer :released_at_text
+  before_save :save_released_at_text  
+  validate :check_released_at_text
+  
+  # price_in_dollars fields omitted
+
+  def released_at_text
+    @released_at_text || released_at.try(:strftime, "%Y-%m-%d %H:%M:%S")
+  end
+  
+  def save_released_at_text
+    self.released_at = Time.zone.parse(@released_at_text) if @released_at_text.present?
+  end
+  
+  def check_released_at_text
+    if  @released_at_text.present? && Time.zone.parse(@released_at_text).nil?
+      errors.add :released_at_text, "cannot be parsed"
+    end
+  rescue ArgumentError
+    errors.add :released_at_text, "is out of range"   
+  end
+end
+```
+
+<p>Now when we try to set an invalid date we&rsquo;ll see an appropriate error message.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1269/original/E016RI05.png" width="800" height="500" alt="Invalid dates now show an error."/>
+</div>
+
+<p>Similarly if we enter a date that can&rsquo;t be parsed we&rsquo;ll see an error message telling us that. This solution isn&rsquo;t nearly as clean as simple getter and setter methods but if we need to persist invalid data then this level of complexity may be necessary.</p> 
+
+<h3>Associations</h3>
+
+<p>Next we&rsquo;ll show you a couple of ways that virtual attributes can help with associations. A user can set the category that a product belongs to but we want to allow them to enter a new category in the same form.  To do this we&rsquo;ll add a text field to the form called <code>new_category</code>.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :category_id %><br />
+  <%= f.collection_select :category_id, Category.order(:name), :id, :name %>
+  or create one:
+  <%= f.text_field :new_category %>
+</div>
+```
+
+<p>In the <code>Product</code> model we need to add this field as a virtual attribute. We&rsquo;ll do this with <code>attr_accessor</code> which will automatically create getter and setter methods for us and store the value in an instance variable. Also we&rsquo;ll need to add the new field in the <code>attr_accessible</code> list so that it can be set through mass-assignment.</p>
+
+``` /app/models/product.rb
+attr_accessible :name, :price_in_dollars, :released_at_text, :category_id, :new_category
+
+attr_accessor :new_category
+```
+
+<p>Reloading the page now will show the new field in the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1270/original/E016RI06.png" width="800" height="500" alt="The user can now enter a new category."/>
+</div>
+
+<p>Next we need to create a callback so that when a product is saved it creates the category to go with it. We&rsquo;ll write another <code>before_save</code> callback called <code>create_category</code> to do this. This will set the product&rsquo;s <code>category</code> to a new <code>Category</code> based in the value in the text field if a value has been entered there.</p> 
+
+``` /app/models/product.rb
+before_save :create_category
+
+def create_category
+  self.category = Category.create(name: new_category) if new_category.present?
+end
+```
+
+<p>We&rsquo;re assuming here that the category is valid but if there&rsquo;s a possibility that it isn&rsquo;t we should add a custom validator like we did with the release date field. This way an error will be triggered before the new category is created. We&rsquo;ll put one of the products into a new &ldquo;Board Games&rdquo; category now.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1271/original/E016RI07.png" width="800" height="500" alt="The item now belongs in a new category."/>
+</div>
+
+<p>This works but what if we have a many-to-many relationship that we want to set through the form? We already have such a relationship set up in the <code>Product</code> model: a <code>Product</code> has many <code>Tags</code> through a join model called <code>Taggings</code>. The product page shown above lists the tags that a product belongs to but we currently have no way to edit the tags through the form. We&rsquo;ll add a text field for editing the products tags and virtual attributes can help us to do this. First we&rsquo;ll add a new text field to the form.</p>
+
+``` /app/views/products/_forms.html.erb
+<div class="field">
+  <%= f.label :tag_names, "Tags (space separated)" %><br />
+  <%= f.text_field :tag_names %>
+</div>
+```
+
+<p>Again we&rsquo;ll add the new field to the <code>attr_accessible</code> list in the model and we&rsquo;ll need getter and setter methods. We&rsquo;ll use <code>attr_writer</code> to create the setter method but we need to customize the getter method.</p> 
+
+``` /app/models/product.rb
+attr_accessible :name, :price_in_dollars, :released_at_text, :category_id, :new_category, :tag_names
+
+attr_writer :tag_names
+
+def tag_names
+  @tag_names || tags.pluck(:name).join(' ')
+end
+```
+
+<p>This getter returns either the tag names that the user set or, if these aren&rsquo;t set, the product&rsquo;s current tags&rsquo; <code>name</code> attributes joined by a space. We use Rails 3.2&rsquo;s new <code>pluck</code> method to get these. When we reload the page now we&rsquo;ll see the new text field containing the product&rsquo;s tags. When we change one of the names in the tag list now and submit the form the products tags will be updated.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1272/original/E016RI08.png" width="800" height="500" alt="Adding tags to a product."/>
+</div>
+
+<p>Any changes to this field need to be picked up in a callback. We&rsquo;ll create another <code>before_save</code> callback called <code>save_tag_names</code>.</p>
+
+``` /app/models/product.rb
+before_save :save_tag_names
+
+def save_tag_names
+  if @tag_names
+    self.tags = @tag_names.split.map { |name| Tag.where(name: name).first_or_create! }
+  end
+end
+```
+
+<p>This method checks to see if the tag names are set and, if so, will set the tags for the product based on the names in the text field. We split the text field&rsquo;s value on the space character and then for each tag name we find or create a new tag with that name.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1273/original/E016RI09.png" width="800" height="500" alt="The tags for the product have now been updated."/>
+</div>
+
+<p>As we&rsquo;ve shown here virtual attributes are quite powerful and there are many ways we can use them. Things get a little tricky when we have to deal with validations but this complexity can be kept within the model layer. On a similar note if you&rsquo;re interested in adding autocompletion behaviour to association fields take a look at <a href="http://railscasts.com/episodes/258-token-fields">episodes 258</a> and <a href="http://railscasts.com/episodes/102-auto-complete-association">102</a>.</p>

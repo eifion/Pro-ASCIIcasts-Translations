@@ -1,0 +1,412 @@
+<p>If you ever need to work with concurrency in Ruby it&rsquo;s worth taking a look at <a href="http://celluloid.io/">Celluloid</a> which puts an object-oriented spin on multi-threaded development. With it we don&rsquo;t need to worry about managing threads and mutexes but can instead focus on the objects themselves.</p>
+
+<h3>Launching Rockets With Celluloid</h3>
+
+<p>Celluloid comes as a gem and is installed in the usual way.</p>
+
+```  terminal
+$ gem install celluloid
+```
+
+<p>We&rsquo;ll demonstrate Celluloid in a simple Ruby script that simulates a rocket launch. Note that this code sleeps for a second during each step of the countdown.</p>
+
+``` rocket.rb
+class Rocket
+  def launch
+    3.downto(1) do |n|
+      puts "#{n}..."
+      sleep 1
+    end
+    puts "Blast off!"  
+  end
+end
+```
+
+<p>We&rsquo;ll run this code in <code>irb</code> to see what it does.</p>
+
+``` irb
+>> Rocket.new.launch
+3...
+2...
+1...
+Blast off!
+=> nil
+>>
+```
+
+<p>This works as we expect but we don&rsquo;t get the prompt back until the rocket has launched. Launching multiple rockets at the same time isn&rsquo;t really possible as each one will count down separately. We could use threads to give us the ability to launch more than one rocket at once but instead we&rsquo;ll use Celluloid. To do this we require <code>celluloid</code> in our file and then into any class that we want to add concurrency to, like this:</p>
+
+``` rocket.rb
+require 'celluloid'
+
+class Rocket
+  include Celluloid
+  
+  def launch
+    3.downto(1) do |n|
+      puts "#{n}..."
+      sleep 1
+    end
+    puts "Blast off!"  
+  end
+end
+```
+
+<p>If we run this code now it behaves just like it did before so what does Celluloid give us? Well, now we can call any method in our class with an exclamation mark to have Celluloid trigger it asynchronously. If we launch a rocket with <code>launch!</code> we get the prompt back almost instantly but the rocket still counts down and blasts off.</p>
+
+``` irb
+>> r = Rocket.new
+=> #<Celluloid::Actor(Rocket:0x3fea5193ba90)>
+>> r.launch!
+=> nil
+3...
+>> 2...
+1...
+Blast off!
+```
+
+<p>The way this works is that each instance of a class that includes <code>Celluloid</code> exists in its own thread. If we list out the threads in irb with <code>Thread.list.count</code> we&rsquo;ll see that we have three threads. When we make a new rocket this creates a new thread.</p>
+
+``` irb
+>> Thread.list.count
+=> 3
+>> r2 = Rocket.new
+=> #<Celluloid::Actor(Rocket:0x3fea5194296c)>
+>> Thread.list.count
+=> 4
+```
+
+<p>We can now launch multiple rockets asynchronously without any problems.</p>
+
+``` irb
+>> r.launch!; r2.launch!
+=> nil
+3...>> 
+3...
+2...
+2...
+1...
+1...
+Blast off!
+Blast off!
+```
+
+<p>When we inspect a rocket object the output looks different from what we expect.</p>
+
+``` irb
+?> r.inspect
+=> "#<Celluloid::Actor(Rocket:0x3fea5193ba90)>"
+```
+
+<p>What we have is an instance of an <code>Actor</code> proxy which delegates its method calls to the <code>Rocket</code> instance. An <code>Actor</code> has the ability to be dead or alive and we can check this by calling <code>alive?</code> on it. To kill an actor we call <code>terminate</code> on it. A dead actor cannot receive any calls so if we call <code>launch!</code> on a dead rocket this will raise an exception. An actor can also die if it raises an exception. To demonstrate this we&rsquo;ll raise an exception in the Rocket class&rsquo;s <code>launch!</code> method.</p> 
+
+``` rocket.rb
+require 'celluloid'
+
+class Rocket
+  include Celluloid
+  
+  def launch
+    3.downto(1) do |n|
+      puts "#{n}..."
+      sleep 1
+    end
+    puts "Blast off!"  
+  end
+end
+```
+
+<p>If we create a new <code>Rocket</code> now and call <code>launch!</code> on it that exception will be raised and the actor will be dead.</p>
+
+``` irb
+>> r = Rocket.new
+=> #<Celluloid::Actor(Rocket:0x3ff8a4468afc)>
+>> r.launch!
+E, [2012-07-30T19:31:55.650324 #81385] ERROR -- : Rocket crashed!
+RuntimeError: Houston, we have a problem.
+# Exception code omitted.
+=> nil
+>> r.alive?
+=> false
+```
+
+<p>When an exception is raised asynchronously like this it won&rsquo;t interrupt the main thread or any of the other actors, these will happily continue as if nothing had gone wrong. Only the one actor is affected and marked as dead. If we want other actors to die when one does Celluloid supports linking actors together and if any linked actor dies, all the actors it&rsquo;s linked to die with it. To demonstrate this we&rsquo;ll create a new Launcher class that also includes <code>Celluloid</code> and which can launch rockets.</p>
+
+``` rocket.rb
+class Launcher
+  include Celluloid
+  
+  def launch_rocket
+    Rocket.new_link.launch!
+  end
+end
+```
+
+<p>We want to link a rocket with its launcher and we do this by calling <code>new_link</code> rather than <code>new</code> when we launch a rocket. If we open up irb now and create a new Launcher we get an exception when we try to launch a rocket.</p>
+
+``` irb
+>> l = Launcher.new
+=> #<Celluloid::Actor(Launcher:0x3fd4a9928480)>
+>> l.launch_rocket
+=> 
+>> E, [2012-07-30T20:41:56.454178 #81712] ERROR -- : Rocket crashed!
+RuntimeError: Houston, we have a problem.
+```
+
+<p>Both the <code>Rocket</code> and the <code>Launcher</code> will be dead now as they were linked. We don’t want our launcher to die but we can use this behaviour to recover gracefully when a rocket dies by calling <code>trap_exit</code> and passing a method that is triggered when a linked actor dies.</p>
+
+``` rocket.rb
+class Launcher
+  include Celluloid
+  trap_exit :recover
+  
+  def launch_rocket
+    Rocket.new_link.launch!
+  end
+  
+  def recover(actor, reason)
+    puts "Recovering"
+  end
+end
+```
+
+<p>This method is passed an actor and a failure reason, which in this case will be the exception. When we try launching a rocket through our launcher now it will recover gracefully so that our launcher will still be alive after its rocket crashes and dies. This is useful when we&rsquo;re building fault-tolerant systems and we can simulate this in our code by altering our <code>Rocket</code> class so that if only has a chance of failing during its countdown.</p>
+
+``` rocket.rb
+def launch
+  3.downto(1) do |n|
+    puts "#{n}..."
+    sleep 1
+    raise "Houston, we have a problem." if [true, false].sample
+  end
+  puts "Blast off!"  
+end
+```
+
+<p>Instead of simply recovering in the launcher we&rsquo;ll launch a new rocket instead.</p>
+
+``` rocket.rb
+class Launcher
+  include Celluloid
+  trap_exit :relaunch
+  
+  def launch_rocket
+    Rocket.new_link.launch!
+  end
+  
+  def relaunch(actor, reason)
+    launch_rocket
+  end
+end
+```
+
+<p>Now our launcher will retry until a rocket is successfully launched.</p>
+
+``` irb
+>> l = Launcher.new
+=> #<Celluloid::Actor(Launcher:0x3fe69c8a0328)>
+>> l.launch_rocket
+3...
+=> nil
+>> E, [2012-07-30T21:24:03.504697 #81972] ERROR -- : Rocket crashed!
+RuntimeError: Houston, we have a problem.
+/Users/eifion/code/rocket.rb:10:in `block in launch'
+/Users/eifion/code/rocket.rb:7:in `downto'
+/Users/eifion/code/rocket.rb:7:in `launch'
+/Users/eifion/.rvm/gems/ruby-1.9.3-p194/gems/celluloid-0.11.1/lib/celluloid/calls.rb:99:in `dispatch'
+/Users/eifion/.rvm/gems/ruby-1.9.3-p194/gems/celluloid-0.11.1/lib/celluloid/actor.rb:240:in `block in handle_message'
+/Users/eifion/.rvm/gems/ruby-1.9.3-p194/gems/celluloid-0.11.1/lib/celluloid/task.rb:45:in `block in initialize'
+3...
+2...
+1...
+Blast off!
+```
+
+<p>If we take a look at our thread count we&rsquo;ll see that there are only four threads even though we&rsquo;ve created far more rockets. This is because Celluloid doesn&rsquo;t let a dead actor hang around using up a thread. If we create a large number of rockets at the same time, say 100, these will all be live actors and each takes up a separate thread.</p>
+
+``` irb
+?> Thread.list.size
+=> 4
+>> 100.times { Rocket.new }
+=> 100
+>> Thread.list.size
+=> 104
+```
+
+<p>This is something that we&rsquo;ll need to keep in mind. Once we&rsquo;ve finished with a Celluloid object we should terminate it manually instead of relying on garbage collection.</p> 
+
+<h3>Supervisors</h3>
+
+<p>Getting back to fault-tolerant systems Celluloid offers something called <a href="https://github.com/celluloid/celluloid/wiki/Supervisors">Supervisors</a> which will automatically restart an actor if it dies. To demonstrate these we&rsquo;ll give a rocket the ability to automatically launch when it&rsquo;s instantiated by adding an initialize method with an autolaunch argument.</p>
+
+``` rocket.rb
+def initialize(autolaunch = false)
+  launch! if autolaunch
+end
+```
+
+<p>We can now create a new Rocket and tell it to autolaunch. Of course this might crash so instead of just calling new we&rsquo;ll call <code>supervise</code> with the same arguments. When we do this Celluloid will set up a supervisor which will restart it if it crashes.</p>
+
+``` irb
+>> Rocket.supervise(true)
+```
+
+<p>When we run this a couple of rockets crash but eventually one launches successfully. This supervisor has essentially duplicated the behaviour of our launcher, but this is built into Celluloid.</p>
+
+<h3>A Different Use For Celluloid</h3>
+
+<p>We&rsquo;ll shift gears now and focus on an example that&rsquo;s a little more practical than launching rockets. Instead we&rsquo;ll look at a feed counting script.</p>
+
+``` /feed_counter.rb
+require 'rss'
+require 'open-uri'
+
+class FeedCounter
+  def initialize(url)
+    @url = url
+  end
+  
+  def count
+    open(@url) do |f|
+      rss = RSS::Parser.parse(f.read, false)
+      count = rss.items.size
+      puts "#{count} in #{@url}"
+      count
+    end
+  end
+end
+
+counts = $*.map { |url| FeedCounter.new(url).count }
+total = counts.inject(:+)
+puts "#{total} total" if total
+```
+
+<p>The file takes a list of RSS feed URLs and for each one makes a new <code>FeedCounter</code> instance, passing in that URL then calling count on it to count the number of items in the feed. This count method parses the feed, counts the number of items in it and prints the count out. Finally the scripts sums up the counts from each feed and prints out the total. We&rsquo;ll run this script now and pass in a list of RSS feed URLs.</p>
+
+``` terminal
+$ ruby feed_counter.rb http://rss.cnn.com/rss/cnn_topstories.rss http://feeds.feedburner.com/railscasts http://stackoverflow.com/feeds
+56 in http://rss.cnn.com/rss/cnn_topstories.rss
+328 in http://feeds.feedburner.com/railscasts
+30 in http://stackoverflow.com/feeds
+414 total
+```
+
+<p>The script fetches each feed one at a time but it would perform much better if it fetched the feeds concurrently so we&rsquo;ll use Celluloid to do this. We&rsquo;ll require Celluloid in the file and include it in the <code>FeedCounter</code> class.</p> 
+
+``` /feed_counter.rb
+require 'rss'
+require 'open-uri'
+require 'celluloid'
+
+class FeedCounter
+  include Celluloid
+  
+  def initialize(url)
+    @url = url
+  end
+  
+  def count
+    open(@url) do |f|
+      rss = RSS::Parser.parse(f.read, false)
+      count = rss.items.size
+      puts "#{count} in #{@url}"
+      count
+    end
+  end
+end
+
+counts = $*.map { |url| FeedCounter.new(url).count }
+total = counts.inject(:+)
+puts "#{total} total" if total
+```
+
+<p>To make the call to count asynchronous we can add an exclamation mark to it. Doing this will make it return <code>nil</code> but we need to return the number of feeds so that we can add it up for the total. Celluloid has a feature called Futures that can help here and we&rsquo;ll demonstrate how it works in irb.</p>
+
+``` irb
+>> f = FeedCounter.new("http://feeds.feedburner.com/railscasts")
+=> #<Celluloid::Actor(FeedCounter:0x3fd83219a218) @url="http://feeds.feedburner.com/railscasts">
+>> future = f.future(:count)
+=> #<Celluloid::Future:0x007fb06432b948>
+>> 328 in http://feeds.feedburner.com/railscasts
+
+?> future.value
+=> 328
+```
+
+<p>First we make a new <code>FeedCounter</code> object with a given URL. We then call <code>future</code> on this object, which is a method that Celluloid provides, and pass it the name of the method that we want to trigger, in this case <code>count</code>. This returns a <code>Future</code> object and triggers count asynchronously which we see the output from. We can call value on this object to get the value that the method returned.</p>
+
+<p>This means that our script can do something else while it is parsing an RSS feed and fetch the count value at a later time. If we call <code>future.value</code> before the asynchronous method has completed it will wait until it completes so that it can return the value. We&rsquo;ll make the changes necessary to add concurrency to our script now. Instead of calling count directly we&rsquo;ll use <code>future</code> to call it asynchronously. This will return an array of <code>Future</code> objects which we&rsquo;ll grab the values from to calculate the total.</p>
+
+``` feed_counter.rb
+require 'rss'
+require 'open-uri'
+require 'celluloid'
+
+class FeedCounter
+  include Celluloid
+  
+  def initialize(url)
+    @url = url
+  end
+  
+  def count
+    open(@url) do |f|
+      rss = RSS::Parser.parse(f.read, false)
+      count = rss.items.size
+      puts "#{count} in #{@url}"
+      count
+    end
+  end
+end
+
+futures = $*.map { |url| FeedCounter.new(url).future(:count) }
+total = futures.map(&:value).inject(:+)
+puts "#{total} total" if total
+```
+
+<p>Our script will now run much more quickly as it fetches each feed asynchronously.</p>
+
+``` terminal
+$ ruby feed_counter.rb http://rss.cnn.com/rss/cnn_topstories.rss http://feeds.feedburner.com/railscasts http://stackoverflow.com/feeds
+30 in http://stackoverflow.com/feeds
+57 in http://rss.cnn.com/rss/cnn_topstories.rss
+328 in http://feeds.feedburner.com/railscasts
+415 total
+I, [2012-07-31T20:09:23.962723 #87003]  INFO -- : Terminating 4 actors...
+I, [2012-07-31T20:09:23.963616 #87003]  INFO -- : Shutdown completed cleanly
+```
+
+<h3>Pools</h3>
+
+<p>If we passed this script hundreds of feeds it would currently try to download and parse them all at the same time which isn&rsquo;t the best thing to do. Celluloid allows us to set up a pool of actors. By using this we can throw as much work as we want at it and it will only process a job when an actor is available to do so. This is also fault-tolerant so that if an actor crashes a new one will automatically be started up. For this to work we need to rearrange our code a little. Instead of initializing a FeedCounter with a URL we&rsquo;ll pass it in to the count method so that it becomes a local variable instead of an instance variable. This way all feed counters will be the same so now pass each URL into the call to future. We can now set up a pool of feed counters by calling FeedCounter.pool and instead of calling future on a FeedCounter object we can call it on the pool.</p>
+
+``` feed_counter.rb
+require 'rss'
+require 'open-uri'
+require 'celluloid'
+
+class FeedCounter
+  include Celluloid
+  
+  def initialize
+  end
+  
+  def count(url)
+    open(url) do |f|
+      rss = RSS::Parser.parse(f.read, false)
+      count = rss.items.size
+      puts "#{count} in #{@url}"
+      count
+    end
+  end
+end
+
+pool = FeedCounter.pool(size:6)
+futures = $*.map { |url| pool.new.future(:count, url) }
+total = futures.map(&:value).inject(:+)
+puts "#{total} total" if total
+```
+
+<p>The number of workers in a pool defaults to the number of cores on our machine, but we can pass a size option to override this, as we&rsquo;ve done here. If we run this script now and pass it a large number of feeds it will only process up to six at a time.</p> 
+
+<p>Celluloid is an impressive solution for handling concurrency. We haven&rsquo;t had to change much in our script to make it concurrent and our script would be much more complex if we had to deal with threads and mutexes directly. There&rsquo;s much more to it than we&rsquo;ve covered here and it&rsquo;s worth reading through the wiki to see what&rsquo;s available. One feature we haven&rsquo;t covered is Timers3 which give us the ability to trigger code in the future. The other pages that are worth reading are the ones on Frequently Asked Questions, Blocks, Gotchas and Thread Safety Notes. For a real-life example of Celluloid in action take a look a Sidekiq which was covered in the previous episode, specifically the manager, fetcher and processor classes. Each of these uses Celluloid.</p>
