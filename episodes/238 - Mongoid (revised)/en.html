@@ -1,0 +1,217 @@
+<p>If you&rsquo;re looking for a NoSQL database option for a Rails application, <a href="http://mongoid.org/en/mongoid/index.html">Mongoid</a> is an excellent choice. With version 3 recently released it&rsquo;s now better than ever and in this episode we&rsquo;ll cover its basics while building a new Rails application.</p>
+
+<h3>Installing MongoDB and Mongoid</h3>
+
+<p>First we need to install the <a href="http://www.mongodb.org/">MongoDB database</a>. Its website has installation instructions for a number of platforms, but if you&rsquo;re running Mac OS X the easiest way to install it is to use Homebrew3. With it we can install MongoDB by running</p>
+
+``` terminal
+$ brew install mongodb
+```
+
+<p>This will download and install MongoDB. When it completes it provides some instructions for starting it up. We&rsquo;ll use the following command to start it manually.</p>
+
+``` terminal
+$ mongod run --config /usr/local/etc/mongod.conf
+```
+
+<p>We can test that the database is up and running by visiting <code>http://localhost:28017</code> where we should see MongoDB&rsquo;s Web interface.</p>
+
+<h3>Creating a Rails Application With Mongoid</h3>
+
+<p>Now that we have MongoDB up and running we&rsquo;ll create a new Rails application called <code>store</code>. As we want to use Mongoid instead of ActiveRecord we&rsquo;ll use the <code>skip-active-record</code> option so that it doesn&rsquo;t load the framework or generate files such as the database configuration file.</p>
+
+``` terminal
+$ rails new store --skip-active-record
+```
+
+<p>Next we&rsquo;ll add the Mongoid gem to the gemfile. To make sure that we&rsquo;re running the latest version we&rsquo;ll specify the version number and, as ever, we&rsquo;ll need to run bundle afterwards to install it.</p>
+
+``` /Gemfile
+gem 'mongoid', '~>3.0.4'
+```
+
+<p>This gem provides a generator that we can use to generate a configuration file.</p>
+
+``` terminal
+$ rails g mongoid:config
+```
+
+<p>We&rsquo;ll leave the config options at their defaults but the file is well commented and it&rsquo;s worth reading through it to see all of the options we can set. Next we&rsquo;ll generate the scaffolding for a <code>Product</code> resource with <code>name</code> and <code>price</code> attributes. Note that the price field has a type of <code>big_decimal</code> as this is the correct type for MongoDB.</p>
+
+``` terminal
+$ rails g scaffold product name price:big_decimal
+```
+
+<p>Mongoid overrides the model generator and this custom generator is used when we generate our model. If we look at the model file we&rsquo;ll see how a Mongoid model looks. This is a simple Ruby class that includes <code>Mongoid::Document</code> and which calls field for each attribute we want in our model.</p>
+
+``` /app/models/product.rb
+class Product
+  include Mongoid::Document
+  field :name, type: String
+  field :price, type: BigDecimal
+end
+```
+
+<p>If we visit our Rails app we&rsquo;ll see that the scaffolding that&rsquo;s generated is fully-functional. We can create new products and they&rsquo;ll be saved to the database. 
+There&rsquo;s no need to run any migrations or set up a database.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1287/original/E238I01.png" width="800" height="400" alt="The scaffolding works just as it would with ActiveRecord."/>
+</div>
+
+<h3>Altering a Model</h3>
+
+<p>One thing that&rsquo;s good about working with a schemaless database is its flexibility. If we want to keep track of when each product was released we only need to add another call to field.</p>
+
+``` /app/models/product.rb
+class Product
+  include Mongoid::Document
+  field :name, type: String
+  field :price, type: BigDecimal
+  field :released_on, type: Date
+end
+```
+
+<p>To see this field being used we&rsquo;ll need to add a <code>released_on</code> field to the form.</p>
+
+``` /app/views/products/_form.html.erb
+<div class="field">
+  <%= f.label :released_on %><br />
+  <%= f.text_field :released_on %>
+</div>
+```
+
+<p>We&rsquo;ve used a text field here as if we try to use a <code>date_select</code> we&rsquo;ll run into issues with Mongoid. We need to add a module to the model to get <code>date_select</code> working and the documentation has details on how to do this. When we edit a product now we&rsquo;ll have a new text field for the date and if we add a date to a product it will be persisted to the database. Again there&rsquo;s no need for any migrations.</p>
+
+<h3>Adding Validations</h3>
+
+<p>Mongoid uses ActiveModel so much of what we know from ActiveRecord will work here. We can use <code>attr_accessible</code> to define the fields that can be set through mass-assignment and use validations like we would if we were using ActiveRecord.</p>
+
+``` /app/models/product.rb
+class Product
+  include Mongoid::Document
+  field :name, type: String
+  field :price, type: BigDecimal
+  field :released_on, type: Date
+  
+  attr_accessible :name, :price, :released_on
+  validates_presence_of :name
+end
+```
+
+<p>If we update a product now and leave the name blank we&rsquo;ll see an error message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1288/original/E238I02.png" width="800" height="400" alt="Validations work just as they would with ActiveRecord, too."/>
+</div>
+
+<h3>Querying MongoDB</h3>
+
+<p>One area where Mongoid differs from ActiveRecord is when querying for records. We&rsquo;ll demonstrate this in the console. We can still call where on a model and pass in conditions but Mongoid allows us to pass in more complex conditions and we&rsquo;ll use these to find the products that cost &pound;40 or less.</p>
+
+``` `console
+>> Product.where(:price.lte => 40).first
+=> #<Product _id: 502952b1a175752aa0000001, _type: nil, name: "Settlers of Catan", price: "34.99", released_on: 2012-01-01 00:00:00 UTC>
+```
+
+<p>We can write the same query by using a conditional method on the class directly.</p>
+
+``` console
+>> Product.lte(price: 40).first
+=> #<Product _id: 502952b1a175752aa0000001, _type: nil, name: "Settlers of Catan", price: "34.99", released_on: 2012-01-01 00:00:00 UTC>
+```
+
+<p>The object returned by the query call is a <code>Mongoid::Criteria</code> instance and this is very similar to an <code>ActiveRecord::Relation</code> object. This means that we can chain queries together and it will do lazy loading.</p>
+
+``` console
+>> Product.lte(price: 40).gt(released_on: 1.month.ago)
+=> #<Mongoid::Criteria
+   selector: {"price"=>{"$lte"=>"40"}, "released_on"=>{"$gt"=>Fri, 13 Jul 2012 00:00:00 UTC +00:00}},
+   options:  {},
+   class:    Product,
+   embedded: false>
+``` 
+
+<p>There&rsquo;s a lot more that we can do here as Mongoid&rsquo;s query interface is quite powerful. There&rsquo;s more detail about this in <a href="http://mongoid.org/en/origin/">the documentation</a>.</p>
+
+<p>Associations</p>
+
+<p>Another way that Mongoid differs from ActiveRecord is through associations. We can embed an association into a single document and to demonstrate how this works we&rsquo;ll generate a new model called Review with a <code>content</code> text field.</p>
+
+``` terminal
+$ rails g model review content
+```
+
+<p>We now have two models and we want <code>Product</code> to have many <code>Reviews</code>. We can define this association in two different ways. We could add a reference association which works in a similar way to an ActiveRecord association but instead we&rsquo;ll use an embedded association. To define this we use <code>embeds_many</code>.</p>
+
+``` /app/models/product.rb
+class Product
+  include Mongoid::Document
+  field :name, type: String
+  field :price, type: BigDecimal
+  field :released_on, type: Date
+  
+  attr_accessible :name, :price, :released_on
+  validates_presence_of :name
+  
+  embeds_many :reviews
+end
+```
+<p>In the <code>Review</code> model we can call <code>embedded_in</code>. </p>
+
+``` /app/models/review.rb
+class Review
+  include Mongoid::Document
+  field :content, type: String
+  
+  embedded_in :product
+end
+```
+
+<p>We can try this out in the console. Interacting with the association works similarly to ActiveRecord.</p>
+
+``` console
+>> p = Product.first
+=> #<Product _id: 502952b1a175752aa0000001, _type: nil, name: "Settlers of Catan", price: "34.99", released_on: 2012-01-01 00:00:00 UTC>
+>> p.reviews.create! content: "great game!"
+=> #<Review _id: 5029656ca17575eaa1000001, _type: nil, content: "great game!">
+```
+
+<p>We now have a review that we can fetch through its <code>Product</code> as we&rsquo;d expect. As it&rsquo;s an embedded association all the review&rsquo;s data is within the <code>Product</code> document, not stored as a separate document in MongoDB. This means that calling <code>Review.count</code> will return <code>0</code> as there are no <code>Review</code> documents; we can only fetch reviews through the <code>Product</code> model. We can&rsquo;t even create a <code>Review</code> record on its own as it needs to exist within a parent Product.</p>
+
+<p>Whenever we define an association in Mongoid we need to ask ourselves whether we&rsquo;ll ever need to fetch the associated record and work with it on its own, outside the parent. If so then we should use a <code>has_many</code> reference association instead of an embedded one. The advantage of an embedded association is that all the data is within one document and so our app doesn&rsquo;t need to perform separate queries in order to fetch the other associated documents.</p> 
+
+<h3>Additional Modules</h3>
+
+<p>Next we&rsquo;ll show you a few additional modules that we can include alongside <code>Mongoid::Document</code>. <code>Mongoid::Timestamps</code>, as its name suggests, is similar to the ActiveRecord functionality. If we add it to, say, the <code>Product</code> model then when we create or update a product those timestamp fields will be updated.</p> 
+
+``` console
+>> Product.create! name: "Agricola"
+=> #<Product _id: 50296dc5a17575eaa1000002, _type: nil, created_at: 2012-08-13 21:12:37 UTC, updated_at: 2012-08-13 21:12:37 UTC, name: "Agricola", price: nil, released_on: nil>
+```
+
+<p>Another useful module is called <code>Paranoia</code>. This does soft deletes which means that deleting a record won&rsquo;t actually remove it from the database. If we include <code>Mongoid::Paranoia</code> in the <code>Product</code> model then delete a product all that happens is then a <code>deleted_at</code> attribute is set. The product looks like it&rsquo;s gone but we can call <code>restore</code> on it to bring it back. Mongoid even has built-in support for versioning with the <code>Mongoid::Versioning</code> module. We won&rsquo;t cover it here but there&rsquo;s information about this in the documentation.</p> 
+
+<h3>Prettier URLs</h3>
+
+<p>If we look at the URL for a product we&rsquo;ll see that the URL has an unusual identifier.</p>
+ 
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1289/original/E238I03.png" width="800" height="400" alt="By default, Mongoid uses long hexadecimal numbers as identifiers."/>
+</div>
+
+<p>If we want to change this to something a little prettier there are a couple of ways we can do so. One option is similar to ActiveRecord where we override the <code>to_param</code> method, but here we&rsquo;ll show you another way to do this with Mongoid by overriding the <code>_id</code> field.</p> 
+
+``` /app/models/product.rb
+field :_id, type: String, default: -> { name.to_s.parameterize }
+```
+
+<p>The key here is to set a default value for the field and here we use a proc to set it to the value of the product&rsquo;s name, parameterized to make it URL-safe. When we create a new product now its name becomes part of its URL.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1290/original/E238I04.png" width="800" height="400" alt="The identifier is now based on the product&rsquo;s name."/>
+</div>
+
+<p>There area couple of things we need to watch when we take this approach. One is that whenever we create a new <code>Product</code> we always need to set the name while creating the instance. If we don&rsquo;t the product&rsquo;s <code>id</code> will be an empty string and if we try to set the name later it will remain an empty string. Also we need to ensure the uniqueness of the <code>id</code> so we should add some validation to make sure that this is the case.</p> 
+
+<p>That&rsquo;s it for our episode on Mongoid. This project&rsquo;s documentation is comprehensive and is well worth looking at. It&rsquo;s also worth spending some time learning about MongoDB on its own. There&rsquo;s an interactive shell on its website with a tutorial that we can work through to get a better idea of how MongoDB works.</p>

@@ -1,0 +1,265 @@
+<p>When we redeploy an application we should aim to inconvenience its users as little as possible; our goal in this episode is make upgrading an application unnoticeable. We already have an application deployed to a VPS, like we showed in <a href="http://railscasts.com/episodes/337-capistrano-recipes">episode 337</a>.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1311/original/E373I01.png" width="800" height="500" alt="Our application."/>
+</div>
+
+<p>When we redeploy this app it starts up fairly quickly as it&rsquo;s such a small application. To simulate the start-up of a larger application we&rsquo;ll add a <code>sleep</code> to the config file.</p>
+
+``` /config/application.rb
+sleep 10
+```
+
+<p>When we redeploy our application now it&rsquo;s startup time will be more noticeable. We&rsquo;ll commit and deploy this small change.</p>
+
+``` terminal
+$ git commit -am &#x27;simulating long app load&#x27;
+$ git push
+$ cap deploy
+```
+
+<p>When we reload the page now it takes quite a while to load as the application takes a long time to start up. It would be good if the user didn&rsquo;t see this delay and we can accomplish this by leaving the old version of the application up and running until the new one is ready to accept requests. There are many solutions to this problem: if we have a load balancer set up, such as HAProxy, we can do rolling restarts across multiple servers. This presents its own challenges, though, as it needs to detect the state of each server to see if it can pass requests to it. We won&rsquo;t be going into detail on this approach here but it&rsquo;s worth pointing out as an option.</p>
+
+<p>Instead we&rsquo;ll focus on solving this problem through Unicorn. <a href="https://github.com/blog/517-unicorn">Github&rsquo;s blog post on this subject</a> is a few years old but is still relevant and it provides some configuration options that we can use to accomplish zero downtime. One key option is called <code>preload_app</code>. This starts up the Rails app in the master Unicorn process so that spawning new workers happens quickly. Along with this we have a <code>before_fork</code> block. This is triggered after the application loads but before it spawns off new workers and this means that our application is ready to receive requests and so we can quit our old Unicorn process here.</p>
+
+``` ruby
+before_fork do |server, worker|
+  old_pid = RAILS_ROOT + '/tmp/pids/unicorn.pid.oldbin'
+  if File.exists?(old_pid) && server.pid != old_pid
+    begin
+      Process.kill("QUIT", File.read(old_pid).to_i)
+    rescue Errno::ENOENT, Errno::ESRCH
+      # someone else did our job for us
+    end
+  end
+end
+```
+
+<p>It&rsquo;s important to understand that when preloading an app the open socket connections won&rsquo;t be carried over when the workers are forked off. It&rsquo;s a good idea to add an <code>after_hook</code> block to reopen the socket connections, such as to the database, like this:</p>
+
+``` ruby
+after_fork do |server, worker|
+  ActiveRecord::Base.establish_connection
+  CHIMNEY.client.connect_to_server
+  # Rest of code omitted 
+end
+```
+
+<p>We already have Unicorn set up in this application in the same way we did it in episode 337 but the technique we used there doesn&rsquo;t do any app preloading. We&rsquo;ll add some code to our config file to do this.</p>
+
+``` /config/recipes/templates/unicorn.rb.erb
+preload_app true
+
+before_fork do |server, worker|
+  # Disconnect since the database connection will not carry over
+  if defined? ActiveRecord::Base
+    ActiveRecord::Base.connection.disconnect!
+  end
+
+  # Quit the old unicorn process
+  old_pid = "#{server.config[:pid]}.oldbin"
+  if File.exists?(old_pid) && server.pid != old_pid
+    begin
+      Process.kill("QUIT", File.read(old_pid).to_i)
+    rescue Errno::ENOENT, Errno::ESRCH
+      # someone else did our job for us
+    end
+  end
+end
+
+after_fork do |server, worker|
+  # Start up the database connection again in the worker
+  if defined?(ActiveRecord::Base)
+    ActiveRecord::Base.establish_connection
+  end
+end
+```
+
+<p>We now call <code>preload_app</code> here and set it to <code>true</code>, and we&rsquo;ve added a <code>before_fork</code> block. In it we disconnect from the database and quit the old Unicorn process while in the <code>after_fork</code> block we reconnect to the database. This isn&rsquo;t enough, however, we also need to configure how we restart Unicorn after a deployment. Currently it sends an <code>HUP</code> signal to the process but if we have <code>preload_app</code> set to <code>true</code> this will have no effect. We should instead send <code>USR2</code> which will start a new Unicorn process and send a <code>QUIT</code> signal to the old one. There&rsquo;s a lot of great <a href="http://unicorn.bogomips.org/SIGNALS.html">documentation</a> on how to manage the worker processes that&rsquo;s well worth reading through. We&rsquo;ll make the change inside the Unicorn init script that our application uses. This script has a restart command which sends the <code>HUP</code> signal that we mentioned before. We&rsquo;ll change this to <code>USR2</code>.</p>
+
+``` /config/recipes/templates/unicorn_init.erb
+restart|reload)
+  sig USR2 && echo reloaded OK && exit 0
+  echo >&2 "Couldn't reload, starting '$CMD' instead"
+  run "$CMD"
+  ;;
+```  
+  
+<p>To get these changes up to the server we&rsquo;ll run the Unicorn setup task and the stop and start tasks, too.</p>
+
+``` terminal
+$ cap unicorn:setup unicorn:stop unicorn:start
+```
+
+<p>This stops and starts the server so that the new configuration is picked up. By the way it&rsquo;s always useful to have Capistrano recipes for things like this so that we can manage the serve remotely. Before we redeploy our application we&rsquo;ll make a small change to the <code>index</code> template so that we can see when the changes go live.</p>
+
+``` /app/views/articles/index.html.erb
+<h1>Articles 2</h1>
+```
+
+<p>We&rsquo;ll commit and push these changes now and run <code>cap deploy</code> to deploy them to the server. If we reload the page as soon as the deployment finishes we&rsquo;ll still see the old version. This will be the case for approximately ten seconds but after that we&rsquo;ll see the new version.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1312/original/E373I02.png" width="800" height="500" alt="Ten seconds after deployment the new version of the application appears."/>
+</div>
+
+<p>Since our application loads in the background the user won&rsquo;t notice any delay when it switches over to the new version. We do need to bear in mind though that we have enough resources on the server to be able to load the application in the background while keeping the current version active and receiving requests.</p> 
+
+<p>Handling Migrations</p>
+
+<p>Next we&rsquo;ll move on to solving another piece of this zero downtime puzzle: migrations. Any changes we make to the database need to be compatible with the older release. For example we have an <code>Article</code> model with a <code>content</code> column and we want to rename this to <code>body</code>. We&rsquo;ll generate a migration to do this.</p>
+
+``` terminal
+$ rails g migration rename_articles_content_to_body
+```
+
+<p>In the migration we&rsquo;ll rename the column.</p>
+
+``` /db/migrate/20120822000000_rename_artlices_content_to_body.rb
+class RenameArticlesContentToBody < ActiveRecord::Migration
+  def change
+    rename_column :articles, :content, :body
+  end
+end
+```
+
+<p>We&rsquo;ll also need to rename the reference to this column in the view template. We&rsquo;ll commit and push this change then run <code>cap:deploy:migrations</code> to see what happens. If we reload the page after the deployment finishes we get a <code>500</code> error.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1313/original/E373I03.png" width="800" height="309" alt="The migration causes a 500 error."/>
+</div>
+
+<p>This happens because we&rsquo;re still serving the old version which references the <code>content</code> column which no longer exists in the database. If we wait for around ten seconds and then reload the page it works again. How do we solve this problem? A good rule of thumb is to never destroy or rename a column that&rsquo;s referenced in the currently hosted version, although adding columns is fine. Renaming columns can be tricky so how should we rename our <code>body</code> column back to <code>content</code>? What we can do is create a migration that adds a <code>content</code> column to the <code>articles</code> table.</p>
+
+``` terminal
+$ rails g migration add_content_to_articles content:text
+```
+
+<p>Next we can create another migration to copy the data from <code>body</code> into <code>content</code>.</p>
+
+``` terminal
+$ rails g migration copy_article_content
+```
+
+<p>The reason we&rsquo;re doing this in a separate migration is due to the way that transactions work. We can&rsquo;t add a column and update in the same transaction. In this second migration we&rsquo;ll execute some SQL to update the articles table to copy the data from <code>content</code> to <code>body</code>.</p>
+
+``` /db/migrate/20120823000000_copy_article_content.rb
+class CopyArticleContent < ActiveRecord::Migration
+  def up
+    execute "update articles set content = body"
+  end
+
+  def down
+    execute "update articles set body = content"
+  end
+end
+```
+
+<p>We&rsquo;ll commit these changes now and push them to the server. When we run <code>cap deploy:migrations</code> now we shouldn&rsquo;t get an error as we&rsquo;re adding a column not renaming one. When we reload the page now it works. Now that the current deploy no longer references the body column it&rsquo;s safe to remove it. If we generate another migration and give it the right name and arguments Rails will generate a migration with the up and down methods filled in for us.</p>
+
+``` terminal
+$ rails g migration remove_body_from_articles body:text
+```
+
+<p>This generates the migration file shown below.</p>
+
+``` /db/migrate/20120823000000_remove_body_from_articles.rb
+class CopyArticleContent < ActiveRecord::Migration
+  def up
+    execute "update articles set content = body"
+  end
+
+  def down
+    execute "update articles set body = content"
+  end
+end
+```
+
+<p>In order to rename a column we&rsquo;ve had to use three migration files and make two deployments but at least we can make this change without downtime and the user won&rsquo;t see any <code>500</code> errors while the updated version is being deployed. There is still a problem with this solution and this has to do with the migration file  where we copy the <code>body</code> to the <code>content</code> column. What if just after this migration runs a user updates the body of an article while the server is still starting up with the new version of the application? Whether or not this is an issue depends on how frequently this column is updated. Updates usually don&rsquo;t happen very often so the chance of one happening during the ten-second window while our application updates is fairly slim. </p>
+
+<p>If this is a problem and we need to fix it, however, there are a couple of solutions. One is to lock this table after the migration runs and to keep it locked until the new version of the app has fully started up. This way no updates can take place during this time. That said, locks can get messy and the approach may not fully solve the problem anyway. Another option is to give up on zero downtime for this kind of situation and show a down for maintenance page while this kind of change is taking place. Capistrano provides a handy command  called <code>deploy:web:disable</code> which will generate a maintenance HTML page in our application. When we run this command it will return some code to configure Nginx to use it. This code works best near the top of the Nginx config file so we&rsquo;ll add it near the top of the server block.</p>
+
+``` /config/recipes/templates/nginx_unicorn.rb
+if (-f $document_root/system/maintenance.html) {
+  return 503;
+}
+error_page 503 @maintenance;
+location @maintenance {
+  rewrite  ^(.*)$  /system/maintenance.html last;
+  break;
+}
+```
+
+<p>This code checks to see if a <code>maintenance.html</code> file exists and if it does it will return a <code>503</code> error and provide a custom error page for this status code and display this page to the user. We&rsquo;ll run the <code>cap nginx:setup</code> command that we created in episode 337 which will copy over this file and restart the server. When we visit our application now we&rsquo;ll see this maintenance page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1314/original/E373I04.png" width="800" height="500" alt="Our application&rsquo;s maintenance page."/>
+</div>
+
+<p>We can configure this page and customize it to fit the rest of our application. We can look at the full documentation for this by passing in the <code>-e</code> option.</p>
+
+``` terminal
+$ cap -e deploy:web:disable
+```
+
+This will tell us how we can configure this file by passing in various environment variables and also how we can set a <code>maintenance_template_path</code> variable to change the HTML file that&rsquo;s used to generate the maintenance page. We&rsquo;ll do this now and make a new maintenance page.
+
+``` /config/recipes/templates/maintenance.html.erb
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Blog</title>
+    <style type="text/css">
+    html, body {
+      background-color: #4B7399;
+      font-family: Verdana, Helvetica, Arial;
+      font-size: 14px;
+    }
+
+    a {
+      color: #0000FF;
+      img { border: none; }
+    }
+
+    #container {
+      width: 80%;
+      margin: 0 auto;
+      background-color: #FFF;
+      padding: 20px 40px;
+      border: solid 1px black;
+      margin-top: 20px;
+    }
+    </style>
+  </head>
+  <body>
+    <div id="container">
+      <h1>The system is down for <%= reason ? reason : "maintenance" %></h1>
+      <p>It will be back <%= deadline ? deadline : "soon" %></p>
+    </div>
+  </body>
+</html>
+```
+
+<p>This is pretty much a static HTML with some erb content to display the <code>reason</code> and <code>deadline</code> which are passed in from the environment variables. To use this template we need to modify our deployment file and set the <code>maintenance_template_path</code> variable.</p>
+
+``` /config/deploy.rb
+set :maintenance_template_path, File.expand_path("../recipes/templates/maintenance.html.erb", __FILE__)
+```
+
+<p>When we need to rename or delete a column now we can run <code>cap deploy:web:disable</code> to copy over our new template and any user who visits our site will see our customized maintenance page. When the migrations are finished we can run <code>cap deploy:web:enable</code> to remove the maintenance page. So, if we&rsquo;re willing to show the maintenance page for a while we can change a column in a single migration instead of splitting it up into several.</p> 
+
+<p>Even with all this effort with a maintenance page this still isn&rsquo;t a flawless solution. If a user comes to edit an article while we&rsquo;re still using the <code>body</code> attribute and we rename this column while they&rsquo;re editing the article their changes will be lost as they&rsquo;ll be submitted as a <code>body</code> attribute which our application no longer accepts. If we are renaming a column we can go into our model and temporarily add a setter method for the old name and set it to the new attribute.</p>
+
+``` /app/models/article.rb
+class Article < ActiveRecord::Base
+  attr_accessible :content, :name, :published_on, :body
+  
+  def body=(body)
+    self.content = body
+  end
+end
+```
+
+<p>We&rsquo;ll also need to make sure to add this attribute to the <code>attr_accessible</code> list. We can then remove this attribute on the next deployment. Most applications won&rsquo;t need to go to this extreme to handle these kind of edge cases but sometimes we want to do everything we can to avoid losing any user data if records are updated frequently.</p>
+
+<p>One final thing worth noting is that there is talk of removing the maintenance tasks from Capistrano. These tasks are fairly simple, however, so recreating them manually would be fairly simple if you want to.</p>

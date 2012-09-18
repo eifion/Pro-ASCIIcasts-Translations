@@ -1,0 +1,283 @@
+<p>Let&rsquo;s say that we&rsquo;ve successfully deployed a Rails application to production. How do we ensure that it stays up and running smoothly? We could set up a monitoring system to restart any processes that fail or which end up using too many resources and in this episode we&rsquo;ll use <a href="http://mmonit.com/monit/">Monit</a> to do this. This can be configured to alert us or to restart a process when something on our server goes awry.</p>
+
+<h3>Installing Monit</h3>
+
+<p>First we&rsquo;ll SSH in to the VPS that&rsquo;s running our application. We&rsquo;re using Ubuntu 12.04 on our server so the commands used might be different if you&rsquo;re running a different version or distro. The easiest way to install Monit here is to use <code>apt-get</code>.</p>
+
+``` terminal
+$ sudo apt-get update
+$ sudo apt-get install monit
+```
+
+<p>We now have Monit installed and running so let&rsquo;s configure it. A configuration file will already be have been set up at <code>/etc/monit/monitrc</code>. This file is well-commented and it&rsquo;s worth taking the time to read through it. We&rsquo;ll delete the comments in this file so that we can see what the default configuration options are.</p>
+
+``` /etc/monit/monitrc
+set daemon 120  # check services at 2-minute intervals
+set logfile /var/log/monit.log
+set idfile /var/lib/monit/id
+set statefile /var/lib/monit/state
+set eventqueue
+  basedir /var/lib/monit/events # set the base directory where events will be stored
+  slots 100                     # optionally limit the queue size
+include /etc/moni/conf.d/*
+```
+
+<p>The first line above tells Monit to run in the background and to perform a check every two minutes. We&rsquo;ll change this to 30 seconds so that the application is checked more frequently. The next few lines configure various file paths and then we have an <code>eventqueue</code> setting that tells Monit to remember any alert messages that it can&rsquo;t send over email. The last line tells Monit to include any configuration files that appear in the <code>conf.d</code> directory. We don&rsquo;t have any files in this directory but if we want to configure Monit for various processes such as Nginx or Unicorn this is a good place to put them. That&rsquo;s all we need to do to this configuration file and next we&rsquo;ll instruct Monit to monitor our Rails application. The <a href="http://mmonit.com/monit/documentation/">manual</a> is a good resource when editing the configuration and there&rsquo;s a <a href="http://mmonit.com/monit/documentation/monit.html#configuration_examples">Configuration Examples page</a> that is useful. This tells us that we can run the <code>check process</code> command to do this, passing in a unique name and a <code>pidfile</code>. Monit will then check this process and we can tell it what to do if the process fails. We could set up this configuration directly on the server by adding files to the <code>/etc/monit/conf.d</code> directory but it&rsquo;s generally better not to do extensive configuration on the server but instead to put configuration files within our Rails application under source control.</p>
+
+<h3>Monitoring Nginx</h3>
+
+<p>It&rsquo;s a good idea to create Capistrano recipes for setting up the server, like we did in <a href="http://railscasts.com/episodes/337-capistrano-recipes">episode 337</a>. This way we can create templates for the configuration files which can be generated and copied to any server using Capistrano. As there are multiple configuration files for Monit we&rsquo;ll make a new <code>monit</code> directory under <code>/config/recipes/templates</code>. Our first file will be for configuring Nginx. Note that this is an erb file so that we can add dynamic content. Our goal here is to monitor Nginx and restart it if it fails. We do this by calling <code>check process</code>, giving it a name and passing in a <code>pidfile</code> option with the path to Nginx&rsquo;s pid. We could make this path dynamic with some erb if we wanted to configure it through Capistrano, but we won&rsquo;t do that here. We also need to tell Monit how to start and stop the program.</p> 
+
+``` /config/recipes/templates/monit/nginx.erb
+check process nginx with pidfile /var/run/nginx.pid
+  start program = "/etc/init.d/nginx start"
+  stop program = "/etc/init.d/nginx stop"
+```  
+  
+<p>This is all the code that&rsquo;s necessary to ensure that Nginx stays up and running. We need to copy this config file over to the server and we&rsquo;ll do this through a Capistrano recipe. We&rsquo;ll create a <code>monit.rb</code> file for this.</p>
+
+``` /config/recipes/monit.rb
+namespace :monit do
+  desc "Install Monit"
+  task :install do
+    run "#{sudo} apt-get -y install monit"
+  end
+  after "deploy:install", "monit:install"
+
+  desc "Setup all Monit configuration"
+  task :setup do
+    monit_config "nginx"
+    syntax
+    reload
+  end
+  after "deploy:setup", "monit:setup"
+  
+  task(:nginx, roles: :web) { monit_config "nginx" }
+  task(:postgresql, roles: :db) { monit_config "postgresql" }
+  task(:unicorn, roles: :app) { monit_config "unicorn" }
+
+  %w[start stop restart syntax reload].each do |command|
+    desc "Run Monit #{command} script"
+    task command do
+      run "#{sudo} service monit #{command}"
+    end
+  end
+end
+
+def monit_config(name, destination = nil)
+  destination ||= "/etc/monit/conf.d/#{name}.conf"
+  template "monit/#{name}.erb", "/tmp/monit_#{name}"
+  run "#{sudo} mv /tmp/monit_#{name} #{destination}"
+  run "#{sudo} chown root #{destination}"
+  run "#{sudo} chmod 600 #{destination}"
+end
+```
+
+<p>Here we define several tasks, one to install Monit in case we&rsquo;re installing this on a new server and another to set up Monit by copying over the configuration files. This  calls a <code>monit_config</code> method  which is defined at the bottom of the file. We pass this the configuration file&rsquo;s name which determines the template file that will be run, move this file into the <code>conf.d</code> directory then set the ownership and permissions. The setup task will then run two other tasks: <code>syntax</code> to check the syntax of the configuration file then <code>reload</code> to reload the config files. Both of these tasks delegate to the <code>service monit</code> command with that given task passed in. If you&rsquo;re unfamiliar with defining Capistrano tasks like this there&rsquo;s more information about this in episode 337. To get this working we have to include it in our <code>deploy.rb</code> file so we&rsquo;ll add it to the list of recipes that we load in.</p>
+
+``` /config/deploy.rb
+load "config/recipes/monit"
+```
+
+<p>To get this file over to the server we just need to run <code>cap monit:setup task</code>. This  will copy over the <code>nginx.config</code> file, checking the syntax and then reloading it so that Nginx is monitored.</p>
+
+<p>Let&rsquo;s try this out. Our application is currently up and running but if we SSH into our server and kill <code>nginx</code> then it will no longer work. Monit will detect that Nginx is down within 30 seconds and if we reload the page 30 seconds later the site will be up again. </p>
+
+<p>There&rsquo;s a lot more that we can do inside this Nginx config file. A common line to use when checking Nginx is one to check that the number of child processes is greater than 250 and to restart the server if so. This way if Nginx gets stuck spawning child processes we can restart it.</p>
+
+``` /config/recipes/templates/monit/nginx.erb
+check process nginx with pidfile /var/run/nginx.pid
+  start program = "/etc/init.d/nginx start"
+  stop program = "/etc/init.d/nginx stop"
+  if children > 250 then restart
+```  
+
+<p>Whenever we have conditions that trigger a restart it&rsquo;s a good idea to handle the situations where that condition is continually met to prevent Monit from continually trying to restart the server. We can do this by adding another line to this file.</p>
+
+``` /config/recipes/templates/monit/nginx.erb
+check process nginx with pidfile /var/run/nginx.pid
+  start program = "/etc/init.d/nginx start"
+  stop program = "/etc/init.d/nginx stop"  
+  if children > 250 then restart
+  if 5 restarts within 5 cycles then timeout
+```  
+
+<p>Monit will now stop monitoring this process if it is restarting too often. A cycle here is equivalent to a check so the duration of this is dependent on what we set in the <code>monitrc</code> file. Earlier in this episode we set this to 30 seconds so Monit will stop monitoring our server if it restarts five times within two-and-a-half minutes.</p> 
+
+<p>Monitoring The Database</p>
+
+<p>We&rsquo;ll move on now to monitoring something else. Our application connects to a Postgres database so we&rsquo;ll create a new file to monitor that. The code we need here is similar to the code for monitoring Ngnix.</p>
+
+``` /config/postgresql.erb
+check process postgresql with pidfile <%= postgresql_pid %>
+  start program = "/etc/init.d/postgresql start"
+  stop program = "/etc/init.d/postgresql stop"
+  if failed host localhost port 5432 protocol pgsql then restart
+  if 5 restarts within 5 cycles then timeout
+```  
+
+<p>There are a couple of changes here. We&rsquo;re using erb to pass in the path to the pid file (this is defined in the Postgres recipe file and includes the version number). This makes this more flexible if we change the version we&rsquo;re running. We also check to see that the database is responding on port 5432. (We could move the port number into the recipe file, too, to make it easier to change the port number.) If Postgres doesn&rsquo;t respond on that port we restart its process and again we stop monitoring if we have to restart it five times in five cycles.</p>
+
+<p>Now that we have a config file for Postgres we need to copy it to the server when we run the <code>monit:setup</code> task. We could just add this to the <code>setup</code> task with another call to <code>monit_config</code> but the database might be running on a different server from Nginx. We can handle this scenario with Capistrano roles so that each task is called in a separate task.</p>
+
+``` /config/recipes/monit.rb
+namespace :monit do
+  desc "Install Monit"
+  task :install do
+    run "#{sudo} apt-get -y install monit"
+  end
+  after "deploy:install", "monit:install"
+
+  desc "Setup all Monit configuration"
+  task :setup do
+    nginx
+    postgresql
+    syntax
+    reload
+  end
+  after "deploy:setup", "monit:setup"
+  
+  task(:nginx, roles: :web) { monit_config "nginx" }
+  task(:postgresql, roles: :db) { monit_config "postgresql" }
+ 
+  # Rest of file omitted
+end
+```
+
+<p>If we do have multiple servers set up in Capistrano this copy over the correct Monit configs to each server.</p>
+
+<h3>Unicorn</h3>
+
+<p>Next we&rsquo;ll move on to monitoring Unicorn which is what runs our Rails app. We&rsquo;ll create a new Monit config file containing the code to monitor the Unicorn process.</p>
+
+``` /config/recipes/templates/monit/unicorn.erb
+check process <%= application %>_unicorn with pidfile <%= unicorn_pid %>
+  start = "/etc/init.d/unicorn_<%= application %> start"
+  stop = "/etc/init.d/unicorn_<%= application %> stop"
+```  
+
+<p>There are a couple of things to note about this code. First we use the application name so that if we do have multiple applications running on the same server there won&rsquo;t be any collision and they&rsquo;ll each have a unique name. We&rsquo;re keeping this monitoring simple as we&rsquo;re more interested in monitoring the child processes which are more likely to leak memory and require a restart. The tricky part with this is that the child processes don&rsquo;t have a pid file to point to but we can get around this issue by writing our own pidfile when a child process is spawned. We can do this in the Unicorn config file. In <a href="http://railscasts.com/episodes/373-zero-downtime-deployment">episode 373</a> we set up an <code>after_fork</code> block to handle zero-downtime deployment. We can use this to write a pidfile as well as it&rsquo;s triggered whenever Unicorn spawns a worker.</p> 
+
+``` /config/recipes/templates/unicorn.rb.erb
+after_fork do |server, worker|
+  # Start up the database connection again in the worker
+  if defined?(ActiveRecord::Base)
+    ActiveRecord::Base.establish_connection
+  end
+  child_pid = server.config[:pid].sub(".pid", "#{worker.nr}.pid")
+  system("echo #{Process.pid} > #{child_pid}")
+end
+```
+
+<p>The last two lines here grab the pid path to Unicorn, append the worker number to it then pass the process pid to the pid path. This means that we&rsquo;re able to reference each child process through our Monit config and we&rsquo;ll add the code to do this now.</p>
+
+``` /config/recipes/templates/monit/unicorn.erb
+<% unicorn_workers.times do |n| %>
+  <% pid = unicorn_pid.sub(".pid", ".#{n}.pid") %>
+  check process <%= application %>_unicorn_worker_<%= n %> with pidfile <%= pid %>
+    start program = "/bin/true"
+    stop program = "/usr/bin/test -s <%= pid %> && /bin/kill -QUIT `cat <%= pid %>`"
+    if mem > 200.0 MB for 1 cycles then restart
+    if cpu > 50% for 3 cycles then restart
+    if 5 restarts within 5 cycles then timeout
+<% end %>
+```
+
+<p>This isn&rsquo;t the prettiest code but it means that we can keep everything contained in one file. It works by looping through the number of Unicorn workers (this is a variable that&rsquo;s set in the <code>unicorn.rb</code> recipe file) and checking each of these child workers. We point to a pid path that is generated in the same way we did this earlier by taking the Unicorn master pid and adding the worker number to it. To start the worker we run <code>/bin/true</code> which does essentially nothing as we don&rsquo;t want Monit to manage starting up the child processes, the master Unicorn process handles this automatically for us. We&rsquo;re more interested in how it quits the child processes. This is done by checking that the pidfile exists and sending the <code>QUIT</code> signal to that given pid. We then check to see if the process is using more than a specified amount of memory or CPU and restart it if so. Finally we check to see if the process is restarting too often and if so stop monitoring it. The final step is to adjust our Capistrano recipe so that it has a Unicorn Monit setup task on the app role.</p>
+ 
+``` /config/recipes/monit.rb
+task :setup do
+  nginx
+  postgresql
+  unicorn
+  syntax
+  reload
+end
+after "deploy:setup", "monit:setup"
+  
+task(:nginx, roles: :web) { monit_config "nginx" }
+task(:postgresql, roles: :db) { monit_config "postgresql" }
+task(:unicorn, roles: :app) { monit_config "unicorn" }
+```
+
+<p>We can now deploy these changes. Since we&rsquo;ve adjusted the Unicorn config we&rsquo;ll run the Unicorn setup task to copy the new configuration file over and also restart Unicorn before running the <code>monit:setup</code> task.</p>
+
+``` terminal
+$ cap unicorn:setup unicorn:restart monit:setup
+```
+
+<p>This will copy over the configuration files and restart Unicorn and Monit. </p>
+
+<h3>Monitoring Monit</h3>
+
+<p>If our Rails app acts up now Monit will spot this and will restart it automatically for us. That said we shouldn&rsquo;t ignore Monit and have it blindly acting on its own. It&rsquo;s a good idea to keep tabs on what it&rsquo;s doing and there are several ways that we can do this. One way is to occasionally check the log file to see if any errors have occurred.</p>
+
+``` terminal
+$ sudo tail /var/log/monit.log
+```
+
+<p>This is a fairly passive way to monitor errors so instead we&rsquo;ll set up an email alert system so that we&rsquo;re notified immediately when an error occurs. We could configure this through the <code>monitrc</code> file but instead we&rsquo;ll keep the configuration changes in our application&rsquo;s source code and add a new <code>monitrc.erb</code> file to our Monit templates.</p>
+
+``` /config/templates/monit/monitrc.erb
+set daemon 30
+
+set logfile /var/log/monit.log
+set idfile /var/lib/monit/id
+set statefile /var/lib/monit/state
+
+set eventqueue
+    basedir /var/lib/monit/events
+    slots 100
+
+set mailserver smtp.gmail.com port 587
+    username "foo@example.com" password "secret"
+    using tlsv1
+    with timeout 30 seconds
+
+set alert ryan@railscasts.com
+
+include /etc/monit/conf.d/*
+```
+
+<p>Most of this is the same as the other <code>monitrc</code> file apart from a couple of changes related to email. We set the <code>mailserver</code> settings to use Gmail&rsquo;s SMTP server. The username and password are hard-coded here but we could set them through environment variables and use erb to read them here. We also set the <code>alert</code> to define who the alerts are sent to. We&rsquo;ll need to copy this file to every server and we&rsquo;ll do this in the setup task.</p>
+
+``` /config/recipes/monit.rb
+task :setup do
+ monit_config "monitrc", "/etc/monit/monitrc"
+  nginx
+  postgresql
+  unicorn
+  syntax
+  reload
+end
+```
+
+<p>We pass two arguments to <code>monit_config</code>. The second is a destination and this defaults to a filename in the <code>/etc/montit/conf.d</code> directory based on the name. We don&rsquo;t want that default here so we&rsquo;ve passed in the second argument. We have control over when the alerts are sent and can trigger them on given conditions as we would with a restart. Below is an example of how we could do a performance check on the entire system to see the load average, memory and CPU usage.</p>
+
+``` /config/templates/monit/monitrc.erb
+check system blog_server 
+  if loadavg(5min) > 2 for 2 cycles then alert
+  if memory > 75% for 2 cycles then alert
+  if cpu(user) > 75% for 2 cycles then alert
+```  
+  
+<p>Some processes may be noisy in sending alerts such as the Unicorn workers. For these cases we can only send alerts for certain events. We can so this by calling <code>alert</code>, passing in an email address and telling it what events we want to be alerted on. We&rsquo;ll tell Monit to only alert us about Unicorn changes if the pid changes two times within sixty seconds. This way we can be notified if our Unicorn servers are restarting frequently but not when minor things happen to the workers.</p> 
+
+<p>Another way to keep tabs on Monit is through a web interface. We can enable this in the <code>monitrc</code> file by adding some configuration like this.</p>
+
+``` /config/templates/monit/monitrc.erb
+set httpd port 2812
+    allow admin: "secret”
+```    
+
+<p>This starts up the HTTPD server on the port that we specify and we can define the permissions for those users who are allowed to access the interface. Again we&rsquo;ve hard-coded values here but we could use erb code to make this dynamic. We can try this by running <code>monit:setup</code> again to copy our monitrc file to the server. Once we&rsquo;ve done so if we visit port 2812 on the server and enter the username and password we&rsquo;ll be taken to the Monit Service Manager. This gives us details about the various processes that Monit is monitoring.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1330/original/E375I01.png" width="960" height="600" alt="Monit&rsquo;s web interface."/>
+</div>
+
+<p>We can see further details by clicking on one of the listed processes.</p>
+
+<p>It&rsquo;s also worth taking a look at <a href="http://mmonit.com/">M/Monit</a>. This provides a slick interface for managing multiple Monit servers at once. We can handle alerts through this and there&rsquo;s even an iPhone app available. This is a paid product, however, so you&rsquo;ll need to read the licensing agreement before deciding whether or not to user it.</p>
+
+<p>How does Monit compare to other monitoring solutions such as God or Bluepill? Both of these are written in Ruby and their configuration is much more flexible. They do require more memory to run, however, which may be reason enough for you to stick with Monit.</p>

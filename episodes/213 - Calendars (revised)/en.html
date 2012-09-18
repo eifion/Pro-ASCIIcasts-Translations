@@ -1,0 +1,247 @@
+<p>If we want to add a calendar to a Rails application how should we go about it? It depends on what we want the calendar to do. We might want to use one as an alternative way to browse the entires in a blogging application or as a replacement for year, month and day select menus when setting a date value on a form. In this episode we&rsquo;ll show how to do both of these.</p>
+
+<h3>Using a Date Picker</h3>
+
+<p>We&rsquo;ll start by adding a date picker to an application. If we have a form that we want to set a date value on we&rsquo;ll generally use a <code>date_select</code> to add three select menus to it. We&rsquo;ll use jQuery UI to replace this with a <a href="http://jqueryui.com/demos/datepicker/">date picker</a> so that when the user clicks on a text field that&rsquo;s set to handle dates a calendar will pop up which can be used to easily set a date. To add this functionality to our application we&rsquo;ll use the <code>jquery-ui-rails gem</code>. This needs to be added to the <code>assets</code> group in the gemfile and we&rsquo;ll need to run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+# Gems used only for assets and not required
+# in production environments by default.
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer', :platforms => :ruby
+
+  gem 'uglifier', '>= 1.0.3'
+  gem 'jquery-ui-rails'
+end
+```
+
+<p>We need to include the assets for this and we&rsquo;ll add these to our app&rsquo;s JavaScript manifest file.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require jquery.ui.datepicker
+//= require_tree .
+```
+
+<p>We can select the parts of jQuery UI we want to include so we&rsquo;ve just included the date picker. We&rsquo;ll do something similar for our application&rsquo;s CSS file.</p>
+
+``` /app/assets/stylesheets/application.css
+ *= require jquery.ui.datepicker
+ *= require_self
+ *= require_tree .
+``` 
+ 
+<p>Now that we have jQuery UI installed we can add it to the form below, which is used for editing articles.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1315/original/E213RI01.png" width="800" height="500" alt="The form for editing an article."/>
+</div>
+
+<p>We&rsquo;ll change the <code>published_on</code> field to a text field and make it a date picker with some JavaScript code. All we need to do is change the <code>date_select</code> to a <code>text_field</code>.</p>
+
+``` /app/views/articles/_form.html.erb
+<div class="field">
+  <%= f.label :published_on %><br />
+  <%= f.text_field :published_on %>
+</div>
+```
+
+<p>Now we&rsquo;ll modify the <code>articles</code> CoffeeScript file to add the code to make this field a date picker. All we need to do is find the text field by its <code>id</code> when the DOM has loaded and add the date picker functionality to it.</p>
+
+``` /app/assets/javascripts/articles.js.coffee
+jQuery ->
+  $('#article_published_on').datepicker()
+```
+
+<p>When we reload the page now the select menus have been replaced by a text field and we click it we&rsquo;ll see the date picker.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1316/original/E213RI02.png" width="800" height="500" alt="The date fields have now been replaced by a date picker."/>
+</div>
+
+<p>If we select August 1st, 2012 as the date then submit the form we&rsquo;ll see that there&rsquo;s a problem as the article is now shown as having been published on January 8th, 2012.   The issue is with how the date picker formats the date. If we select August 1st from the calendar it sets the value in the text field to <code>08/01/2012</code> and Rails will interpret this in <code>mm/dd/yyyy</code> format. Fortunately jQuery UI supports a number of options that we can pass in the to the date picker including one to change the format so we&rsquo;ll try setting that.</p>
+
+``` /app/assets/javascripts/articles.js.coffee
+jQuery ->
+  $('#article_published_on').datepicker
+    dateFormat: 'yy-mm-dd'
+```    
+
+<p>Now when we select a date from the date picker the date is sent to the server in a format that Rails will understand and the article will be updated correctly.</p>
+
+<h3>A Full-Page Calendar</h3>
+
+<p>Now that we&rsquo;ve got this date picker working correctly we&rsquo;ll show you another way that we can integrate calendars into our application. Instead of displaying the articles in a list we&rsquo;ll display a full-page calendar that the user can use to browse them by the date that they were published. There are several gems available for adding calendars to a Rails application and <a href="https://www.ruby-toolbox.com/categories/calendars">this list on the Ruby Toolbox</a> is a good place to see what&rsquo;s available. Most of the ones listed there are rather old and not well maintained so we&rsquo;ll implement our own from scratch.</p> 
+
+<p>The <code>index</code> template currently lists out the articles but we want to display a calendar here instead. We&rsquo;ll write a <code>calendar</code> helper method which accepts a block and which we can pass a date. This way the block is executed for each day displayed in the calendar and we can output any information we want such as the current day.</p>
+
+``` /app/views/articles/index.html.erb
+<div id="articles">
+  <% calendar do |date| %>
+    <%= date.day %>
+  <% end %>
+</div>
+```
+
+<p>Now we just have to create this calendar helper method. Quite a bit of code is needed to do this but it&rsquo;s all fairly straightforward.</p>
+
+``` /app/helpers/calendar_helper.rb
+module CalendarHelper
+  def calendar(date = Date.today, &block)
+    Calendar.new(self, date, block).table
+  end
+
+  class Calendar < Struct.new(:view, :date, :callback)
+    HEADER = %w[Sunday Monday Tuesday Wednesday Thursday Friday Saturday]
+    START_DAY = :sunday
+
+    delegate :content_tag, to: :view
+
+    def table
+      content_tag :table, class: "calendar" do
+        header + week_rows
+      end
+    end
+
+    def header
+      content_tag :tr do
+        HEADER.map { |day| content_tag :th, day }.join.html_safe
+      end
+    end
+
+    def week_rows
+      weeks.map do |week|
+        content_tag :tr do
+          week.map { |day| day_cell(day) }.join.html_safe
+        end
+      end.join.html_safe
+    end
+
+    def day_cell(day)
+      content_tag :td, view.capture(day, &callback), class: day_classes(day)
+    end
+
+    def day_classes(day)
+      classes = []
+      classes << "today" if day == Date.today
+      classes << "notmonth" if day.month != date.month
+      classes.empty? ? nil : classes.join(" ")
+    end
+
+    def weeks
+      first = date.beginning_of_month.beginning_of_week(START_DAY)
+      last = date.end_of_month.end_of_week(START_DAY)
+      (first..last).to_a.in_groups_of(7)
+    end
+  end
+end
+```
+
+<p>There&rsquo;s about fifty lines of code here which isn&rsquo;t bad considering what it does. First we define the <code>calendar</code> method that we use in the view template. Whenever we have a lot of logic that needs to go inside a helper we should consider moving it into a separate class and defining that class inside the helper module like we&rsquo;ve done here. Our <code>Calendar</code> class inherits from a new <code>Struct</code> which is a convenient way do define accessors for the various attributes. The first attribute here is the view and it&rsquo;s important to pass this in as we don&rsquo;t have access to the helper methods in our class. We can easily delegate to the view for any helper methods we want to access in the calendar or maybe override <code>method_missing</code> in here.</p>
+
+<p>Most of this class is made of methods that generate HTML elements for the calendar table. We generate the header in a method called <code>header</code> and fill it with the days of the week. Below that we generate each row for a week in <code>week_rows</code> and generate a cell for each day in that week in the <code>day_cell</code> method. In <code>day_cell</code> we capture the block that we passed in to the calendar helper method. This is where the block is executed and we pass the given date to it and a couple of CSS classes. Finally we have a <code>weeks</code> method to generate an array of weeks and fill it with date objects. This is what we loop through in <code>week_rows</code> when we generate each row.</p> 
+
+<p>The <code>weeks</code> method is the core functionality of generating a calendar and it&rsquo;s quite easy to do thanks to ActiveSupport which gives us methods like <code>beginning_of_month</code> and  <code>beginning_of_week</code>. These make it incredibly easy to generate a calendar. What&rsquo;s good about this solution is that we can easily customize it to fit the needs of our application. We can add more CSS classes if we need to, change the starting date, add internationalization to the day names or what ever else we want. Best of all it doesn&rsquo;t have any external dependencies so we can really customize it to fit our application.</p> 
+
+<p>Let&rsquo;s see it in action. When we reload the page now we&rsquo;ll have an HTML table filled with the days for the current month.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1317/original/E213RI03.png" width="800" height="500" alt="Our full page calendar."/>
+</div>
+
+<p>Obviously we want to improve the look of this calendar and we can do this by adding some CSS. There&rsquo;s too much to show here, but you can find the stylesheet we&rsquo;re using <a href="https://github.com/railscasts/213-calendars-revised/blob/master/blog-after/app/assets/stylesheets/articles.css.scss">on Github</a>. When we reload the page now the calendar looks much better.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1318/original/E213RI04.png" width="800" height="500" alt="The calendar looks better after applying some styling."/>
+</div>
+
+<p>Our calendar is currently empty. We want to fill it with the articles that were published on each day. To do this we&rsquo;ll modify the <code>ArticlesController</code>&rsquo;s <code>index</code> action. This currently fetches all the articles, but we want to group them based on the date that they were published.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  @articles_by_date = @articles.group_by(&:published_on)
+end
+```
+
+<p>This will generate a hash with a key that is the <code>published_on</code> date. This makes it easy to list those articles out in the relevant cell of our calendar. We&rsquo;ll display the articles for each day shown in the calendar in a list.</p>
+
+``` /app/views/articles/index.html.erb
+<div id="articles">
+  <%= calendar do |date| %>
+    <%= date.day %>
+    <% if @articles_by_date[date] %>
+    <ul>
+      <% @articles_by_date[date].each do |article| %>
+        <li><%= link_to article.name, article %></li>
+      <% end %>
+    </ul>
+    <% end %>
+  <% end %>
+</div>
+```
+
+<p>When we reload the page now the calendar shows the articles on the relevant date.</p>
+
+ <div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1319/original/E213RI05.png" width="800" height="500" alt="The articles are now listed by their date."/>
+</div>
+
+<p>The last thing we&rsquo;ll add to this page is something to show what the current month is and also links for swapping between months. To keep track of the current date we&rsquo;ll add a instance variable to the <code>index</code> action.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  @articles_by_date = @articles.group_by(&:published_on)
+  @date = Date.today
+end
+```
+
+<p>We can now display this date in the view. We&rsquo;ll also pass it into the <code>calendar</code> helper method so that the calendar displays the month contained in the variable.</p>
+
+``` /app/views/articles/index.html.erb
+<div id="articles">
+  <h2 id="month"><%= @date.strftime("%B %Y") %></h2>
+  <%= calendar @date do |date| %>
+    <%= date.day %>
+    <% if @articles_by_date[date] %>
+    <ul>
+      <% @articles_by_date[date].each do |article| %>
+        <li><%= link_to article.name, article %></li>
+      <% end %>
+    </ul>
+    <% end %>
+  <% end %>
+</div>
+```
+
+<p>Now we need to add links on either side of the date so that the user can change the month that&rsquo;s displayed. We can use ActiveSupport&rsquo;s <code>prev_month</code> and <code>next_month</code> methods to pass the relevant parameters to the two links.</p>
+
+``` /app/views/articles/index.html.erb
+<h2 id="month">
+  <%= link_to "<", date: @date.prev_month %>
+  <%= @date.strftime("%B %Y") %>   
+  <%= link_to ">", date: @date.next_month %>
+</h2>
+```
+
+<p>Now in the controller we need to check for this date parameter and use it if it&rsquo;s been passed in.</p>
+
+``` /app/controllers/articles_controller.rb
+def index
+  @articles = Article.all
+  @articles_by_date = @articles.group_by(&:published_on)
+  @date = params[:date] ? Date.parse(params[:date]) : Date.today
+end
+```
+
+<p>When we reload the page now we have links for moving between months.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1320/original/E213RI06.png" width="800" height="500" alt="We can now move between different months."/>
+</div>

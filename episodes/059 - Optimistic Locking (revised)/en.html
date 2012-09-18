@@ -1,0 +1,163 @@
+<p>If we have a busy application whose records are being updated frequently there&rsquo;s a good chance that a user might unintentionally overwrite someone else&rsquo;s changes. Below is a products listing page from a simple e-commerce site which has a number of admin users who can update each product&rsquo;s details.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1302/original/E059RI01.png" width="800" height="500" alt="The list of products."/>
+</div>
+
+<p>Let&rsquo;s say that we need to change the price of one of the products. We open its edit form but while we&rsquo;re looking up the updated price another user changes the same product&rsquo;s name and submits their changes. When we then find the price and submit our changes our product&rsquo;s name overwrites the changes that the other user made.</p>
+
+<h3>Optimistic Locking</h3>
+
+<p>Optimistic locking is a common solution to this kind of problem so we&rsquo;ll add this to our application. We need to add a new column to the database table that we want to add locking to so we&rsquo;ll start by generating a new migration. The column we add has to be called <code>lock_version</code> as doing so means that ActiveRecord picks this column up and automatically uses it for optimistic locking.</p> 
+
+``` terminal
+$ rails g migration add_lock_version_to_products lock_version:integer
+```
+
+<p>The column needs to be an integer and should have a default value of zero. Every time the row is updated this value will then be incremented and when an update is submitted whose <code>lock_version</code> doesn&rsquo;t match the value in the database it will be rejected. It&rsquo;s important that the column has a default value of zero so we&rsquo;ll modify the migration to set this before we run it.</p>
+
+``` /db/migrations/20120820000000_add_lock_version_to_products.rb
+class AddLockVersionToProducts < ActiveRecord::Migration
+  def change
+    add_column :products, :lock_version, :integer, default: 0, null: false
+  end
+end
+```
+
+<p>Now we can run <code>rake db:migrate</code> to add the column.</p>
+
+<p>Next we&rsquo;ll add a hidden field to the product&rsquo;s form view to hold the <code>lock_version</code>.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.hidden_field :lock_version %>
+```
+
+<p>Our application now knows the version of the product that is being updated. We also need to modify the <code>Product</code> model file so that the field can be updated through mass assignment.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :released_on, :category_id, :lock_version
+end
+```
+
+<p>When we edit a product now the form has an extra hidden field containing the current <code>lock_version</code>. If we try to update a product now and another user makes changes between us opening the edit page and submitting the form a <code>StaleObjectError</code> exception will be raised as when the other user made their changes the <code>lock_version</code> for the product will have been updated which doesn&rsquo;t match the <code>lock_version</code> value in our form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1303/original/E059RI02.png" width="800" height="500" alt="Our application throws a StaleObjectError if we try to update an item after it's been updated by someone else."/>
+</div>
+
+<p>Raising an exception doesn&rsquo;t provide a good user experience and we should instead <code>rescue</code> from this error and give the user a chance to fix the problem. One option is to handle this in the controller&rsquo;s <code>update</code> action. We could rescue from the exception there and render a conflict resolution view that displays both versions of the product and allows the user to resolve the conflicting fields. This means that we&rsquo;d need to write a new view template and abstracting this functionality to work with all of our application&rsquo;s resources could be tricky.</p> 
+
+<p>Instead we&rsquo;ll handle this through validations so that the errors are automatically displayed when the edit form is rendered again. We&rsquo;ll write a new method in the <code>Product</code> model that we&rsquo;ll call <code>update_with_conflict_validation</code> and use this in the controller. This method will take the arguments that are passed to it from the controller and use them to try to update the product, just like the normal update method would. The only difference is that if a <code>StaleObjectError</code> is raised we add an error message to the list and return <code>false</code> so that the update fails.</p>
+
+``` /app/models/product.rb
+def update_with_conflict_validation(*args)
+  update_attributes(*args)
+rescue ActiveRecord::StaleObjectError
+  errors.add :base, "This record changed while you were editing it."
+  false 
+end
+```
+
+<p>We&rsquo;ll use this method in our controller.</p>
+
+``` /app/controllers/products_controller.rb
+def update
+  @product = Product.find(params[:id])
+  if @product.update_with_conflict_validation(params[:product])
+    redirect_to @product, notice: "Updated product."
+  else
+    render :edit
+  end
+end
+```
+
+<p>When we submit the form now we&rsquo;ll see a validation error instead of an exception.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1304/original/E059RI03.png" width="800" height="500" alt="The page now shows a validation error if a stale version of a product is updated."/>
+</div>
+
+<p>While this is an improvement the user isn&rsquo;t told which fields changed or what their values were. We can add this by using Dirty Tracking which was covered in <a href="http://railscasts.com/episodes/109-tracking-attribute-changes">episode 109</a>. If we call changes on a model this will return a hash of the changed attributes. We can add an error to the list for each changed attribute like this:</p>
+
+``` /app/models/product.rb
+def update_with_conflict_validation(*args)
+  update_attributes(*args)
+rescue ActiveRecord::StaleObjectError
+  errors.add :base, "This record changed while you were editing it."
+  changes.each do |name, values|
+    errors.add name, "was #{values.first}"
+  end
+  false 
+end
+```
+
+<p>When we reload the page now the user can see exactly which attributes are different from those in the database. In this case it means that they&rsquo;ll now know that the name was changed while they were making their changes.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1305/original/E059RI04.png" width="800" height="500" alt="Information about the current version of the item is now shown."/>
+</div>
+
+<p>It would be better if some of the attributes didn&rsquo;t show up. The <code>lock_version</code> and <code>updated_at</code> fields are easy to hide, but the <code>price</code> is something that the user is changing intentionally. We don&rsquo;t have enough information about the previous versions of this product to know that the conflicting change didn&rsquo;t change the price of this product. This is something it&rsquo;s possible to do but it isn&rsquo;t a trivial change and it&rsquo;s not something we&rsquo;ll be covering here. Another issue we have is that because the lock version stays the same submitting the form again won&rsquo;t allow us to update the product even after we&rsquo;ve resolved the conflicts. To fix these issues we&rsquo;ll set the <code>lock_version</code> to be the same as the version in the database which we can do by using the <code>lock_version_was</code> method. We&rsquo;ll also hide the <code>updated_at</code> field from the list of errors.</p>
+
+``` /app/models/products.rb
+def update_with_conflict_validation(*args)
+  update_attributes(*args)
+rescue ActiveRecord::StaleObjectError
+  self.lock_version = lock_version_was
+  errors.add :base, "This record changed while you were editing it."
+  changes.except("updated_at").each do |name, values|
+    errors.add name, "was #{values.first}"
+  end
+  false 
+end
+```
+
+<p>When the user runs into a conflict now only errors that pertain to the form fields are shown and the user can make the necessary changes and then submit them.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1306/original/E059RI05.png" width="800" height="500" alt="We can now resolve the conflicts and update the product."/>
+</div>
+
+<h3>An Alternative Approach</h3>
+
+<p>Our solution is now pretty much complete but there are a couple of issues with it. One is that we&rsquo;re adding validations outside of the ActiveRecord validation step. This generally works but there could be side-effects in certain situations. Also if there are other columns that are frequently updated but which aren&rsquo;t displayed on the form these will update the <code>lock_version</code> and will trigger a conflict, even though there may not be a conflict in the fields that the user is editing. There&rsquo;s no easy way to exclude attributes from updating the <code>lock_version</code> counter but then there shouldn&rsquo;t be as this isn&rsquo;t the way that optimistic locking is meant to work.</p>
+
+<p>What we do in this form pushed the boundaries of what optimistic locking is designed to do so we&rsquo;ll try an alternative solution that doesn&rsquo;t use optimistic locking. We&rsquo;ve rolled back the changes we&rsquo;ve made to our application so that we&rsquo;re back where we started. We only need to change two files to implement this alternative solution and we don&rsquo;t even need to generate a migration. First we&rsquo;ll add a hidden field to the form like we did before. This will be called original_updated_at and will contain the updated_at time value for the product at the time the form was displayed.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.hidden_field :original_updated_at %>
+```
+
+<p>The other changes we&rsquo;ll make will be in the <code>Product</code> model.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :released_on, :category_id, :original_updated_at
+  validate :handle_conflict, only: :update
+
+  def original_updated_at
+    @original_updated_at || updated_at.to_f
+  end
+  attr_writer :original_updated_at
+
+  def handle_conflict
+    if @conflict || updated_at.to_f > original_updated_at.to_f
+      @conflict = true
+      @original_updated_at = nil
+      errors.add :base, "This record changed while you were editing. Take these changes into account and submit it again."
+      changes.each do |attribute, values|
+        errors.add attribute, "was #{values.first}"
+      end
+    end
+  end
+end
+```
+
+<p>We&rsquo;ve added the <code>original_updated_at</code> field to the list in <code>attr_accessible</code> so that it can be set through mass assignment. This is a virtual attribute with a getter method and a setter and the getter defaults to the current updated_at time converted to a float so that it&rsquo;s more precise in the form. We&rsquo;ve also added a validation called <code>handle_conflict</code> which is fired when the record is updated. This method checks to see if the <code>updated_at</code> attribute in the database is later than the one on the hidden form field. If it is then there&rsquo;s a conflict and so a number of validation errors will be added much like we had before.</p>
+
+<p>This functionality works much like it did before. If two updates are made at the same time a validation error is displayed and the fields with potentially conflicting values are listed along with their current values in the database. What&rsquo;s better about this solution is that the validations are in the right place and that we haven&rsquo;t had to make any changes to the database as we&rsquo;re using the <code>updated_at</code> field. If we wanted to use a new field so that we could add conflicts for only certain form fields we could add another time-based column to the database and use that instead.</p>
+
+<p>We&rsquo;ve tried to keep this solution as generic as possible so it should work with multiple models. This means that we could abstract this functionality out and include it in each model that we want to handle conflicts in.</p>

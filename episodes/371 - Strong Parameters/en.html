@@ -1,0 +1,253 @@
+<p>If you&rsquo;ve worked with Rails for a while you probably know about the importance of using <code>attr_accessible</code> in your models in regard to security. (If you&rsquo;re not then <a href="http://railscasts.com/episodes/26-hackers-love-mass-assignment">episode 26</a> has details about it.) One issue that is often encountered when using it is that it isn&rsquo;t very flexible. Sometimes we want this behaviour to be dependent on the current user&rsquo;s permissions but this isn&rsquo;t straightforward to implement. We&rsquo;ll explain this with a simple forum application.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1299/original/E371I01.png" width="800" height="550" alt="Our forum application."/>
+</div>
+
+<p>This forum has many topics and users can add or edit topics. If we edit one we can change its name or mark it as sticky so that it stays at the top of the list. We only want admin users to be able to mark a topic as sticky but currently any user can do this.</p> 
+
+<p>The <code>attr_accessible</code> line in the <code>Topic</code> model allows the <code>sticky</code> attribute to be set through mass assignment but this needs to be dependent on the current user which we don&rsquo;t have access to in the model. The current solution is to pass an as option to define the roles that can be set by each type of user.</p>
+
+``` /app/models/topic.rb
+class Topic < ActiveRecord::Base
+  has_many :posts
+  accepts_nested_attributes_for :posts
+
+  attr_accessible :name, as: :user
+  attr_accessible :name, :sticky, as: :admin
+end
+```
+
+<p>Doing this means that when we create or update a <code>Topic</code> we need to pass in that as option, like this:</p>
+
+``` /app/controllers/topics_controller.rb
+def create
+  @topic = Topic.new(params[:topic], as: current_user.try(:admin?) ? :admin : :user)
+  if @topic.save
+    redirect_to @topic, notice: "Created topic."
+  else
+    render :new
+  end
+end
+```
+
+<p>We&rsquo;d need to do this as well when we update a topic. If we try marking a topic as sticky while logged in as a non-admin user now an exception will be raised. When we sign in as an admin and make the same change, however, we can update the topic.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1300/original/E371I02.png" width="800" height="550" alt="Trying to update attributes through mass assignment now throws an exception."/>
+</div>
+
+<p>There are a couple of problems with this approach. One is that the authorization logic could potentially become rather complicated and placing it inline in each model doesn&rsquo;t feel like the right place for it. Also it&rsquo;s still not very dynamic: if we want to change this behaviour depending on the user&rsquo;s attributes or the topic&rsquo;s attributes this is difficult to do.</p> 
+
+<h3>Strong Parameters</h3>
+
+<p>Several months ago Yehuda Katz <a href="https://gist.github.com/1974187">wrote up a couple of ideas</a> for improving how Rails handles mass assignment. One of his suggestions was to use a signed token in the form that would be sent along with the other fields when the form was submitted which would mean that access to update the fields would only be granted to those form fields. This was an interesting idea but it didn&rsquo;t gain much traction. There are security concerns with it and it doesn&rsquo;t really address how to accept user parameters outside a form such as when using an application&rsquo;s API. The second idea is more practical and involves moving the protection into the controller layer from the model layer. This idea raised a lot of interesting discussion and its worth reading through the gist&rsquo;s comments to see the ideas that people have had surrounding this.</p> 
+
+<p>Shortly afterwards David Heinemeier Hannson released a gem called <a href="https://github.com/rails/strong_parameters">Strong Parameters</a> that provides an elegant solution to this problem. This gem allows us to call <code>permit</code> on the request parameters and restrict the attributes that are passed in. The current plan is to add this gem&rsquo;s functionality to Rails 4 so for a sneak peek of how this functionality will work we&rsquo;ll use this gem in our application.</p> 
+
+<p>We&rsquo;ll apply Strong Parameters to our Forum application to see how it works. First we&rsquo;ll need to add the gem to the gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'strong_parameters'
+```
+
+<p>There&rsquo;s an option in our app&rsquo;s config file that forces us to use <code>attr_accessible</code> in our models. We&rsquo;ll comment this out as we&rsquo;ll be using <code>strong_parameters</code> instead.</p>
+
+``` /config/application.rb
+# Enforce whitelist mode for mass assignment.
+# This will create an empty whitelist of attributes available for mass-assignment for all models
+# in your app. As such, your models will need to explicitly whitelist or blacklist accessible
+# parameters by using an attr_accessible or attr_protected declaration.
+# config.active_record.whitelist_attributes = true
+```
+
+<p>We can now remove the calls to <code>attr_accessible</code> from our <code>Topic</code> model.</p>
+
+``` /app/models/topic.rb
+class Topic < ActiveRecord::Base
+  has_many :posts
+  accepts_nested_attributes_for :posts
+end
+```
+
+<p>Doing this will make the model insecure so we&rsquo;ll enable Strong Parameters. To do this we need to include the <code>ActiveModel::ForbiddenAttributesProtection</code>. We could do this in the <code>Topic</code> model but the problem with doing this is that we need to remember to do it for every model in our application. It&rsquo;s better to have to models secure by default so we&rsquo;ll add it to <code>ActiveRecord::Base</code> instead. We can do this is a new initializer.</p>
+
+``` /config/initializers/strong_parameters.rb
+ActiveRecord::Base.send(:include,  ActiveModel::ForbiddenAttributesProtection)
+```
+
+<p>When we restart our app now we have security by default. If we try to update a topic in the browser we&rsquo;ll see an <code>ActiveModel::ForbiddenAttributes</code> error message as we can&rsquo;t update any of our application&rsquo;s models by default. To fix this we need to call <code>permit</code> on the parameters that are passed in to mass assignment such as in the <code>TopicController</code>&rsquo;s <code>update</code> action. We&rsquo;ll replace the <code>as</code> option that we set earlier and, for now, set the attributes statically.</p>
+
+``` /app/controllers/topics_controller.rb
+def update
+  @topic = Topic.find(params[:id])
+  if @topic.update_attributes(params[:topic].permit(:name, :sticky)
+    redirect_to topics_url, notice: "Updated topic."
+  else
+    render :edit
+  end
+end
+```
+
+<p>We can now update a topic in the browser. To keep things clean and DRY we&rsquo;ll move the code that defines the parameters into its own method.</p> 
+
+``` /app/controllers/topics_controller.rb
+def update
+  @topic = Topic.find(params[:id])
+  if @topic.update_attributes(topic_params)
+    redirect_to topics_url, notice: "Updated topic."
+  else
+    render :edit
+  end
+end 
+ 
+private
+def topic_params
+  params[:topic].permit(:name, :sticky)
+end
+```
+
+<p>As this code is in a controller we can easily change the parameters based on the current user and so restrict the ability to update the <code>sticky</code> attribute to admins.</p>
+
+``` /app/controllers/topics_controller.rb
+def topic_params
+  if current_user && current_user.admin?
+    params[:topic].permit(:name, :sticky)
+  else
+    params[:topic].permit(:name)
+  end
+end
+```
+
+<p>This code will do much the same thing we did with <code>attr_accessible</code> in the model earlier. There are a couple of changes we can make to this method. Instead of accessing the topic parameters directly we&rsquo;ll use <code>require</code> to ensure that they exist so that we don&rsquo;t get a <code>nil</code> exception when we call <code>permit</code>. If we want all of a model&rsquo;s parameters to be updatable we can call <code>permit</code> with an exclamation mark so we&rsquo;ll so that for the admin users.</p>
+
+``` /app/controllers/topics_controller.rb
+private
+def topic_params
+  if current_user && current_user.admin?
+    params.require(:topic).permit!
+  else
+    params.require(:topic).permit(:name)
+  end
+end
+```
+
+<h3>How Strong Parameters Work</h3>
+
+<p>At this point you might be wondering how Strong Parameters works. It looks like it defines methods on the <code>params</code> hash so we&rsquo;ll do some experimenting in the console to work this out. It&rsquo;s important to understand that passing in a simple normal hash to mass assignment will not protect the model and we can demonstrate this by creating a new <code>Topic</code>.</p>
+
+``` console
+>> Topic.new(sticky: true)
+=> #<Topic id: nil, name: nil, sticky: true, created_at: nil, updated_at: nil>
+```
+
+<p>Strong Parameters overrides the <code>params</code> method in the controllers and passes it through an instance of <code>ActionController::Parameters</code>. If we create an instance of this class and pass it a hash the object we get back behaves like a hash but it has extra methods such as <code>permit</code> and <code>require</code>. If we pass this object to a new <code>Topic</code> an exception will be raised as those attributes can&rsquo;t be set through mass assignment.</p>
+
+``` console
+>> params = ActionController::Parameters.new(sticky: true)
+=> {"sticky"=>true}
+>> Topic.new(params)
+ActiveModel::ForbiddenAttributes: ActiveModel::ForbiddenAttributes
+```
+
+<p>This is very useful. If we ever pass in attributes through a trusted source such as our application&rsquo;s tests we can pass them straight in. For untrusted sources we can go through <code>ActionController::Parameters</code> but we need to watch out for those cases where the <code>params</code> hash is converted back into a normal hash which would go through unprotected, although this is unlikely to happen.</p>
+
+<p>There are some concerns about defining the attribute protection in the controller layer, but this is a flexible solution and it can easily be moved elsewhere. As an example we have another <code>TopicsController</code> in our application that handles API requests. We&rsquo;d like to have similar permissions on the attributes here to those in the other <code>TopicsController</code> but we don&rsquo;t want to duplicate our <code>topic_params</code> method as any changes to the authorization logic will then need to be made in two places. A common solution for cases where code needs to be included in two classes is to move it into a module so let&rsquo;s try that. There&rsquo;s no obvious place to put this module so we&rsquo;ll put it in the <code>/lib</code> directory.</p>
+
+``` /lib/topic_params.rb
+module TopicParams
+  private
+  def topic_params
+    if current_user && current_user.admin?
+      params.require(:topic).permit!
+    else
+      params.require(:topic).permit(:name)
+    end
+  end  
+end
+```
+
+<p>We could now include this module in both of our controllers.</p>
+
+<p>While this approach works, extracting modules isn&rsquo;t always a good idea as the interface and the dependencies aren&rsquo;t really defined. We access the <code>current_user</code> and <code>params</code> methods in this module so anything that needs in include this module needs to have the same interface. This makes this solution inflexible and doesn&rsquo;t allow us to easily access this functionality outside a controller.  So, instead of doing this we&rsquo;ll delete this module and move its functionality into a new class under <code>/app/models</code>. Even though this class won&rsquo;t inherit from <code>ActiveRecord::Base</code> it&rsquo;s still a model, just not one with a database table behind it.</p>
+
+``` /app/models/permitted_params.rb
+class PermittedParams < Struct.new(:params, :user)
+  def topic
+    if user && user.admin?
+      params.require(:topic).permit!
+    else
+      params.require(:topic).permit(:name)
+    end
+  end  
+end
+```
+
+<p>Note that the class inherits from <code>Struct.new</code> as this provides a quick way to define accessors and the initializer. The <code>topic_params</code> is very similar to the code we had in our module, except that we&rsquo;ve replaced <code>current_user</code> with user and renamed the method to <code>topic</code>. Now the dependencies for this logic are clearly defined and we can easily instantiate this class from within a controller. We&rsquo;ll use it now in the <code>ApplicationController</code> so that it&rsquo;s available everywhere.</p>
+
+``` /app/controllers/application_controller.rb
+def permitted_params
+  @permitted_params ||= PermittedParams.new(params, current_user)
+end
+```
+
+<p>We can now call this method in our <code>TopicsController</code>.</p>
+
+``` /app/controllers/topics_controller.rb
+def update
+  @topic = Topic.find(params[:id])
+  if @topic.update_attributes(permitted_params.topic)
+    redirect_to topics_url, notice: "Updated topic."
+  else
+    render :edit
+  end
+end
+```
+
+<p>For our other controllers we can define similar methods in our new PermittedParameters class and use them in the same way. We can use our new class in our API&rsquo;s <code>TopicsController</code>, too, without duplicating any logic.</p>
+
+<p>We can try our new logic out now. If we sign in as an admin we can update a topic and change its stickyness. If we log in as a non-admin user and try to update a topic, however, although no exception is raised the <code>sticky</code> attribute for that topic isn&rsquo;t updated. Ideally the checkbox for setting a topic&rsquo;s stickiness wouldn&rsquo;t be displayed to non-admin users. It would be good if we could use the <code>PermittedParams</code> logic in our views as well like this:</p>
+
+``` /app/views/topics/_form.html.erb
+<% if permitted_params.topic_attributes.include? :sticky %>
+<div class="field">
+  <%= f.check_box :sticky %>
+  <%= f.label :sticky %>
+</div>
+<% end %>
+```
+
+<p>To get this to work we&rsquo;ll write a <code>topic_attributes</code> method in our <code>PermittedParams</code> class. </p>
+
+``` /app/models/permitted_params.rb
+class PermittedParams < Struct.new(:params, :user)
+  def topic
+    params.require(:topic).permit(*topic_attributes)
+  end
+  
+  def topic_attributes
+    if user && user.admin?
+      [:name, :sticky]
+    else
+      [:name]
+    end
+  end      
+end
+```
+
+<p>Our <code>topic</code> method now calls <code>topic_attributes</code> and this new method now contains the logic that defines the attributes that are permitted for each type of user. We need to make a change in the <code>ApplicationController</code>, too, and make this method a helper method so that we can use it in the views.</p>
+
+``` /app/controllers/application_controller.rb
+def permitted_params
+  @permitted_params ||= PermittedParams.new(params, current_user)
+end
+helper_method :permitted_params
+```
+
+<p>When we reload the edit page for a topic now while logged in as a non-admin the &ldquo;Sticky&rdquo; checkbox no longer appears.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1301/original/E371I03.png" width="800" height="xxx" alt="The &lsquo;sticky&rsquo; checkbox doesn&rsquo;t now show to non-admin users."/>
+</div>
+
+<p>Strong Parameters appears to be a big step up from <code>attr_accessible</code> and it&rsquo;s certainly flexible. We can define authorization logic in the controllers or in a separate class as we&rsquo;ve done here.</p> 
