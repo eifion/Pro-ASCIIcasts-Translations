@@ -1,0 +1,174 @@
+<p>If you find yourself running a slow method multiple times in a single request where the output is consistent you might want to consider caching its return value using a technique called Memoization. Below is a screenshot from a simple example app which executes a method and displays its output and the time it takes to process.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1331/original/E137RI01.png" width="800" height="400" alt="Our simple web application."/>
+</div>
+
+<p>We call this method twice and in a view template and it takes half a second to run each time. The method itself just sleeps for half a second to simulate a complex operation then returns a value. We&rsquo;ll cache this value using memoization.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  def filesize
+    sleep 0.5
+    4815162342
+  end
+end
+```
+
+<p>When we first covered this topic we used the <code>ActiveSupport::Memoizable</code> module but this has since been deprecated. The deprecation message tells us to &ldquo;simply use Ruby memoization pattern instead&rdquo;.  The most common approach to doing this is to store the result in an instance variable which we can do like this:</p>
+
+``` /app/models/product.rb
+def filesize
+  @filesize ||= begin
+    sleep 0.5
+    4815162342
+  end
+end
+```
+
+<p>As we&rsquo;re caching the result of more than one line of code here we&rsquo;ve used a <code>begin</code> <code>end</code> block here along with <code>||=</code> to store the result in the instance variable the first time the method is called. When we reload the page now the method still takes half a second to run the first time but runs almost instantly the second time.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1332/original/E137RI02.png" width="800" height="400" alt="The method now runs almost instantly the second time."/>
+</div>
+
+<p>Using a <code>begin</code> block like this isn&rsquo;t the best approach especially if the logic inside the block is more complex. In these scenarios it&rsquo;s better to move the code out into a separate method like this:</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  def filesize
+    @filesize ||= calculate_filesize
+  end
+  
+private
+  def calculate_filesize
+    sleep 0.5
+    4815162342
+  end
+end
+```
+
+<p>Now that we have the code cleaned up a little we&rsquo;ll focus on the <code>||=</code> operator. How does this work? The line <code>@filesize ||= calculate_filesize</code> is roughly equivalent to <code>@filesize || @filesize = calculate_filesize</code>. This returns the value of the <code>@filesize</code> if it isn&rsquo;t <code>nil</code> or <code>false</code>. Otherwise it calculates the value and stores the result in <code>@filesize</code>. The two forms aren&rsquo;t exactly equivalent, however, there are some minor differences between them. We&rsquo;ll investigate these by using irb with warnings turned on. If we try using the long form to return or set an instance variable we&rsquo;ll get a warning telling us the the instance variable hasn&rsquo;t been initialized. If we use the short <code>||=</code> form we won&rsquo;t see a warning.</p>
+
+``` console
+>> @a || @a = "foo"
+(irb):1: warning: instance variable @a not initialized
+=> "foo"
+>> @b ||= "bar"
+=> "bar"
+```
+
+<p>This is even more noticeable if we try to set a local variable this way as we&rsquo;ll get an error if we use the long form.</p>
+
+``` console
+>> a || a = "foo"
+NameError: undefined local variable or method `a' for main:Object
+	from (irb):3
+	from /Users/eifion/.rbenv/versions/1.9.3-p194/bin/irb:12:in `<main>'
+>> b ||= "bar"
+=> "bar"
+```
+
+<p>Something we should always keep in mind when using this approach is that the value won&rsquo;t be read from the cache if it is equal to <code>false</code> or <code>nil</code>. If we have the <code>calculate_filesize</code> method return one of these values it&rsquo;s called twice when we reload the page and the page still takes a full second to load. To get around this problem we can set the cache value unless it has already been defined, like this:</p>
+
+``` /app/models/product.rb
+def filesize
+  @filesize = calculate_filesize unless defined? @filesize
+  @filesize
+end
+```
+
+<p>Now the page caches the value the first time it&rsquo;s calculated and the second time it&rsquo;s read from the cache correctly.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1333/original/E137RI03.png" width="800" height="400" alt="The value is now cached correctly even though its value is &lsquo;false&rsquo;."/>
+</div>
+
+<h3>Handling Methods That Take Arguments</h3>
+
+<p>We probably won&rsquo;t run into this scenario very often so the <code>||=</code> operator will generally work well enough. Another scenario we might encounter is that when the returned value is dependent on an argument passed into the method. We can demonstrate this by having <code>calculate_filesize</code> take an argument.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  def filesize(*args)
+    @filesize ||= calculate_filesize(*args)
+  end
+  
+private
+  def calculate_filesize(num = 1)
+    sleep 0.5
+    4815162342 * num
+    false
+  end
+end
+```
+
+<p>In the view we&rsquo;ll add another call to this method that passes an argument.</p>
+
+``` /app/views/products/show.html.erb
+<h1>Memoization</h1>
+
+<%= report_time "@product.filesize" %>
+
+<%= report_time "@product.filesize" %>
+
+<%= report_time "@product.filesize(2)" %>
+```
+
+<p>When we reload the page now we can see the problem: the last call to <code>product.filesize</code> has returned the same value as the others as the cached value has been returned.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1334/original/E137RI04.png" width="800" height="450" alt="The method returns the same value even though different arguments have been passed in."/>
+</div>
+
+<p>To solve this we need to keep a separate cache for each different argument that is passed in. One of the way to do this is to use a hash with the argument as the key.</p> 
+
+``` /app/models/product.rb
+def filesize(*args)
+  @filesize ||= {} 
+  @filesize[args] ||= calculate_filesize(*args) 
+end
+```
+
+<p>When we reload the page now the final snippet has the correct value and takes half a second to run as it&rsquo;s being calculated rather than being fetched from the cache.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1335/original/E137RI05.png" width="800" height="450" alt="Passing different arguments now gives us different values."/>
+</div>
+
+<p>If we take this approach we should keep the arguments that are passed in as simple objects so that they work as hash keys. While we&rsquo;re on the subject of hashes we&rsquo;ll show you another approach to memoization which uses the hash default value. We can call <code>Hash.new</code> and pass in a block which will be executed when the key isn&rsquo;t found. When we try to a hash key with a given argument now it will trigger a miss which will execute the block and cause the value to be cached. What&rsquo;s nice about this approach is that if the method returns a <code>false</code> or <code>nil</code> value it will be cached and used again if the method is called with the same argument again.</p>
+
+<h3>A More General Solution</h3>
+
+<p>For fun let&rsquo;s see what it takes to generalize this memoization approach so that we can easily add it to any method. We want to be able to revert to just having our <code>filesize</code> method again and to have a <code>memoize</code> class method that we can pass a method name to memoize it.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  def self.memoize(name)
+    alias_method "_unmemoized_#{name}", name
+    define_method(name) do |*args|
+      @_memoized ||= {}
+      @_memoized[name] ||= Hash.new do |hash, key|
+        hash[key] = send("_unmemoized_#{name}", *key)
+      end
+      @_memoized[name][args]      
+    end
+  end
+  
+  def filesize(num = 1)
+    sleep 0.5
+    4815162342 * num
+  end
+  memoize :filesize
+end
+```
+
+<p>Our new <code>memoize</code> method takes the name of the method as an argument and the first thing we do is alias the method so that we can use it later. Next we define a method with that name which overrides the existing method in the class. This overriding method has a <code>@_memoized</code> instance variable which defaults to a new hash. We then create a new hash key with the same name as the method so that each memoized method can have its own key, and we store the value by setting a nested key with a key that&rsquo;s the name we&rsquo;ve passed in and with a value that&rsquo;s determined by calling the original version of the method we&rsquo;ve overridden. When we reload the page now to see if this works we see the same results as before with the second call to <code>filesize</code> without any arguments being cached as we&rsquo;d expect.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1335/original/E137RI05.png" width="800" height="450" alt="Passing different arguments now gives us different values."/>
+</div>
+
+<p>Doing this abstraction works as an exercise but it has limited practical use. There aren&rsquo;t many situations where we&rsquo;d want to do this kind of thing. Most of the time we want to craft the memoization around an application&rsquo;s specific needs as different apps generally require different approaches. For our application the first approach we took is good enough and doesn&rsquo;t involve a lot of code. If we do want a more general approach the <a href="https://github.com/matthewrudy/memoist">Memoist gem</a> is a direct extraction of <code>ActiveSupport::Memoizable</code>. This is more feature complete that what we showed in our abstraction and includes functionality such as expiring caches.</p>
+
+<p>Speaking of expiring the cache if we do need to make a cache stale with our approach we can simply clear the instance variable where the cached values are stored. Expiring the cache isn&rsquo;t usually necessary, however, as the cache only hangs around for the duration of the object and this is often only a dingle request. If we do want to cache something that sticks around for a longer period we should consider using Rails&rsquo; built-in caching system. Also keep in mind that Memoization isn&rsquo;t free: we&rsquo;re saving CPU cycles but at the cost of memory. If we&rsquo;re storing cache values based on arguments this can quickly grow out of hand if the method is called with a large number of different arguments. When in doubt it&rsquo;s best to profile and benchmark different scenarios and avoid premature optimization.</p>
