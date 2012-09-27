@@ -138,13 +138,13 @@ end
 <p>Delayed Job supports a number of useful options on the <code>delay</code> method. One is queue which we can use to specify a named queue. This enables us to have different workers working on different queues.</p>
 
 ``` ruby
-Newsletter.delay(queue: &quot;newsletter&quot;).deliver(params[:id])
+Newsletter.delay(queue: "newsletter").deliver(params[:id])
 ```
 
 <p>Another useful option is <code>priority</code>. This defaults to <code>0</code> but if we set a higher value that job will be processed earlier. Similarly if we set it to a lower value the job will be processed later. We can also specify at <code>run_at</code> option to specify when we want this job to run at some point in the future.</p> 
 
 ``` ruby
-Newsletter.delay(queue: &quot;newsletter&quot;, priority: 28, run_at: 5.minutes.from_now).deliver(params[:id])
+Newsletter.delay(queue: "newsletter", priority: 28, run_at: 5.minutes.from_now).deliver(params[:id])
 ```
 
 <p>Delayed Job supports a number of different ways to add jobs to a queue. The <code>delay</code> method we&rsquo;ve used so far is the preferred approach and should work for most situations. If we want a method in a class to always be called asynchronously we can use <code>handle_asynchronously</code> in a class and pass it a method name as a symbol. Delayed Job will then be used every time that method is called. Another approach is a custom job and to do this we create our own custom class for a job with a <code>perform</code> method. We can then add jobs manually to the queue by calling <code>enqueue</code>, like this:</p>

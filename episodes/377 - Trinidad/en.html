@@ -1,0 +1,292 @@
+<p>There are many ways to deploy a JRuby application. In this episode we&rsquo;ll demonstrate <a href="https://github.com/trinidad/trinidad">Trinidad</a> which is built on top of Tomcat and which strikes a nice balance between utilizing the solid Java foundation and still feeling like a traditional Rails deployment. It is also flexible and provides a number of extensions. This allows us to keep everything associated with our Rails application, including running background jobs, within a single process. The application we&rsquo;ll be deploying is shown below. It is already running under JRuby like we showed in the last episode, <a href="http://railscasts.com/episodes/376-jruby-basics">number 376</a>.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1339/original/E377I01.png" width="800" height="500" alt="Our Rails application."/>
+</div>
+
+<p>We&rsquo;ll be deploying our app to a Linode VPS running Ubuntu 12.04. The first thing we&rsquo;ll do on the server is add a user called deployer and give him sudo behaviour.</p>
+
+``` terminal
+# adduser deployer
+# echo "deployer ALL=(ALL:ALL) ALL" >> /etc/suoders
+```
+
+<p>So that we don&rsquo;t have to type in the password every time we access the server we&rsquo;ll run the <code>ssh-copy-id</code> command, which can be installed through Homebrew, so that it can copy over the SSH key for that user.</p>
+
+``` terminal
+$ ssh-copy-id deployer@198.58.96.26
+```
+
+<p>Our server is now pretty much set up and ready to deploy. We&rsquo;ll start in the gemfile and here we have JRuby already set up and are using Postgres as the database.</p>
+
+``` /Gemfile
+source 'https://rubygems.org'
+
+gem 'rails', '3.2.8'
+
+# Bundle edge Rails instead:
+# gem 'rails', :git => 'git://github.com/rails/rails.git'
+
+platform :jruby do
+  gem 'activerecord-jdbcpostgresql-adapter'
+  gem 'jruby-openssl'
+  gem 'therubyrhino', group: :assets
+end
+
+platform :ruby do
+  gem 'pg'
+end
+
+# Rest of file omitted.
+```
+
+<p>We&rsquo;ve also prepared this project for deployment by setting up Capistrano and we have a deploy script written. In it we load several other recipe files to set up various parts of the production server and these files are stored in a <code>recipes</code> subdirectory.</p>
+
+``` /config/deploy.rb
+require "bundler/capistrano"
+
+load "config/recipes/base"
+load "config/recipes/nginx"
+load "config/recipes/postgresql"
+load "config/recipes/rbenv"
+
+server "198.58.96.26", :web, :app, :db, primary: true
+
+set :user, "deployer"
+set :application, "blog"
+set :deploy_to, "/home/#{user}/apps/#{application}"
+set :use_sudo, false
+
+set :deploy_via, :copy
+set :repository, "."
+set :copy_exclude, %w[.git log tmp .DS_Store]
+set :scm, :none
+
+default_run_options[:pty] = true
+
+after "deploy", "deploy:cleanup" # keep only the last 5 releases
+```
+
+<p>This technique was explained in more detail in <a href="http://railscasts.com/episodes/337-capistrano-recipes">episode 337</a> but there are several differences here. One is that there&rsquo;s no mention of a Unicorn recipe here as we&rsquo;ll be setting up Trinidad as the app server instead. Another difference from the usual setup is that we&rsquo;re deploying via copy instead of through a Git repository. We&rsquo;re doing this as there seem to be some issues using JRuby with using <code>ssh_options[:forward_agent]</code>. There&rsquo;s <a href="http://jira.codehaus.org/browse/JRUBY-6181">a discussion about this problem here</a>.</p>
+
+<p>There&rsquo;s more we need to do to make our application compatible with JRuby and Trinidad. The first thing is to change the version of Ruby that&rsquo;s installed on the server as the rbenv recipe current installs MRI Ruby. We&rsquo;ll also need to have a version of Java on the server and we can install this through <code>apt-get</code>. We&rsquo;ll install the full JDK here, though we could just install the runtime. We&rsquo;ll also install the jsvc package as this is required for running Trinidad as a daemonized process.</p>
+
+``` /config/recipes/rbenv.rb
+set_default :ruby_version, "jruby-1.7.0.preview2"
+
+namespace :rbenv do
+  desc "Install rbenv, Ruby, and the Bundler gem"
+  task :install, roles: :app do
+    run "#{sudo} apt-get -y install curl git-core openjdk-7-jdk jsvc"
+  # Rest of file omitted.
+```  
+  
+<p>We also need to install Trinidad itself and we can do this in the gemfile. Note that we set <code>require: false</code> here as it&rsquo;s loaded in differently.</p>
+
+``` /Gemfile
+platform :jruby do
+  gem 'activerecord-jdbcpostgresql-adapter'
+  gem 'jruby-openssl'
+  gem 'therubyrhino', group: :assets
+  gem 'trinidad', require: false
+end
+```
+
+<p>There&rsquo;s a lot more to do yet but we can try deploying what we have so far to see if it works. As we&rsquo;ve changed the gemfile we&rsquo;ll run <code>bundle</code> to generate the proper lockfile and when we do one of the gems that&rsquo;s added to it is <code>trinidad_jars</code>. This has Tomcat embedded into it so that we don&rsquo;t have to install it separately on the server. Next we&rsquo;ll run <code>cap deploy:install</code> which will go through the various recipes and install the different parts of the server. If we get an error when running this command we should try running <code>bundle update:highline</code> as older versions of the Highline gem were incompatible with the version of JRuby we&rsquo;re using.</p>
+
+<p>Once the install command has completed successfully we can run <code>cap deploy:setup</code> to configure the server then <code>cap deploy:cold</code> to finish up the deployment. We can try visiting our application in the browser now but when we do we get a 403 error from Nginx.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1340/original/E377I02.png" width="800" height="309" alt="Nginx returns a 403 error when we try to visit our application."/>
+</div>
+
+<p>This is because we haven&rsquo;t configured Nginx properly and because Trinidad isn&rsquo;t yet set up and running. We&rsquo;ll fix Trinidad first. If we SSH into the server and move to the application&rsquo;s directory we can start it up with this command.</p>
+
+``` terminal
+~/apps/blog/current$ bundle exec rails s trinidad -e production
+```
+
+<p>This will start Trinidad up on port 3000. If we visit port 3000 in the browser now we&rsquo;ll see our application, although it will look different. This is because the static assets aren&rsquo;t being served through Nginx but at least our app is working. We need to configure Nginx to proxy to our Trinidad server. We have an Nginx template file in our app which contains the server&rsquo;s configuration. We&rsquo;ll add some code to it to act as a proxy for Trinidad. This will forward any matching requests to port 3000.</p>
+
+``` /config/recipes/templates/nginx.erb
+server {
+  listen 80 default deferred;
+  # server_name example.com;
+  root <%= current_path %>/public;
+
+  location ^~ /assets/ {
+    gzip_static on;
+    expires max;
+    add_header Cache-Control public;
+  }
+
+  try_files $uri/index.html $uri @trinidad;
+  location @trinidad {
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $http_host;
+    proxy_redirect off;
+    proxy_pass http://localhost:3000;
+  }
+
+  error_page 500 502 503 504 /500.html;
+  client_max_body_size 4G;
+  keepalive_timeout 10;
+}
+```
+
+<p>To redeploy this file and restart Nginx we&rsquo;ll run the <code>cap nginx:setup</code> task which we have set up in our recipe file. When we visit our server&rsquo;s IP address in a browser now it will look and work as we expect it to.</p>
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1341/original/E377I03.png" width="800" height="500" alt="Our application now works as we expect it to."/>
+</div>
+
+<p>We don&rsquo;t want to have to start up Trinidad manually on the server every time. It would be better if we had a  script to do this for us. Thankfully there&rsquo;s a gem designed specifically for this problem called <a href="https://github.com/trinidad/trinidad_init_services">Trinidad Init Services</a>. This provides a command that we can run that will ask us some questions then generate an init script to automatically start Trinidad based on the answers we give. Since we&rsquo;re running Trinidad on a remote server we don&rsquo;t really want to have interactive questions but we can instead pass a YAML file to to the command to run it with the answers already supplied. We&rsquo;ll create a new recipe file for Trinidad and add the code to it to generate the Trinidad Init Service.</p>
+
+``` /config/recipes/trinidad.rb
+set_default :trinidad_init_config do
+  {
+    "run_user" => user,
+    "app_path" => current_path,
+    "trinidad_options" => "-e production",
+    "ruby_compat_version" => "RUBY1_9",
+    "jsvc_path" => "/usr/bin/jsvc",
+    "java_home" =>"/usr/lib/jvm/java-7-openjdk-i386/jre",
+    "jruby_home" => "/home/#{user}/.rbenv/versions/#{ruby_version}",
+    "pid_file" => "#{shared_path}/pids/trinidad.pid",
+    "log_file" => "#{shared_path}/log/trinidad.log",
+    "output_path" => "/tmp" # move later using sudo
+  }
+end
+
+namespace :trinidad do
+  desc "Setup Trinidad configuration for this application"
+  task :setup, roles: :app do
+    put trinidad_init_config.to_yaml, "/tmp/trinidad_init.yml"
+    run "gem install trinidad_init_services"
+    run "trinidad_init_service /tmp/trinidad_init.yml"
+    run "#{sudo} mv /tmp/trinidad /etc/init.d/trinidad_#{application}"
+    run "#{sudo} update-rc.d -f trinidad_#{application} defaults"
+    restart
+  end
+  after "deploy:setup", "trinidad:setup"
+
+  %w[start stop restart].each do |command|
+    desc "#{command} Trinidad"
+    task command, roles: :app do
+      run "#{sudo} service trinidad_#{application} #{command}"
+    end
+  end
+end
+```
+
+<p>There&rsquo;s a lot of code here but a lot of it is the YAML configuration which points to the paths for various things on the server. If your server&rsquo;s set up differently you&rsquo;ll need to change some of these to suit. In the second part of the file we define our Trinidad setup task which installs the <code>trinidad_init_services</code> gem after copying over the YAML config file then runs it with that config file do create an init script. We then move that file to the <code>init.d</code> directory so that Trinidad will automatically start up then run a command to make it into a service. Finally we restart Trinidad. We&rsquo;ll need to add this script to our <code>deploy.rb</code> file so that it&rsquo;s run which we do by adding the following line of code.</p>
+
+``` /config/deploy.rb
+load "config/recipes/trinidad"
+```
+
+<p>If we stop Trinidad on the server we can check to see if our script works by running <code>cap trinidad:setup</code>. This will copy over the YAML file, install the gem then run the init script. If we browse to the application after the command finishes we&rsquo;ll see our application running again.</p>
+
+<h3>Redeployment</h3>
+
+<p>The next problem we&rsquo;ll tackle is redeployment. If we make a change to our application we want Trinidad to load that change when we redeploy it. The Trinidad service has a restart command that we can run but this restarts the entire process and it&rsquo;s better to avoid this. Trinidad supports a feature, much like Passenger, where we can modify a <code>tmp/restart.txt</code> file and Trinidad will pick this up and load in the new code. We&rsquo;ll add a task to the Trinidad recipe to do this.</p>
+
+``` /config/recipes/trinidad.rb
+desc "Reload application in Trinidad"
+task :reload, roles: :app do
+  run "touch #{current_release}/tmp/restart.txt"
+end
+after "deploy:restart", "trinidad/reload"
+```
+
+<p>This task will run automatically after the <code>deploy:restart</code> task which is triggered when the application is deployed. If we make a small change to our application, say changing the index page&rsquo;s heading to &ldquo;Articles 2&rdquo;, then deploy our application <code>cap deploy</code> should now copy over the new code and load it in to Trinidad without restarting the process. When we try to visit our application in the browser after deploying it it will take a while to respond as it&rsquo;s still starting up but once it finishes we should see the change we&rsquo;ve made.</p>
+
+<p>It seems that there can be some situations where the code isn&rsquo;t reloaded correctly. If you have this problem take a look at the show notes for this episode where there are some solutions to try.</p>
+
+<h3>Zero-Downtime Deployments</h3>
+
+<p>Trinidad supports two different ways to reload an application when a new version is deployed. We&rsquo;ve been using the restart strategy which means that the existing application is taken down then started up again with the new code. The downside to this approach is that any requests made during this time will hang or maybe even time out. JRuby can take quite a while to boot up a Rails app, as much as a minute depending on the size of the application and the hardware its running on. It would be better if our application was accessible during that time and this is what the rolling strategy is designed to solve. This supports zero-downtime by still accepting requests to the old version of the application until the new version has started up. The downside of this approach is memory usage: it can take a lot of RAM to have two versions of the application loaded at the same time. If the server has the memory to support this, however, it is the better option and we can enable it by editing Trinidad&rsquo;s YAML config file. This is a different file from the one the one we set up for the initialization script. We&rsquo;ll need to make a separate file that will be loaded in each time Trinidad starts and we can add some code at the top of our Trinidad recipe file to do this.</p>
+
+``` /config/recipes/trinidad.rb
+set_default(:trinidad_config_path) { "#{shared_path}/config/trinidad.yml" }
+set_default :trinidad_config do
+  {
+    "environment" => "production"
+    "reload_strategy" => "rolling"
+  }
+end
+```
+
+<p>Here we set two settings, one to set the path for the Trinidad YAML file and another containing a hash that will be converted to YAML for that file. We need to tell Trinidad to use this file which we can do by changing the <code>trinidad_options</code> setting in the initialization config.</p>
+
+``` /config/recipes/trinidad.rb
+set_default :trinidad_init_config do
+  {
+    "run_user" => user,
+    "app_path" => current_path,
+    "trinidad_options" => "--config #{trinidad_config_path}",
+    "ruby_compat_version" => "RUBY1_9",
+    "jsvc_path" => "/usr/bin/jsvc",
+    "java_home" =>"/usr/lib/jvm/java-7-openjdk-i386/jre",
+    "jruby_home" => "/home/#{user}/.rbenv/versions/#{ruby_version}",
+    "pid_file" => "#{shared_path}/pids/trinidad.pid",
+    "log_file" => "#{shared_path}/log/trinidad.log",
+    "output_path" => "/tmp" # move later using sudo
+  }
+end
+```
+
+<p>We no longer need to specify the environment here as this is now specified in the 
+config. The last thing we need to do is generate the YAML config file and we&rsquo;ll do this in the <code>setup</code> task in a similar way to how we generated the init config file.</p>
+
+``` /config/recipes/trinidad.rb
+task :setup, roles: :app do
+  put trinidad_config.to_yaml, trinidad_config_path
+  put trinidad_init_config.to_yaml, "/tmp/trinidad_init.yml"
+  run "gem install trinidad_init_services"
+  run "trinidad_init_service /tmp/trinidad_init.yml"
+  run "#{sudo} mv /tmp/trinidad /etc/init.d/trinidad_#{application}"
+  run "#{sudo} update-rc.d -f trinidad_#{application} defaults"
+  restart
+end
+```
+
+<p>If we run <code>cap trinidad:setup</code> now our new config file will be sent over to the server and Trinidad will read it when it restarts. We can now try our rolling restarts by making a change to our application and running <code>cap deploy</code> to deploy it. If we repeatedly reload the page while the application deploys it will still serve up the old version while the new one starts up. Once the new version has stated up we&rsquo;ll see the new version of the page but at no time will the request hang or time out.</p>
+
+If we use zero-downtime deployment like this we&rsquo;ll need to watch out for database migrations that are incompatible between versions. <a href="http://railscasts.com/episodes/373-zero-downtime-deployment">Episode 373</a> has more details on this. 
+
+<h3>Multithreading</h3>
+
+<p>One topic we&rsquo;ve yet to mention is multi-threading. One of the main benefits of using JRuby is that it has much better support for threading, as we showed in the last episode. Our application isn&rsquo;t currently marked as thread-safe and in this scenario Trinidad will start up multiple instances of the application, run them within the same process and load balance between them. This allows multiple requests to come in concurrently but isn&rsquo;t very efficient when it comes to memory usage. If we enable thread-safe mode in the config file Trinidad will detect this and only run one instance of the application with a separate thread for each request.</p>
+
+``` /config/environments/production.rb
+# Enable threaded mode
+config.threadsafe!
+```
+
+<p>This is much more efficient. All requests will now share the same memory pool and our application will be able to scale to handle many more concurrent requests. If we enable this we need to be sure that the rest of our application is thread-safe. Thread-safety was covered in <a href="http://railscasts.com/episodes/365-thread-safety">episode 365</a>. To deploy thread-safe mode to the server we&rsquo;ll redeploy the application and restart Trinidad so that it picks up the configuration change.</p>
+
+``` terminal
+$ cap deploy trinidad:restart
+```
+
+<p>Even through Trinidad automatically detects thead-safe mode in a Rails app we can also configure it manually in case the auto-detection doesn&rsquo;t work. To do this we can modify our Trinidad recipe and add a <code>jruby_max_runtimes</code> configuration option.</p>
+
+``` /config/recipes/trinidad.rb
+set_default :trinidad_config do
+  {
+    "environment" => "production"
+    "reload_strategy" => "rolling",
+    "jruby_max_runtimes" => 1
+  }
+end
+```
+
+<p>This will ensure that Trinidad doesn&rsquo;t boot up more than one instance as we&rsquo;re in thread-safe mode.</p> 
+
+<h3>Trinidad Extensions</h3>
+
+<p>An episode on Trinidad wouldn&rsquo;t be complete without talking about extensions. These allow Trinidad to do much more than just running our Rails applications and the most useful are those which deal with running jobs in the background. For example the <a href="http://github.com/trinidad/trinidad_scheduler_extension">Scheduler extension</a> which is an alternative to Cron. It&rsquo;s a fairly common requirement to set up a Cron job to run a Rake task which isn&rsquo;t very efficient if we have a threaded environment. On a similar note the <a href="https://github.com/carlhoerberg/trinidad_threaded_resque_extension">Threaded Resque extension</a> runs a Resque worker on a thread in the same process. This is very efficient as we don&rsquo;t have to have a separate process that boots up the entire Rails application and takes up more memory to run a background job. If you&rsquo;re looking for ways to contribute to Trinidad writing an extension is a great way to do so.</p> 
+
+<p>Trinidad isn&rsquo;t the only way to deploy JRuby applications. There are alternatives that are worth considering and one popular option is <a href="http://torquebox.org/">Torquebox</a>. This feels a little more complicated to use but it may be covered in a future episode. <a href="http://puma.io/">Puma</a> is another option and this is becoming a great multi-threaded server written in Ruby. This isn&rsquo;t Java-specific so we could use it with MRI Ruby or even Rubinius. Finally, the <a href="http://kenai.com/projects/warbler/pages/Home">Warbler gem</a> is one of the simplest deployment solutions. With it we can package our application into a <code>.war</code> file, copy it to the server and execute it from there to run it.</p>

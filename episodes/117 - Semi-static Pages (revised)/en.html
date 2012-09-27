@@ -1,0 +1,136 @@
+<p>In almost any Rails application there will be a few pages that contain static content such as an &ldquo;About Us&rdquo; page or a privacy policy. How should we structure these static pages? In this episode we&rsquo;ll show you a few different ways to do this.</p>
+
+<h3>Static Static Pages</h3>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1342/original/E117RI01.png" width="800" height="400" alt="Our Rails application."/>
+</div>
+
+<p>The &ldquo;About Us&rdquo; and &ldquo;Privacy Policy&rdquo; links don&rsquo;t currently lead anywhere as we haven&rsquo;t created these pages so we&rsquo;ll do this now. When faced with a problem its a good idea to consider the simplest thing that could possibly work and here this means that we should avoid trying to shoehorn the static pages into a RESTful-style controller. It&rsquo;s perfectly acceptable to make a non-RESTful controller in a Rails app so we&rsquo;ll create a new info controller to hold these pages.</p>
+
+``` terminal
+$ rails g controller info about privacy license
+```
+
+<p>Each action in this controller will generally be left empty as it&rsquo;ll only be rendering a view template. We could remove the method definitions from the controller but we&rsquo;ll keep them as documentation for the actions that exist in the controller. We can now fill each view template with the static content we want to display. Once we&rsquo;ve done this we can then visit, say, the <code>info</code> page at <code>/info/about</code>. The link to this page still doesn&rsquo;t work, though, as we haven&rsquo;t pointed it to the right action so we&rsquo;ll fix that, too.</p>
+
+``` /app/views/layouts/application.html.erb
+<%= link_to_unless_current "About Us", info_about_path %>
+```
+
+<p>If we want our &ldquo;About Us&rdquo; page to be at <code>/about</code> instead of at <code>/info/about</code> we can make changes to our routes file. The generator created routes for our pages and we&rsquo;ve been using these so far. If we want to change the path to <code>/about</code> we&rsquo;ll need to specify a controller and action as these can no longer be inferred from the path.</p> 
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  get "about", to: 'info#about'
+  get "info/privacy"
+  get "info/license"
+
+  resources :products
+  root to: 'products#index'
+end
+```
+
+<p>We&rsquo;ll also need to change the path in the layout file to point to the new path.</p>
+
+``` /app/views/layouts/application.html.erb
+<%= link_to_unless_current "About Us", about_path %>
+```
+
+<p>The link will now work at its new path. If we have many pages like these our routes file will get rather long so we&rsquo;ll generate the routes dynamically instead, like this:</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do  
+  %w[about privacy license].each do |page|
+    get page, controller: 'info', action: page
+  end
+
+  resources :products
+  root to: 'products#index'
+end
+```
+
+<p>This will work just the same as our previous routes did.</p>
+
+<h3>Dynamic Static Pages</h3>
+
+<p>While this approach generally works well with static pages it&rsquo;s not perfect for every situation. The biggest issue is that the content of these pages is now part of the Rails app so if a change needs to be made a developer will have to modify the relevant view template, commit it to source control and then deploy the application. Having static information pages doesn&rsquo;t scale well, either. If we have dozens of these pages maintaining them can become messy.</p> 
+
+<p>We can solve both of these problems by moving the content into the database and interacting with it through a RESTful-style controller. We&rsquo;ll do this by generating some scaffolding to simulate an admin interface. (In a production application we&rsquo;d need to create a proper administrative interface with something like ActiveAdmin which was covered in <a href="http://railscasts.com/episodes/284-active-admin">episode 284</a>.) We&rsquo;ll call this resource page and give it <code>name</code>, <code>permalink</code> and <code>content</code> fields. We&rsquo;ll also tell it to skip the stylesheets as we have some styling set up in this application. Note that we give the <code>permalink</code> field an index as we&rsquo;ll be searching by this.</p>
+
+``` terminal
+$ rails g scaffold page name permalink:string:index content:text --skip-stylesheets
+$ rake db:migrate
+```
+
+<p>If we visit /pages now we&rsquo;ll see our scaffolding. We&rsquo;ll make a new page with a permalink of <code>about</code> and add it to the database. When we add this page we&rsquo;re taken to the <code>show</code> action which is what we want to display to the user. It needs a lot of work on how the content is displayed, however.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1343/original/E117RI02.png" width="800" height="500" alt="The page showing content from the database."/>
+</div>
+
+<p>We&rsquo;ll replace the default <code>show</code> template with a simple template that displays the <code>name</code> and <code>content</code>. We&rsquo;ll use <code>simple_format</code> for the content so that blocks of text separated by line breaks are wrapped in paragraph tags.</p>
+
+``` /app/views/pages/show.html.erb
+<h1><%= @page.name %></h1>
+
+<%= simple_format @page.content %>
+```
+
+<p>When we reload the page now it looks much better.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1344/original/E117RI03.png" width="800" height="4x0" alt="The page is now formatted correctly."/>
+</div>
+
+<p>Next we&rsquo;ll fix the URL. Our new &ldquo;About Us&rdquo; page has the path <code>/pages/1</code> but it should instead be accessible from its permalink at <code>/pages/about</code>. To enable we&rsquo;ll modify the <code>to_param</code> method in the <code>Page</code> model. This is the method that Rails uses to convert a model into a URL parameter and we&rsquo;ll have it return the <code>permalink</code>. We&rsquo;ll also add a validator to make sure that each permalink added is unique.</p>
+
+``` /app/models/page.rb
+class Page < ActiveRecord::Base
+  attr_accessible :content, :name, :permalink
+  validates_uniqueness_of :permalink
+  
+  def to_param
+    permalink
+  end
+  
+end
+```
+
+<p>Next we&rsquo;ll modify the <code>PagesController</code> that was generated by the scaffolding and change the way we find the page in the <code>show</code> action so that it&rsquo;s found by its <code>permalink</code> instead of by its <code>id</code>.</p>
+
+``` /app/controllers/pages_controller.rb
+def show
+  @page = Page.find_by_permalink!(params[:id])
+
+  respond_to do |format|
+    format.html # show.html.erb
+    format.json { render json: @page }
+  end
+end
+```
+
+<p>Note that we use an exclamation mark with the find here so that a <code>404</code> error is raised if a page with a given permalink isn&rsquo;t found. We&rsquo;ll make a similar change to the <code>edit</code>, <code>update</code> and <code>destroy</code> links so that we&rsquo;re fetching a page in the same way each time. When we visit <code>/pages/about</code> now we&rsquo;ll see our &ldquo;About Us&rdquo; page. If we want to link to this page, like we do in the layout, we&rsquo;ll need to change that path that the link points to from <code>about_path</code> to <code>page_path(&quot;about&quot;)</code>.</p>
+
+``` /app/views/layouts/application.html.erb
+<%= link_to_unless_current "About Us", page_path("about") %> |
+```
+
+<h3>Better URLs For Static Pages</h3>
+
+<p>Clicking on the &ldquo;About Us&rdquo; link now points us to the right page but what if we want the path to just be <code>/about</code> instead of <code>/pages/about</code>? This is a little trickier as the permalink content is dynamic but it can be done. We&rsquo;ll need to make some changes to the routes file to get this to work.</p> 
+
+``` /config/routes.rb
+Store::Application.routes.draw do  
+  resources :pages, except: :show
+  resources :products
+  root to: 'products#index'
+  get ':id', to: 'pages#show', as: :page
+end
+```
+
+<p>We&rsquo;ve removed most of the old routes here as they&rsquo;re no longer necessary and instead added a catch-all route at the bottom of the file that points to the <code>PagesController</code>&rsquo;s <code>show</code> action. We&rsquo;ve given the route the name page so that the URL continues to work when we link to it. Note that the pages resources now excludes the show action so that this is routed instead by the catch-all route. With this change in place the &ldquo;About Us&rdquo; link now points to <code>/about</code> and still links to our dynamic page. We need to be aware that now we have a catch-all route if we visit a non-existent path such as <code>/foobar</code> this will trigger the <code>PagesController</code> and raise a <code>RecordNotFound</code> exception. This will give us a 404 error to the user, which is likely to be what we want, but we do need to remember that this controller will be hit by any path that&rsquo;s entered and which doesn&rsquo;t exist.</p>
+
+<p>So far we&rsquo;ve done all this without any external gems but there are some that we could consider using. One option is to use <a href="https://github.com/vmg/redcarpet">Redcarpet</a> for formatting the page content using Markdown and this was covered in <a href="http://railscasts.com/episodes/207-syntax-highlighting">episode 207</a>. Another formatting option is <a href="http://liquidmarkup.org/">Liquid</a>. This is handy if we have some dynamic content that we want to mix into the middle of the page&rsquo;s content. This was covered in <a href="http://railscasts.com/episodes/118-liquid">episode 118</a>, although this episode is a little of of date now.</p>
+
+<p>There are some gems that are designed to solve the static page problem as a whole. One is <a href="http://railscasts.com/episodes/118-liquid">High Voltage</a> which takes a similar approach to what we did at the beginning of this episode. It can be argued that this is simple enough to do from scratch but the gem is available if we want to use it. If our application has a lot of these content pages we could consider using a full-on content management system such as <a href="http://www.refinerycms.com/">Refinery</a> which was covered in <a href="http://railscasts.com/episodes/332-refinery-cms-basics">episode 332</a>, although there are <a href="https://www.ruby-toolbox.com/categories/content_management_systems">many other CMS options to consider</a>. Finally if we need to support internationalization on static pages we could consider using Copycopter which was covered in <a href="http://railscasts.com/episodes/336-copycopter">episode 336</a>.</p>
