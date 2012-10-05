@@ -1,0 +1,318 @@
+<p>Let&rsquo;s say that we have a Rails application with a popular page that loads slowly and whose performance we&rsquo;d like to improve. One of the most effective ways to do this is to use caching. We&rsquo;ve covered various caching techniques in the past but one thing we haven&rsquo;t talked about is where the cache is stored. Rails&rsquo; cache store functionality is very modular. It uses the file system to store the cache by default but we can easily change this to store it elsewhere. Rails comes with several cache store options that we can choose from. The default used to be a memory store which stored the cache in local memory of that Rails process. This issue with this is that in production we often have multiple Rails instances running and each of these will have their own cache store which isn&rsquo;t a good use of resources. The file store works well for smaller applications but isn&rsquo;t very efficient as reading from and writing to the hard drive is relatively slow. If we use this for a cache that&rsquo;s accessed frequently we&rsquo;d be better off using something else.</p>
+
+<p>This brings us to the memcache store which offers the best of both worlds. This is meant to be used with a Memcached server which means that the cache will be shared across multiple Rails instances or even separate servers. Access will be very fast as the data is stored in memory. This is a great option for serious caching but it&rsquo;s best not to use the <code>mem_cache_store</code> that Rails includes. Instead we should use <a href="https://github.com/mperham/dalli">Dalli</a> which is much improved and which has support for some additional features such as Memcached&rsquo;s binary protocol. Note though that it needs at least version 1.4 of Memcached to use. In the upcoming Rails 4 release the built-in memcache store has been updated to use Dalli but in the meantime Dalli includes its own Rails cache store that we can use directly in Rails 3 applications.</p> 
+
+<h3>Installing Memcached and Dalli</h3>
+
+<p>We have a Rails application with a cache store that we&rsquo;ll switch to use Memcached and Dalli. The first step is to install Memcached, though if you&rsquo;re running OS X it comes pre-installed. The easiest way to upgrade to a newer version is through Homebrew and we&rsquo;ll do that now.</p>
+
+``` terminal
+$ brew install memcached
+```
+
+<p>We can now start it up manually with this command.</p>
+
+``` terminal
+$ /usr/local/bin/memcached
+```
+
+<p>Now that we have Memcached running we&rsquo;ll set it up as the cache store for our application. We&rsquo;ll add the <code>dalli</code> gem to the gemfile then run bundle to install it.</p>
+
+``` /Gemfile
+gem 'dalli'
+```
+
+<p>Next we&rsquo;ll modify the development config file and temporarily enable caching so that we can try it out. Ideally we&rsquo;d set up a staging environment so that we could experiment with caching extensively on our local machine and this was covered in <a href="http://railscasts.com/episodes/72-adding-an-environment-revised">episode 72</a>. We&rsquo;ll also set the <code>cache_store</code> to <code>dalli_store</code>. If we were putting this app into production we&rsquo;d need do the same in our production environment.</p>
+
+```/config/development.rb
+# Show full error reports and disable caching
+config.consider_all_requests_local       = true
+config.action_controller.perform_caching = true
+config.cache_store = :dalli_store
+```
+
+<h3>Using Dalli</h3>
+
+<p>We can try this out in the console now. If we access <code>Rails.cache</code> we&rsquo;ll see that it&rsquo;s now an instance of <code>DalliStore</code>.</p>
+
+``` console
+>> Rails.cache
+=> #<ActiveSupport::Cache::DalliStore:0x007fb05be840c8 @options={:compress=>nil}, @raise_errors=false, @data=#<Dalli::Client:0x007fb05be83f88 @servers="127.0.0.1:11211", @options={:compress=>nil}, @ring=nil>>
+```
+
+<p>If we try writing to the cache it will write directly to Memcached and we can read the cached value back.</p>
+
+``` console
+>> Rails.cache.write(:foo, 1)
+=> true
+>> Rails.cache.read(:foo)
+=> 1
+```
+
+<p>Instead of using <code>read</code> and <code>write</code> we can call <code>fetch</code>. This will attempt to read a value and if that fails, execute a block and set the cache to the result. If we run <code>Rails.cache.fetch(:bar) { sleep 1; 2 }</code> it will take a second to run as that value doesn&rsquo;t exist in the cache and so the code in the block will be run. If we run it again it will return the stored value instantly.</p> 
+
+<p>There&rsquo;s another useful method called <code>read_multi</code>. This will attempt to access all the values for each of the keys passed in and return a hash.</p>
+
+``` console
+>> Rails.cache.read_multi(:foo, :bar)
+=> {:foo=>1, :bar=>2}
+```
+
+<p>This command is important if we&rsquo;re running Memcached on a separate machine as it means that we can fetch multiple values without making multiple trips over the network. One final command worth a mention is <code>Rails.cache.stats</code>. This is especially useful when debugging Memcached as it returns a hash of useful data including the number of items stored, how many bytes are used and the maximum number of bytes allowed. Once this limit is reached the oldest unused caches will be overwritten. We can also find out from this information how often the maximum number of connections was reached and keeping an eye on this is recommended.</p>
+
+<p>It&rsquo;s important to understand that Memcached is not a persistent store. If we stop its process then start it up again when we go back to the Rails console and try to read one of the values we stored earlier we&rsquo;ll get <code>nil</code> returned as the stored value will have been lost. There are some workarounds available that will make the store persistent but this isn&rsquo;t what Memcached is designed to do. It&rsquo;s designed for caching and so there should be no real problem if the data is lost.</p> 
+
+<p>One useful feature that Memcached has is the ability to expire a cache in a given amount of time. If we add a value to the cache we can specify a time period after which that value should expire. If we set a value to expire in five seconds we&rsquo;ll be able to read it straightaway but if we wait then try again we&rsquo;ll get <code>nil</code> instead.</p>
+
+``` console
+>> Rails.cache.write(:foo, 1, expires_in: 5.seconds)
+=> true
+>> Rails.cache.read(:foo)
+=> 1
+>> Rails.cache.read(:foo)
+=> nil
+```
+
+<h3>Using Dalli In Our Rails Application</h3>
+
+<p>Back in our Rails application let&rsquo;s take a look at some of the different ways that we can cache the contents of the page that lists the products. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1359/original/E380I01.png" width="800" height="500" alt="Our Rails application."/>
+</div>
+
+<p>One of the few caching techniques that does not use the cache store is page caching. If we cache the <code>index</code> page above this will be stored in a file-based cache as it assumes that we have a web server on the front end that will serve this file instead of the Rails application which would read from Memcached.</p>
+
+``` /app/controllers/products_controller.rb
+class ProductsController < ApplicationController
+  caches_page :index
+
+  def index
+    @products = Product.all
+  end
+
+  def show
+    @product = Product.find(params[:id])
+  end
+end
+```
+
+<p>That said, almost all other caching techniques will use the cache store. For example let&rsquo;s say that we have HTTP caching in the <code>index</code> action.</p>
+
+``` /app/controllers/products_controller.rb
+class ProductsController < ApplicationController
+
+  def index
+    @products = Product.all
+    expires_in 5.minutes, public: true
+  end
+
+  def show
+    @product = Product.find(params[:id])
+  end
+end
+```
+
+<p>This will be stored by Rack::Cache which will use the same cache store as our Rails application so this will be stored in Memcached. HTTP caching is covered in more detail in <a href="http://railscasts.com/episodes/321-http-caching">episode 321</a>.</p>
+
+<p>Fragment caching is another type of caching that we can use. This is done in the view layer and will also be stored in Memcached. We can enable it by calling <code>cache</code> and passing in a block then wrapping the code we want to cache in it.</p>
+
+``` /app/views/products/index.html.erb
+<h1>Products</h1>
+
+<% cache do %>
+  <table id="products">
+    <tr>
+      <th>Product Name</th>
+      <th>Category</th>
+      <th>Release Date</th>
+      <th>Price</th>
+    </tr>
+  <% @products.each do |product| %>
+    <tr>
+      <td><%= link_to(product.name, product) %></td>
+      <td><%= product.category.name %></td>
+      <td><%= product.released_on.strftime("%B %e, %Y") %></td>
+      <td><%= number_to_currency(product.price) %></td>
+    </tr>
+  <% end %>
+  </table>
+<% end %>
+```
+
+<p>This will use the current path as the cache&rsquo;s key or we can alternatively specify a key name if we want to. We can also pass in other options like those we would pass to <code>cache.write</code> such as <code>expires_in</code>.</p>
+
+``` /app/views/products/index.html.erb
+<% cache "products", expires_in: 5.minutes do %>
+  # Cached content omitted.
+<% end %>
+```
+
+<p>Fragment caching is covered in more detail in <a href="http://railscasts.com/episodes/90-fragment-caching-revised">episode 90</a>.</p>
+
+
+<h3>Caching At The Model Level</h3>
+
+<p>What we&rsquo;ll focus on next is caching at a lower level. The page that lists the products display the category that each product is in. A <code>Product</code> belongs to a <code>Category</code> and if we look in the development log we&rsquo;ll see that there are a lot of queries being performed to fetch each product&rsquo;s category.</p>
+
+``` /log/development.log
+  Product Load (0.4ms)  SELECT "products".* FROM "products" 
+  Category Load (0.2ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+  Category Load (0.3ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 3 LIMIT 1
+  Category Load (0.2ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 4 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+  Category Load (0.2ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 5 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 4 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+  CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 4 LIMIT 1
+```  
+  
+<p>ActiveRecord does some caching on its own so the performance isn&rsquo;t too bad but if we want to cache this persistently between requests we can do so through Memcached. We&rsquo;ll do this caching at the model layer in the <code>Product</code> model. We currently call <code>product.category.name</code> in the view but we&rsquo;ll replace this with a <code>category_name</code> method that will return a cached version of the category.</p>
+
+``` /app/views/products/index.html.erb
+<td><%= product.category_name %></td>
+```
+
+<p>We can now write that method in the model. We&rsquo;ll use the <code>fetch</code> to do this and we&rsquo;ll use an array to define the cache key. This will be converted to a string with each element of the array separated by a string. We&rsquo;ll set the cache value to expire in five minutes and pass in a block that will return the product&rsquo;s category&rsquo;s <code>name</code>.</p>
+
+``` /app/models/product.rb
+def category_name
+  Rails.cache.fetch([:category, category_id, :name], expires_in: 5.minutes) do
+    category.name
+  end  
+end
+```
+
+<p>The first time we reload the page the category names will be read from the database 
+so that the cache values can be written but the second time the category names will be read from the cache. We can see this from the log file.</p>
+
+``` /log/development.log
+Cache read: category/2/name ({:expires_in=>300 seconds})
+Cache fetch_hit: category/2/name ({:expires_in=>300 seconds})
+Cache read: category/3/name ({:expires_in=>300 seconds})
+Cache fetch_hit: category/3/name ({:expires_in=>300 seconds})
+Cache read: category/4/name ({:expires_in=>300 seconds})
+Cache fetch_hit: category/4/name ({:expires_in=>300 seconds})
+Cache read: category/2/name ({:expires_in=>300 seconds})
+```
+
+<p>This may or may not improve performance as it&rsquo;s doing a read for each separate product and having to communicate with Memcached for each one. It&rsquo;s always best to measure extensively when doing any kind of performance optimization like this. This is a case where it might be better to do a multi-read to fetch all the category names in one go instead of fetching them separately for each product, especially if we&rsquo;re running Memcached over a network.</p>
+
+<p>In general it&rsquo;s better to cache at a higher level such as in the view layer as it often results in less chatter. There are advantages to caching at a lower level like this, though, as we can then use the same cache multiple times in different views more easily. For example we have a show template which shows details for a single product including its category. With our model-level cache we can change this to use our <code>category_name</code> method so that it uses the same cache.</p>
+
+``` /app/views/products/show.html.erb
+<p>
+  <b>Category:</b>
+  <%= @product.category_name %>
+</p>
+```
+
+<p>Now when we visit the page for a product it won&rsquo;t need to perform a database query to fetch the category name. Both of these techniques have their advantages; this is just another tool to add to our caching toolbelt.</p> 
+
+<h3>Expiring The Cache With Callbacks</h3>
+
+<p>One potential problem with caching that category is what to do when the category name changes. The new name will be picked up in five minutes since the cache is set to expire then but if we want the change to be effective immediately we can add a callback to the <code>Category</code> model like this:</p>
+
+``` /app/models/category.rb
+class Category < ActiveRecord::Base
+  attr_accessible :name
+  has_many :products
+  after_update :flush_name_cache
+  
+  def flush_name_cache
+    Rails.cache.delete([:category, id, :name]) if name_changed?
+  end
+end
+```
+
+<p>Now, after a category is updated the callback will be triggered and the cache item for that category&rsquo;s name will be deleted, but only if the name attribute has actually changed. If we&rsquo;re going to do something like this it&rsquo;d a good idea to move the logic for this caching behaviour into a class method in the <code>Category</code> so that the key logic behaviour is all in the same location.</p> 
+
+<h3>Deploying Memcached</h3>
+
+<p>Next we&rsquo;ll show you how to deploy Memcached into production. First we&rsquo;ll SSH into the Ubuntu 12.04 server that we&rsquo;ve already set up.</p> 
+
+``` terminal
+$ ssh deployer@198.58.98.181
+```
+
+<p>Once we&rsquo;ve logged in installing Memcached is easy with <code>apt-get</code>.</p>
+
+``` terminal
+# sudo apt-get install memcached
+```
+
+<p>This will install and start Memcached. If we want to configure it we can find the configuration file at <code>/etc/memcached.conf</code>. The default options are pretty good but one setting that we might want to consider changing is the amount of memory that Memcached can use. This defaults to 64 megs but it&rsquo;s worth bumping this up if you can spare the memory on the server.</p>
+
+``` /etc/memcached.conf
+# Start with a cap of 64 megs of memory. It's reasonable, and the daemon default
+# Note that the daemon will grow to this size, but does not start out holding this much
+# memory
+-m 64
+# Specify which IP address to listen on. The default is to listen on all IP addresses
+# This parameter is one of the only security measures that memcached has, so make sure
+# it's listening on a firewalled interface.
+-l 127.0.0.1
+```
+
+<p>Another important option is <code>-l</code> which can be set to restrict Memcached to accept only connections from the local machine. Memcached doesn&rsquo;t offer much with regards to authentication but setting this option prevents the entire world from accessing it. It&rsquo;s also a good idea to set up a firewall to make sure that Memcached&rsquo;s port is closed. If we have a multi-server setup we&rsquo;ll need to remove this line and handle the security elsewhere. We set up our server by using Capistrano recipes like we showed in <a href="http://railscasts.com/episodes/90-fragment-caching-revised">episode 337</a> and here&rsquo;s a recipe file for setting up Memcached.</p>
+
+``` /config/recipes/memcached.rb
+set_default :memcached_memory_limit, 64
+
+namespace :memcached do
+  desc "Install Memcached"
+  task :install, roles: :app do
+    run "#{sudo} apt-get install memcached"
+  end
+  after "deploy:install", "memcached:install"
+
+  desc "Setup Memcached"
+  task :setup, roles: :app do
+    template "memcached.erb", "/tmp/memcached.conf"
+    run "#{sudo} mv /tmp/memcached.conf /etc/memcached.conf"
+    restart
+  end
+  after "deploy:setup", "memcached:setup"
+
+  %w[start stop restart].each do |command|
+    desc "#{command} Memcached"
+    task command, roles: :app do
+      run "service memcached #{command}"
+    end
+  end
+end
+```
+
+<p>This will automatically install Memcached using <code>apt-get</code> and set up a configuration template which we&rsquo;ve also added to our application.</p>
+
+``` /config/recipes/templates/memcached.erb
+# run as a daemon
+-d
+
+logfile /var/log/memcached.log
+
+# memory limit
+-m <%= memcached_memory_limit %>
+
+# port
+-p 11211 
+
+# user
+-u memcache
+
+# listen only on localhost (for security)
+-l 127.0.0.1
+```
+
+<p>This is similar to the default configuration file apart from the <code>memcached_memory_limit</code> variable which is set in the recipe. At the end of the recipe are stop, start and restart tasks for managing the daemon. If you use Capistrano to manage your server it&rsquo;s easy to add this recipe and it should just work.</p>
+
+<h3>Configuring Dalli</h3>
+
+<p>We haven&rsquo;t yet mentioned the different configuration options that we can pass in when we set up Dalli as the cache store. The <a href="https://github.com/mperham/dalli/blob/master/README.md#usage-with-rails-3x">README</a> has a nice example of this. It&rsquo;s a good idea to set up a namespace for the cache keys and we can also pass in a 
+default expiration period and enable compression which is a good idea if we have a lot of large values and a limited amount of memory. There are a lot of other options that we can set and these are also documented in the README.</p> 
+
+<p>If you do want some kind of authentication with Memcached it&rsquo;s worth looking at SASL which allows us to use a username and password with it.</p> 
+
+<p>For further information on Memcached it&rsquo;s a good idea to take a look at its <a href="http://memcached.org/">wiki</a>. This is useful and well-written and will probably have the answer to any questions you have.</p>

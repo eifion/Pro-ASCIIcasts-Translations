@@ -1,0 +1,291 @@
+<p>Below is a simple view template which displays a list of products. When Rails renders this template it parses it with a template handler and the one it uses is determined by the file extension, in this case <code>erb</code>.</p>
+
+``` /app/views/products/index.html.erb
+<h1>Products</h1>
+
+<table id="products">
+  <tr>
+    <th>Product Name</th>
+    <th>Release Date</th>
+    <th>Price</th>
+  </tr>
+<% @products.each do |product| %>
+  <tr>
+    <td><%= link_to(product.name, product) %></td>
+    <td><%= product.released_on.strftime("%B %e, %Y") %></td>
+    <td><%= number_to_currency(product.price) %></td>
+  </tr>
+<% end %>
+</table>
+```
+
+<p>Rails provides another template handler called Builder which was covered in <a href="http://railscasts.com/episodes/87-generating-rss-feeds-revised">episode 87</a>. This is used to generate XML and is especially useful for creating RSS or Atom feeds. There are many other template handlers available as gems including HAML and RABL but in this episode we&rsquo;ll focus on creating our own handler.</p> 
+
+<p>Before we do this we&rsquo;ll address a common source of confusion: the double extension in the filename of a template. It&rsquo;s important to understand that the first extension is the format of the response while the second is the template handler that will be used to parse the file. The template above will therefore return HTML and be parsed through erb. If the file was called <code>index.html.haml</code> then it would still return HTML but be parsed by a HAML parser.</p>
+
+<h3>A Ruby Template Handler</h3>
+
+<p>We&rsquo;ll start by making a new template file to demonstrate the template handler we want to create. We want our new template to return JSON and use Ruby as its template handler and so we&rsquo;ll call it <code>index.json.rb</code>. This template&rsquo;s response will be whatever string is returned at the end of the file.</p>
+
+``` /app/views/products/index.json.rb
+"Hello World!"
+```
+
+<p>When we try this out we see an error message we visit <code>/products.json</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1351/original/E379I01.png" width="800" height="300" alt="Our new template doesn&rsquo;t work yet."/>
+</div>
+
+<p>We see this error as our application can&rsquo;t find a template with a handler that it understands. We can fix this by making a new template handler for the <code>rb</code> extension. We&rsquo;ll do this inside the <code>initializers</code> directory although if we were doing this in a production application it would be better to extract this functionality out into a gem.</p> 
+
+<p>A handler is simply an object that responds to calls so we could just write a lambda here if we wanted to. This lambda needs to take a template object and return a string containing some Ruby code. We&rsquo;ll add some simple Ruby code to test this handler. It might seem a little odd to put Ruby code in a string like this but this is done for performance reasons. We also need to register the template handler which we do in the second line by calling <code>register_template_handler</code> and passing in the extension and our handler object.</p> 
+
+``` /config/initializers/ruby_template_handler.rb
+handler = ->(template) { "Date.today.to_s" }
+ActionView::Template.register_template_handler(:rb, handler)
+```
+
+<p>We need to restart our application for the new initializer to be picked up. Once we&rsquo;ve done so when we reload the page we&rsquo;ll see current the date in the response.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1352/original/E379I02.png" width="800" height="300" alt="The template now shows the date."/>
+</div>
+
+<p>Obviously we don&rsquo;t want to respond with just the date every time, we want to use the Ruby code in the template. Doing so is quite easy as the <code>template</code> object that&rsquo;s passed to the handler responds to a <code>source</code> method that we can use. This will return a string containing the content of the template file.</p>
+
+``` /config/initializers/ruby_template_handler.rb
+handler = ->(template) { template.source }
+ActionView::Template.register_template_handler(:rb, handler)
+```
+
+<p>After restarting our application again we&rsquo;ll see the response from the template. </p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1353/original/E379I03.png" width="800" height="300" alt="The page now shows the text from the template."/>
+</div>
+
+<p>There is a cleaner way to write this handler by passing in the symbol <code>:source</code> as the second argument and calling <code>to_proc</code> on it. This will call <code>source</code> on the object passed into the proc.</p>
+
+``` /config/initializers/ruby_template_handler.rb
+ActionView::Template.register_template_handler(:rb, :source.to_proc)
+```
+
+<h3>Using Our Template To Generate JSON</h3>
+
+<p>Now that we have a working <code>rb</code> template we can use it to generate some JSON.</p>
+
+``` /app/views/products/index.json.rb
+@products.map do |product|
+  {
+    name: product.name,
+    price: number_to_currency(product.price),
+    url: product_url(product)
+  }
+end.to_json
+```
+
+<p>Here we loop through each of the products, map them to an array of hashes and call <code>to_json</code> on that to convert it to a string. The advantage of doing this here instead of calling <code>@products.to_json</code> is that we can use helper methods and generate URLs. When we reload the page now we&rsquo;ll see the products rendered as JSON.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1354/original/E379I04.png" width="800" height="x00" alt="The JSON generated by the template."/>
+</div>
+
+<p>This approach feels much simpler than using RABL or JBuilder to create this page but what about more complex scenarios such as embedding associations into the JSON response? This is actually quite simple to do. Imagine that a product can have many reviews. We can fetch the reviews, loop through them and return another hash from the review that we want to display.</p>
+
+``` /app/views/products/index.json.rb
+@products.map do |product|
+  {
+    name: product.name,
+    price: number_to_currency(product.price),
+    url: product_url(product),
+    reviews: product.reviews.map do |r|
+      {
+        name: r.name
+      }
+    end
+  }
+end.to_json
+```
+
+<p>Alternatively if we need the reviews JSON elsewhere in our application we can extract that code out into a partial to reduce duplication. We can then call <code>render</code> and pass in the review object.</p>
+
+``` /app/views/products/index.json.rb
+@products.map do |product|
+  {
+    name: product.name,
+    price: number_to_currency(product.price),
+    url: product_url(product),
+    reviews: product.reviews.map { |r| JSON.parse(render(r)) }
+    end
+  }
+end.to_json
+```
+
+<p>This will look for a partial at <code>reviews/_review.json</code> and we can use the <code>.rb</code> template handler again to return a JSON string representing a product&rsquo;s reviews. As the partial returns a string we need to parse this into JSON here to stop each review being returned as a single JSON string.</p>
+
+<h3>Generating A Different Response With Our Template</h3>
+
+<p>A Ruby template is useful for more than just generating JSON, it&rsquo;s also useful for generating CSV responses. To generate a CSV representation of our products we can make an <code>index.csv.rb</code> template.</p>
+
+``` /app/views/products/index.csv.rb
+CSV.generate do |csv|
+  csv << ["Name", "Price", "URL"]
+  @products.each do |product|
+    csv << [
+      product.name,
+      number_to_currency(product.price),
+      product_url(product)
+    ]
+  end
+end
+```
+
+<p>This template uses the standard CSV library and generates a header row and a row for each product. The advantage of this approach over the one we used in <a href="http://railscasts.com/episodes/362-exporting-csv-and-excel">episode 362</a> is that we can use helper methods for generating URLs and so on which wouldn&rsquo;t be possible if we were generating the CSV inside the model. In order for this to work we need to include the <code>csv</code> library in the configuration file.</p>
+
+``` /config/application.rb
+require 'csv'
+```
+
+<p>We can try this out now by visiting <code>/products.csv</code>. When we do we&rsquo;ll see the products rendered as CSV.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1355/original/E379I05.png" width="800" height="300" alt="The products rendered as CSV."/>
+</div>
+
+<p>If we want this file to be downloaded rather than displayed in the browser we can alter the template. We have access to the <code>response</code> object here and we can change the response headers so that the file is downloaded.</p>
+
+``` /app/views/products/index.csv.rb
+response.headers["Content-Disposition"] = 'attachment; filename=products.csv'
+```
+
+<p>When we visit this URL now the file is downloaded instead of shown in the browser. </p>
+
+<h3>Generating HTML</h3>
+
+<p>A Ruby template can even be used to generate HTML and we&rsquo;ll demonstrate this in the show template. The <code>erb</code> version of this currently looks like this.</p>
+
+``` /app/views/products/show.html.erb
+<%= div for @product do %>
+  <h1><%= @product.name %></h1>
+
+  <p><%= number_to_currency @product.price %></p>
+
+  <%= link_to 'Edit', edit_product_path(@product) %>
+<% end %>
+```
+
+<p>Normally we&rsquo;d only consider doing this if the erb tags greatly outweigh the HTML tags in the template. We&rsquo;ll rename our existing show template from <code>.erb</code> to <code>.rb</code> and paste in the Ruby code that&rsquo;s equivalent to the original erb.</p>
+
+``` /app/views/products/show.html.rb
+div_for @product do
+  content_tag(:h1, @product.name) + 
+  content_tag(:p, number_to_currency(@product.price)) +
+  link_to("Edit", edit_product_path(@product))
+end
+```
+
+<p>Here we use helper methods like <code>div_for</code> and <code>content_tag</code> to generate the HTML. This isn&rsquo;t something we&rsquo;d normally do but it works as an example of what&rsquo;s possible with a Ruby template.</p> 
+
+<h3>Parsing Markdown</h3>
+
+<p>Next we&rsquo;ll shift gears and make another template handler, this time one for parsing Markdown. This can be helpful for creating informational pages. We&rsquo;ll create a handler with an <code>md</code> extension that handles Markdown templates and create a template for our application&rsquo;s &ldquo;About Us&rdquo; page.</p>
+
+``` /app/views/info/about.html.md
+# About Us
+
+**Lorem ipsum dolor sit amet, consectetur adipisicing elit,** sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+```
+
+<p>This kind of template certainly won&rsquo;t work well in every situation but for pages like this it&rsquo;s perfect. To get this template to work we need to create another initializer.</p>
+
+``` /config/initializers/markdown_template_handler.md
+class MarkdownTemplateHandler
+  def self.call(template)
+    # Template processed here...
+  end
+end
+ActionView::Template.register_template_handler(:md, MarkdownTemplateHandler)
+ActionView::Template.register_template_handler(:markdown, MarkdownTemplateHandler)
+```
+
+<p>This time we&rsquo;ve created a <code>MarkdownTemplateHandler</code> class and given it a class method called <code>call</code> that takes a template as an argument. This method needs to parse the markdown file that&rsquo;s passed in and return the resulting HTML. At the bottom of the file we use this class to register the template handler and we create two handlers, <code>md</code> and <code>markdown</code>, so that two different extensions supporting Markdown are created. We still need to complete the <code>call</code> method so that it converts Markdown to HTML. We&rsquo;ll use Redcarpet for this so we&rsquo;ll need to add it to our gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'redcarpet'
+```
+
+<p>Back in our template handler we&rsquo;ll finish the <code>call</code> method.</p>
+
+``` /config/initializers/markdown_template_handler.md
+def self.call(template)
+  renderer = Redcarpet::Render::HTML.new(hard_wrap: true)
+  options = {
+    autolink: true,
+    no_intra_emphasis: true,
+    fenced_code_blocks: true,
+    lax_html_blocks: true,
+    strikethrough: true,
+    superscript: true 
+  }
+  Redcarpet::Markdown.new(renderer, options).render(template.source)
+end
+```
+
+<p>All we do here is create a new HTML renderer and pass it some options. We then create a new Markdown parser and use it to parse the template. Once we restart the server to pick up the new initializer we can try visiting our &ldquo;About Us&rdquo; page. When we do, however, we get an exception.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1356/original/E379I06.png" width="800" height="300" alt="The about page throws an error."/>
+</div>
+
+<p>It seems that our template handler is trying to parse our HTML source as Ruby code. This is a common problem when working with template handlers. In our <code>call</code> method we return the HTML as a string but we should be returning some Ruby code in a string so the HTML is evaluated as Ruby code. A quick fix for this is to call inspect on the string so that it&rsquo;s quoted and considered to be Ruby code.</p> 
+
+``` /config/initializers/markdown_template_handler.md
+Redcarpet::Markdown.new(renderer, options).render(template.source).inspect
+```
+<p>After another restart and reload the page now works as expected.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1357/original/E379I07.png" width="800" height="300" alt="The &ldquo;About Us&rsquo; page now displays correctly."/>
+</div>
+
+<p>The Markdown in the template is now converted to HTML. It would be nice if we could add dynamic content to our Markdown templates using erb to do things like displaying links like this:</p>
+
+``` /app/views/info/about.html.md
+[Products Listing](<%= products_path %>)
+```
+
+<p>You might think that adding an <code>erb</code> extension to this file would fix this but this isn&rsquo;t possible in Rails views. To get this to work we&rsquo;ll need to code this functionality into our Markdown template. We could make a separate extension and handler for Markdown with embedded erb but instead we&rsquo;ll add this functionality to our current handler which involves making a few changes to the file.</p>
+
+``` /config/initializers/markdown_template_handler.md
+class MarkdownTemplateHandler
+  def self.call(template)
+    erb = ActionView::Template.registered_template_handler(:erb)
+    source = erb.call(template)
+    <<-SOURCE
+    renderer = Redcarpet::Render::HTML.new(hard_wrap: true)
+    options = {
+      autolink: true,
+      no_intra_emphasis: true,
+      fenced_code_blocks: true,
+      lax_html_blocks: true,
+      strikethrough: true,
+      superscript: true 
+    }
+    Redcarpet::Markdown.new(renderer, options).render(begin;#{source};end)
+    SOURCE
+  end
+end
+```
+
+<p>The first thing we do now is run our template through the erb template handler. We then run <code>call</code> on that template handler and pass in our template which returns Ruby source code inside a string. Things get a little tricker from here on. We can&rsquo;t pass this source code directly into Redcarpet as it&rsquo;s now Ruby code and this needs to be reevaluated on each request but the <code>call</code> method isn&rsquo;t triggered on each request, it&rsquo;s cached for performance reasons. To solve this problem we need to move all the Redcarpet functionality into a string and we use a heredoc for that. We need to pass the Ruby source code in the <code>source</code> variable into the call to <code>render</code> and we wrap it in a <code>begin end</code> block to do that. We also remove the call to <code>inspect</code> as we&rsquo;re now returning Ruby code in a string. When we reload the page now we&rsquo;ll see the product listing link.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1358/original/E379I08.png" width="800" height="400" alt="Our Markdown template can now handle embedded erb code."/>
+</div>
+
+<p>We now have a working Markdown template handler that supports erb. The code is a little messy as we&rsquo;ve had to put a lot of code into strings but this is a side-effect of how Rails template handlers work. Thankfully once we get this working we won&rsquo;t have to adjust it much, we can just use it in our views.</p> 
+
+<p>On a related note it&rsquo;s worth taking a look at the <a href="https://github.com/plataformatec/markerb">Markerb gem</a> by Jose Valim. This goes one step further and uses this to generate multipart emails though a simple Markdown and erb template. He describes this process in more detail in his book &ldquo;Crafting Rails Applications&rdquo;. Another gem worth considering is called <a href="https://github.com/rtomayko/tilt">Tilt</a>. This provides a standardized interface for working with a variety of template engines. This isn&rsquo;t used in Rails for generating templates but it is used in the asset pipeline and may be covered in a future episode.</p>
