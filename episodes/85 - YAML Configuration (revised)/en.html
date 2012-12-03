@@ -1,0 +1,165 @@
+<p>Below is a screenshot from a blogging application with multiple articles. If we try to edit an article we&rsquo;ll see that the edit page is protected by HTTP Basic authentication and we&rsquo;ll need to enter a user name and password before we&rsquo;re allow to access it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1393/original/E085RI01.png" width="800" height="500" alt="Our blogging application."/>
+</div>
+
+<p>To add this authentication we use the <code>http_basic_authenticate_with</code> method in the <code>ArticlesController</code>.</p>
+
+``` /app/controllers/articles_controller.rb
+http_basic_authenticate_with name: &quot;admin&quot;, password: &quot;secret&quot;,
+                             except: [:index, :show]
+```                             
+
+<p>The problem with this is that we&rsquo;re hard-coding the name and password directly into the code. This means that these values are stored in the source code repository which means that the production password will be shared with all the developers and this isn&rsquo;t very secure. A quick fix for this is to store these values in environment variables.</p>
+
+``` /app/controllers/articles_controller.rb
+http_basic_authenticate_with name: ENV["BLOG_USERNAME"], password: ENV["BLOG_PASSWORD"], except: [:index, :show]
+```
+
+<p>Doing this moves these values outside of the code base so that they&rsquo;re not stored in the source code repository. It does mean, though, that we&rsquo;ll have to set these environment variables somewhere. We could do this before we run each Rails command but this would be awkward to do.</p>
+
+``` terminal
+$ BLOG_USERNAME=admin BLOG_PASSWORD=secret rails s
+```
+
+<p>Alternatively we can set these values through our shell profile file like this:</p>
+
+``` .zshrc
+export BLOG_USERNAME="admin"
+export BLOG_PASSWORD="secret"
+```
+
+<p>This works but as our application&rsquo;s configuration becomes more complex we&rsquo;ll need to keep this file up-to-date and so will each developer working on the application. Instead we&rsquo;ll keep the configuration within the app in a similar way to how the <code>database.yml</code> file works. We&rsquo;ll create another YAML file in the <code>config</code> directory for storing this configuration data and put the username and password data into it.</p>
+
+``` /config/application.yml
+BLOG_USERNAME: "admin"
+BLOG_PASSWORD: "secret"
+```
+
+<p>Of course we don&rsquo;t want to store this file in the source code repository as this would mean that the username and password were stored again. As we&rsquo;re using Git to store the source code we can easily do this by adding it to the files listed in <code>.gitignore</code>.</p>
+
+``` terminal
+$ echo /config/application.yml >> .gitignore
+```
+
+<p>When we do something like this it&rsquo;s a good idea to create a similar file as an example that we do store in the repository.</p>  
+
+``` /config/application.example.yml
+BLOG_USERNAME: "xxxxx"
+BLOG_PASSWORD: "yyyyy"
+```
+
+<p>It&rsquo;s also a good idea to mention this in the project&rsquo;s README file. We have a list of setup instructions in this file and we&rsquo;ll describe how to copy the example file here.</p>
+
+``` /README.md
+# RailsCasts Example Application
+
+Run these commands to try it out.
+
+ ```
+bundle
+cp config/application.example.yml config/application.yml
+rake db:setup
+rails s
+ ```
+
+
+Requires Ruby 1.9.2 or later to run.
+```
+
+<p>We now have a place to put private settings but how do we load them into our application? We could do this inside an initializer file but other initializers might need to read these settings so it&rsquo;s better to load them earlier. We&rsquo;ll load them inside the <code>application.rb</code> file which is where the Rails framework is loaded in along with the various gems. We&rsquo;ll load the YAML content from the file which will give us a hash. We could store this hash in a constant but as we&rsquo;re already using environment variables in our application we&rsquo;ll update the environment variables with values from the hash.</p>
+
+``` /config/application.rb
+ENV.update YAML.load(File.read(File.expand_path('../application.yml', __FILE__)))
+```
+
+<p>After we restart our application it will work just like it did before but now the user name and password aren&rsquo;t stored in our source code repository.</p>
+
+<h3>Adding Other Values</h3>
+
+<p>Now that we have a central place to store application settings we can think about moving some other things into it such as the secret token which is defined by default in an initializer file. If our application is open-source we don&rsquo;t want to make this value publicly available so instead we&rsquo;ll move it into our YAML file and read it from the environment.</p>
+
+``` /config/initializers/secret_token.rb
+Blog::Application.config.secret_token = ENV["SECRET_TOKEN"]
+```
+
+``` /config/application.yml
+BLOG_USERNAME: "admin"
+BLOG_PASSWORD: "secret"
+SECRET_TOKEN: "024e1460a4fb8271e611d0f53811a382f1f6be121..."
+```
+
+<p>Another thing we could move here is the host name that&rsquo;s used when sending email.  In the <code>development.rb</code> file we set the host in the <code>default_url_options</code> and this is a common requirement for applications that need to send email.</p>
+
+``` /config/development.rb
+config.action_mailer.default_url_options = {host: "localhost:3000"}
+```
+
+<p>Other developers might want this to be set differently as they might be using Pow or 
+another developer server so we should move this value into our YAML file.</p> 
+
+``` /config/development.rb
+config.action_mailer.default_url_options = {host: ENV["MAILER_HOST"]}
+```
+
+<p>We can do something similar for the test and production environments. These set the same option but to a different value. If we move all of these and set them in <code>application.rb</code> file we can have separate configuration options for each different environments. What we want is for our <code>application.yml</code> file to end up looking like this:</p>
+
+``` /config/application.yml
+BLOG_USERNAME: "admin"
+BLOG_PASSWORD: "secret"
+SECRET_TOKEN: "024e1460a4fb8271e611d0f53811a382f1f6be121..."
+development:
+  MAILER_HOST: "localhost:3000"
+test:
+  MAILER_HOST: "test.local"
+production:
+  MAILER_HOST: "blog.example.com"
+```  
+  
+<p>Here we&rsquo;ve defined different settings for each environment. To use these we&rsquo;ll need to adjust the <code>application.rb</code> file as the <code>ENV.update</code> command we use there won&rsquo;t take the current environment into consideration. We&rsquo;ll replace that line with this:</p>
+
+``` /config/application.rb
+config = YAML.load(File.read(File.expand_path('../application.yml', __FILE__)))
+config.merge! config.fetch(Rails.env, {})
+config.each do |key, value|
+  ENV[key] = value.to_s unless value.kind_of? Hash
+end
+```
+
+<p>Now we set the result of loading the YAML file to a local variable. We can then merge in the hash of settings for the current Rails environment, if there is one. We then loop through each of these and set an environment variable for each key to the value converted to a string as environment variables are picky and expect a string value. Note that we don&rsquo;t do this if the value is a hash; this means that this code won&rsquo;t try to set the full environment hashes to environment values. When we restart our application it starts up so it looks like our changes have worked.</p>
+
+<h3>An Alternative Approach</h3>
+
+<p>A Ruby gem called <a href="https://github.com/laserlemon/figaro">Figaro</a> is available which takes much the same approach that we have in this episode. If we don&rsquo;t want to create the YAML-loading code from scratch we can use this instead. The README for this gem mentions some good reasons for storing Rails apps&rsquo; settings in environment variables. Doing this is especially useful if we&rsquo;re using Heroku for deployment. There are, however, also some downsides to doing it this way which it&rsquo;s good to be aware of. First of all it&rsquo;s important to understand that environment variables must be set to a string value, which is what we did in our solution. Doing this can cause some unexpected results, though, if we&rsquo;re trying to store things like boolean values. Trying to store false will store the string &ldquo;false&rdquo; which is a truthy value and this might cause unexpected behaviour. We can remove the to_s conversion but this will raise an exception if we pass in an integer or some other unquoted value through the YAML file.</p>
+
+<p>Another thing we need to look out for are conflicts with existing environment variables. If we used <code>USER</code> instead of <code>BLOG_USERNAME</code> to store the name of the current user this would clash with the existing <code>USER</code> environment variable that stores the name of the currently logged-in user. Similarly if we use <code>HOST</code> instead of <code>MAILER_HOST</code> this will also overwrite an existing environment variable. To avoid this it&rsquo;s a good idea to prefix each variable name with the name of our application, although this can get a little messy and so if we&rsquo;re not going to deploy our application to Heroku it&rsquo;s better to avoid storing application settings in environment variables. We can instead store them in a constant.</p>
+
+``` /config/application.rb
+CONFIG = YAML.load(File.read(File.expand_path('../application.yml', __FILE__)))
+CONFIG.merge! config.fetch(Rails.env, {})
+CONFIG.symbolize_keys!
+```
+
+<p>Now we don&rsquo;t need to worry about namespacing or conflicts in our YAML files and we can use lower-case keys which are easier to read.</p>
+
+``` /config/application.yml
+blog_username: "admin"
+blog_password: "secret"
+secret_token: "024e1460a4fb8271e611d0f53811a382f1f6be121..."
+development:
+  mailer_host: "localhost:3000"
+test:
+  mailer_host: "test.local"
+production:
+  mailer_host: "blog.example.com"
+```  
+  
+<p>Now, wherever we use one of these settings in our application we can use CONFIG instead of ENV and use a symbol as the key.</p>
+
+``` /app/controllers/articles_controller.rb
+http_basic_authenticate_with name: CONFIG[:username], password: CONFIG[:password], except: [:index, :show]
+```
+
+<p>One thing we need to remember is that when we add or change a setting in our YAML file we also need to update the example YAML file that&rsquo;s stored in the source code repository so that it stays consistent.</p>
+

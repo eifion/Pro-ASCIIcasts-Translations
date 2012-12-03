@@ -1,0 +1,222 @@
+<p>In this episode we&rsquo;ll revisit the subject of jQuery and AJAX as the current episodes on these topics are a little out of date. This episode will be a little more beginner-focussed but it&rsquo;s still an interesting topic so let&rsquo;s get started.</p>
+
+<h3>A Task List Application</h3>
+
+<p>We have a simple task list application where users can create tasks, mark them as complete or remove them. Each of these actions requires the page to be fully reloaded. Our goal is to add AJAX so that this can be done without a page reload.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1381/original/E136RI01.png" width="800" height="500" alt="Our task list application."/>
+</div>
+
+<p>JQuery makes doing this much easier so it&rsquo;s useful that Rails has jQuery included out of the box. This includes a file called <code>jquery_ujs</code> which stands for Unobtrusive JavaScript which adds some JavaScript behaviour without us having to add any JavaScript code inline in the HTML. We can see this in action if we click one of the &ldquo;remove&rdquo; links. Doing this brings up a confirmation dialog which is handled using JavaScript. If we look at the HTML for one of the links we won&rsquo;t see any JavaScript, but we will see a <code>data-confirm</code> attribute. The <code>jquery_ujs</code> file picks up this attribute and adds the confirmation behaviour to the link.</p>
+
+``` html
+<a href="/tasks/3" data-confirm="Are you sure?" data-method="delete" rel="nofollow">(remove)</a>
+```
+
+<p>This element also has a <code>data-method</code> attribute which means that a DELETE request will be sent when the link is clicked instead of a normal GET request. If you&rsquo;re curious about how this all works you can find this file <a href="https://github.com/rails/jquery-rails/blob/master/vendor/assets/javascripts/jquery_ujs.js">on Github</a> where we&rsquo;ll find the code that adds the functionality to add link with a <code>data-confirm</code> attribute. A similarly useful attribute is called <code>data-remote</code>. This will help us a lot when we add AJAX functionality to our application. The first change we&rsquo;ll make is to the &ldquo;New Task&rdquo; link so that it adds the form for a new task inline using AJAX. To make this link work with AJAX we just have to add a <code>remote</code> option and set it to <code>true</code>.</p>
+
+``` /app/views/tasks/index.html.erb
+<%= link_to "New Task", new_task_path, id: "new_link", remote: true %>
+```
+
+<p>This adds a <code>data-remote</code> attribute to the link but when we click it nothing appears to happen. It can be a little difficult to debug an AJAX issue but there are steps that we can follow. First we should check the JavaScript console in the browser we&rsquo;re running the application in for error messages. There aren&rsquo;t any here so next we&rsquo;ll check the Network tab to see if an AJAX request was made. When we do this we&rsquo;ll see that a request for the <code>tasks/new</code> template is made and that we get a <code>200 OK</code> response back from the server. It seems that that there was no error in our Rails application but if we look at the contents of the response we&rsquo;ll see that it contains HTML which the JavaScript doesn&rsquo;t know to deal with.</p>
+
+<p>There are a number of directions we can go in from here. We could try to extract the form element from the response, we could have the server send JSON data back and parse that or we could the sever send some JavaScript back and execute that. This is the best approach in most situations and it&rsquo;s what we&rsquo;ll do here. Since we&rsquo;re not doing anything in the new action, just rendering a template, we&rsquo;ll create a new template specifically for JavaScript. The first thing this template should do is hide the &ldquo;new task&rdquo; link. This link has an <code>id</code> of <code>new_link</code> which we can use to find the element with jQuery by using that <code>id</code> with a hash symbol before it, in a similar way to how we&rsquo;d reference it from CSS. We can then call the <code>hide</code> function on this.</p> 
+
+<p>JQuery often returns the current selection of elements from a function so that we can chain functions together. We&rsquo;ll add the form immediately after the link by calling <code>after</code> and passing it a string of HTML. We&rsquo;ll render this through a partial by calling <code>render</code> and passing in the name of the partial. As we&rsquo;re inserting HTML directly into JavaScript we need to escape it by passing it to the <code>j</code> method.</p>
+
+``` /app/templates/tasks/new.js.erb
+$('#new_link').hide().after('<%= j render("form") %>');
+```
+
+<p>Now when we click the link it&rsquo;s instantly replaced by the form for adding a task.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1382/original/E136RI02.png" width="800" height="500" alt="Clicking the New Task link now shows the form instantly."/>
+</div>
+
+<p>When we submit this form, however, it does a full page reload as the form isn&rsquo;t configured to submit its data through an AJAX call. This is easy to fix: we can modify the partial where we render the form and add the <code>remote</code> option.</p>
+
+``` /app/views/tasks/_form.html.erb
+<%= form_for @task, remote: true do |f| %>
+  <%= f.text_field :name %>
+  <%= f.submit %>
+<% end %>
+```
+
+<p>We also need to modify the <code>create</code> action to respond to JavaScript requests. We can&rsquo;t add a template this time as the action has some redirect behaviour for HTML requests. We don&rsquo;t want JavaScript requests to do this so we&rsquo;ll add a <code>respond_to</code> block so that we can change the behaviour based on the request&rsquo;s format.</p>
+
+``` /app/controllers/tasks_controller.rb
+def create
+  @task = Task.create!(params[:task])
+  respond_to do |format|
+    format.html { redirect_to tasks_url }
+    format.js
+  end
+end
+```
+
+<p>Now HTML requests will respond with the redirect but as we&rsquo;ve left the <code>js</code> block empty we can render a template for JavaScript requests. This template will do several things: it will remove the form, show the &ldquo;new task&rdquo; link again and finally add the new task to the list of incomplete tasks. The page has a <code>div</code> with an <code>id</code> of <code>incomplete_tasks</code> and we&rsquo;ll append the new task to it. Again we&rsquo;ll do this by rendering a partial, using use the <code>j</code> method to escape the HTML that it returns.</p>
+
+``` /app/views/tasks/create.js.erb
+$('#new_task').remove();
+$('#new_link').show();
+$('#incomplete_tasks').append('<%= j render(@task) %>');
+```
+
+<p>Now when we create a new task it&rsquo;s all done without the page being reloaded.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1383/original/E136RI03.png" width="800" height="500" alt="The new task is now added without the page reloading."/>
+</div>
+
+<p>We can easily repeat this process for the &ldquo;remove&rdquo; links as removing a task currently reloads the page. This link is in the task partial and first we need to add the remote option to it.</p>
+
+``` /app/views/tasks/_task.html.erb
+<%= link_to "(remove)", task, method: :delete, data: {confirm: "Are you sure?"}, remote: true %>
+```
+
+<p>In the controller&rsquo;s <code>destroy</code> action we perform a redirect so we&rsquo;ll need a respond_to block like we&rsquo;ve added to create for handling a JavaScript response.</p>
+
+``` /app/controllers/tasks_controller.rb
+def destroy
+  @task = Task.destroy(params[:id])
+  respond_to do |format|
+    format.html { redirect_to tasks_url }
+    format.js
+  end
+end
+```
+
+<p>Next we&rsquo;ll make the new JavaScript template. In it we want to remove the task so we&rsquo;ll need a way to reference it. If we look back in the partial that renders the task we&rsquo;ll see that the link is inside a form for editing the task. Rails automatically assigns an id to the form of the form <code>edit_task_n</code> where <code>n</code> is the task&rsquo;s <code>id</code>. We can use erb to fetch this from the task record that&rsquo;s set in the controller then use that entire <code>id</code> to remove the record.</p>
+
+``` /app/views/tasks/destroy.js.erb
+$('#edit_task_<%= @task.id %>').remove();
+```
+
+<p>Now when we click the &ldquo;remove task&rdquo; link and confirm it the task is removed without the page reloading.</p>
+
+<h3>Marking a Task As Complete</h3>
+
+<p>Next we&rsquo;ll tackle marking a task as complete. To do this we have to check the checkbox for an item and click the &ldquo;Update&rdquo; button, which is a little clunky. What we want to do is remove the button and have checking the checkbox submit the form and update the item. We can do this with some custom JavaScript that we&rsquo;ll write inside the <code>tasks.js.coffee</code> file. This, as its name suggests, expects CoffeeScript code. If you&rsquo;re unfamiliar with CoffeeScript, or you just prefer JavaScript, you can remove the <code>.coffee</code> extension and write JavaScript in this file which is what we&rsquo;ll do. We need to listen to each checkbox&rsquo;s <code>click</code> event and we can select these by finding all the input elements with a type of checkbox within the form. The form has a class of  <code>.edit_task</code> which we can use to select that. We&rsquo;ll listen to these checkboxes&rsquo; <code>click</code> events by calling click on these elements and passing in a function. For now we&rsquo;ll show an <code>alert</code> when a checkbox is clicked.</p>
+
+``` /app/assets/javascripts/tasks.js
+$('.edit_task input[type=checkbox]').click(function () {
+  alert('clicked');
+});
+```
+
+<p>When we reload the page and click on of the checkboxes nothing happens. There are no errors in the JavaScript console so what&rsquo;s wrong? The problem is that this JavaScript is interpreted as soon as it&rsquo;s loaded in at the top of the page. The rest of the HTML document hasn&rsquo;t been loaded at this point and so the checkboxes don&rsquo;t exist at that point. We have to delay this code from being executed until the entire page has loaded. JQuery provides a convenient way to do this by passing a function to its <code>$</code> function. Any code inside this function won&rsquo;t be run until the page&rsquo;s DOM has completely loaded.</p>
+
+``` /app/assets/javascripts/tasks.js
+$(function () {
+  $('.edit_task input[type=checkbox]').click(function () {
+    alert('clicked');
+  });  
+});
+```
+
+<p>When we reload the page now the <code>alert</code> shows so all we need to do now is replace the alert with code to submit the form. To do this we call <code>$(this)</code> to get the current element, i.e. the checkbox that&rsquo;s been checked, then call parent on that to get the parent form. Calling <code>submit()</code> on this will submit the form. We also want to remove the button on each form and we can do this getting the <code>input</code> elements with a type of submit and calling <code>remove</code> on them.</p>
+
+``` /app/assets/javascripts/tasks.js
+$(function () {
+  $('.edit_task input[type=submit]').remove();
+  $('.edit_task input[type=checkbox]').click(function () {
+    $(this).parent('form').submit();
+  });  
+});
+```
+
+<p>When we reload the page now the buttons have disappeared and if we check one of the checkboxes next to an incomplete task the form is submitted and the task is marked as completed.</p>
+
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1384/original/E136RI04.png" width="800" height="500" alt="We can now mark a task as complete without the page reloading."/>
+</div>
+
+<p>This works the other way, too. Unchecking a completed task will submit the form and move it back to the incomplete tasks list. We just need to AJAX-enable this form now so that the whole page isn&rsquo;t reloaded when a task is moved. Again we do this by marking the form as <code>remote</code>.</p>
+
+``` /app/views/tasks/_task.html.erb
+<%= form_for task, remote: true do |f| %>
+```
+
+<p>In the <code>TasksController</code> we need to respond to the <code>update</code> action so that it responds to HTML and JavaScript differently like we did with <code>create</code> and <code>destroy</code>.</p>
+
+``` /app/controllers/tasks_controller.rb
+def update
+  @task = Task.find(params[:id])
+  @task.update_attributes!(params[:task])
+  respond_to do |format|
+    format.html { redirect_to tasks_url }
+    format.js
+  end
+end
+```
+
+<p>Finally we&rsquo;ll make a JavaScript template for <code>update</code>. This will contain code to move the changed task to the other list.</p>
+
+``` /app/views/templates/update.js.erb
+<% if @task.complete? %>
+  $('#edit_task_<%= @task.id %>').appendTo('#complete_tasks');
+<% else %>
+  $('#edit_task_<%= @task.id %>').appendTo('#incomplete_tasks');
+<% end %>
+```
+
+<p>We&rsquo;ve been using a lot of jQuery functions in this episode. We can find documentation for all these on the <a href="http://docs.jquery.com/">jQuery Documentation site</a> and we can find the appendTo function&rsquo;s documentation in the Manipulation section.</p> 
+
+<h3>Creating a jQuery Plugin</h3>
+
+<p>Our application is now pretty much complete. We can now move tasks from one list to the other or create new tasks without having to reload the entire page. There is still a small bug in our application, however. If we add a new item then try to check it to mark it as complete we see two issues. One is that the update button shows for that task; the other is that checking the checkbox doesn&rsquo;t move the task to the other list. The problem is that the code that removes the button and submits a form when a checkbox is checked is run when the page first loads and so won&rsquo;t apply to any new tasks that are created later. One way to solve this is to move this code out into a function that we can call whenever we create a task. This is a good chance to demonstrate how jQuery plugins work. A plugin is essentially a function that we can call against a matching set of elements. We want to write one that will add the behaviour to any form. We&rsquo;ll call it <code>submitOnCheck</code> and we&rsquo;ll use it like this:</p>
+
+``` /app/assets/javascripts/tasks.js
+$(function () {
+  $('.edit_task').submitOnCheck();
+});
+```
+
+<p>Getting this to work is fairly easy.  We can create a plugin by calling <code>jQuery.fn</code> and the name of our plugin and we set this to a function. Inside this function we can reproduce the functionality we had earlier. The only difference is that instead of hard-coding the name of the form in the selector we use this to get the form elements that the plugin was called on.</p>
+
+``` /app/assets/javascripts/tasks.js
+jQuery.fn.submitOnCheck = function () {
+  this.find('input[type=submit]').remove();
+  this.find('input[type=checkbox]').click(function () {
+    $(this).parent('form').submit();
+  });  
+  return this;
+};
+```
+
+<p>Note that the function returns the forms at the end so that we can chain other elements onto our selector.</p>
+
+<p>With this code in place we can change the <code>create</code> template where we render out a new task. This creates the form that we want to add our plugin&rsquo;s functionality to and all we need to do is call <code>submitOnCheck</code> on the form immediately after we create it.</p>
+
+``` /app/views/tasks/create.js.erb
+$('#new_task').remove();
+$('#new_link').show();
+$('#incomplete_tasks').append('<%= j render(@task) %>');
+$('#edit_task_<%= @task.id %>').submitOnCheck();
+```
+
+<p>Now when we create a task it&rsquo;s &ldquo;update&rdquo; button is hidden and checking its checkbox moves the task to the Completed list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1385/original/E136RI05.png" width="800" height="500" alt="Our application now all works without having to reload the page."/>
+</div>
+
+<p>Our AJAX functionality is now complete. Earlier we decided to write some of our code in JavaScript rather than in CoffeeScript. For completeness here&rsquo;s the CoffeeScript version.</p>
+
+``` /app/assets/javascripts/tasks.js.coffee
+jQuery.fn.submitOnCheck = ->
+  @find('input[type=submit]').remove()
+  @find('input[type=checkbox]').click ->
+    $(this).parent('form').submit()
+  this
+  
+jQuery ->
+  $('.edit_task').submitOnCheck()
+```  
+  
+<p>If you&rsquo;re interested in learning about CoffeeScript <a href="http://railscasts.com/episodes/267-coffeescript-basics">episode 267</a> covers getting started with it.</p>

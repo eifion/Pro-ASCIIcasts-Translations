@@ -1,0 +1,352 @@
+<p>Authorization in web applications can be difficult to implement and test as it often involves complex logic that needs to exist throughout all the application&rsquo;s layers. There are libraries that can help out with this such as Ryan Bates&rsquo; <a href="https://github.com/ryanb/cancan">CanCan</a>, but as everyone&rsquo;s authorization needs are needs are different these may or may not be a good fit. Either way it&rsquo;s a good idea to learn how to implement authorization from scratch. This way we can adapt it to our needs and if nothing else we can get a better understanding of the ideas behind authorization.</p>
+
+<p>We&rsquo;ll be demonstrating this using a forum application. This has a number of topics and we can view a topic&rsquo;s posts, create a new topic, edit a topic or destroy one. The application has some authentication and we&rsquo;re already logged in with a username and password. Adding authentication form scratch was covered in <a href="http://railscasts.com/episodes/250-authentication-from-scratch">episode 250</a>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1386/original/E385I01.png" width="800" height="500" alt="Our forum application."/>
+</div>
+
+<p>Even though we have authentication set up we don&rsquo;t have any authorization in this application. Users can edit or destroy any topic, even if they haven&rsquo;t created it, but we don&rsquo;t want this. We only want to allow admin users to be able to edit and destroy topics, although any user can currently be marked as administrator by setting a checkbox on their profile page.</p>
+
+<h3>Adding Authorization</h3>
+
+<p>Let&rsquo;s get started by adding some restrictions to what the users can do. We&rsquo;ll do this through test-driven development. We already have some high-level request specs for testing various parts of the application&rsquo;s functionality. These tests are written with Capybara, which was covered in <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a>. We already have Guard set up for this project to automatically run the tests for us when we make changes to them. The four tests we have currently pass so we can start to add the new functionality. First we&rsquo;ll add a test for authorization. We want to ensure that a user cannot edit a topic unless he is an admin so we&rsquo;ll write a quick spec that will test for this.</p>
+
+``` /spec/requests/topics_spec.rb
+it "cannot edit topic as non-admin" do
+  log_in admin: false
+  topic = create(:topic)
+  visit edit_topic_path(topic)
+  page.should have_content("Not authorized")
+end
+```
+
+<p>In this spec we log in as a non-admin user using a <code>log_in</code> support method that we&rsquo;ve written for this application. We then create a new <code>Topic</code> and try to visit its <code>edit</code> page. When we do this the page should have the content &ldquo;Not authorized&rdquo; as the edit page should redirect back to the home page and show a message when a normal user tries to edit a topic. When we save this file Guard reruns our specs and we now have one that fails as the user can edit the edit topic page. We can get it to pass by modifying the <code>TopicsController</code> and adding a <code>before_filter</code> that will run before the edit action.</p>
+
+``` /app/controllers/topics_controller.rb
+class TopicsController < ApplicationController
+  before_filter :authorize, only: :edit
+
+  # Other methods omitted
+
+  private
+  def authorize
+    if current_user && !current_user.admin?
+      redirect_to root_url, alert: "Not authorized"
+    end
+  end
+end
+```
+
+<p>The method that&rsquo;s called by the filter checks to see if a current user exists. If one does and they&rsquo;re not an admin they&rsquo;ll be redirected to the home page and a flash message will be shown. With this change in place our specs pass again.</p> 
+
+<p>Our tests are giving us a false sense of security, though. There are plenty of holes in our <code>authorize</code> method. We check to see that a current user exists and if they&rsquo;re an admin. This means that if we try to edit a topic while not logged in we&rsquo;ll still be able to. Also we&rsquo;re only checking this on the <code>edit</code> action which means that update isn&rsquo;t protected at all. This means that someone could POST to update directly and still alter a topic.</p> 
+
+<p>These problems are easy to fix but we&rsquo;ll need a add a separate spec for each of the branching possibilities and this will only get worse as our application&rsquo;s logic becomes more complicated as we also want users to be able to edit topics that they own. This can be difficult to test, especially when we&rsquo;re testing at such a high level, and isn&rsquo;t very practical. Whenever we&rsquo;re faced with this situation it&rsquo;s a sign that we need to make the controller simpler and move the complex logic into the model layer so that we can test it at a lower level. Back in our <code>TopicsController</code>&rsquo;s <code>authorize</code> method we&rsquo;ll delegate any authorization logic into another object that we&rsquo;ll call <code>current_permission</code>. This will have an <code>allow?</code> method that will return <code>true</code> if the permission is allowed for a given action. We can use this to redirect to the home page if it returns <code>false</code>.</p>
+
+``` /app/controllers/topics_controller.rb
+def authorize
+  if !current_permission.allow?
+    redirect_to root_url, alert: "Not authorized"
+  end
+end
+```
+
+<p>Next we&rsquo;ll define the <code>current_permission</code> method. This will return an instance of a <code>Permission</code> class to which we pass the current user. We&rsquo;ll assign the result of this to an instance variable and cache it so that it&rsquo;s only instantiated once.</p>
+
+``` /app/controllers/topics_controller.rb
+def current_permission
+  @current_permission ||= Permission.new(current_user)
+end
+```
+
+<p>We need to write this <code>Permission</code> class and we&rsquo;ll do it in the <code>models</code> directory. Even though this isn&rsquo;t an ActiveRecord model it can still be considered a model. This class will inherit from a <code>Struct</code> for convenience so that we can pass in the <code>user</code> attribute. We&rsquo;ll give this class an <code>allow?</code> method which we&rsquo;ll give the same behaviour as we had in the controller where we check that the user is an admin.</p>
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?
+    user && user.admin?
+  end
+end
+```
+
+<p>When we save this new file our tests all pass again as all we&rsquo;ve done is some refactoring to move the logic into the model layer. We still have our security hole since we&rsquo;ve only authorized the <code>edit</code> action. We&rsquo;ll make this more generic and authorize every action in the same way and we&rsquo;ll do this by moving the <code>authorize</code> and <code>current_permission</code> methods from the <code>TopicsController</code> into the <code>ApplicationController</code> along with the <code>before_filter</code>. We need to pass in some more information to <code>allow?</code> now so that it knows which controller and action we&rsquo;re testing the authorization for.</p> 
+
+``` /app/controllers/applications_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  before_filter :authorize
+
+private
+
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+  
+  def current_permission
+    @current_permission ||= Permission.new(current_user)
+  end
+  
+  def authorize
+    if !current_permission.allow?(params[:controller], params[:action])
+      redirect_to root_url, alert: "Not authorized"
+    end
+  end
+end
+```
+
+<p>We&rsquo;ll also need to modify the <code>Permission</code> class to accept the <code>controller</code> and <code>action</code> parameters.</p>
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    user && user.admin?
+  end
+end
+```
+
+<p>This will break our request specs since we&rsquo;re now authorizing every action but this is one of those cases where it&rsquo;s OK to have failing tests for a while as we&rsquo;re spiking out the authorization functionality.</p> 
+
+<p>Whenever we&rsquo;re building an authorization system it&rsquo;s a good idea to start with the case where everything is locked down, except maybe the root URL, so that we can try it out. We&rsquo;ll modify our <code>Permission</code> class to do this.</p>
+
+``` app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    controller == "topics" && action == "index"
+  end
+end
+```
+
+<p>Now when we try to visit any page apart from the home page we&rsquo;re redirected back to the home page with a &ldquo;Not authorized&rdquo; message. This is a great place to be as it means that the authorization can now be controlled from one location. Our controller is simple and we can handle the complex logic through our <code>Permission</code> class and test it directly so that we don&rsquo;t have to do the high-level request specs.</p> 
+
+<p>We&rsquo;ll write a model spec for <code>Permission</code> now so that we can write some tests for it. In this spec we&rsquo;ll require the <code>spec_helper</code> then describe the <code>Permission</code> class. Here we set <code>focus</code> to <code>true</code> so that only the tests inside this class are run. This is set up in the <code>SpecHelper</code> class so that only the focussed tests is run. If no test is set as focussed then all the tests are run. First we describe the case where the user is a guest, i.e that they aren&rsquo;t signed in. The subject in this test is a <code>Permission</code> instance with <code>nil</code> passed in as the current user. We&rsquo;ll then say that this user should have access to the topics <code>index</code> page.</p>
+
+``` /spec/models/permission_spec.rb
+require "spec_helper"
+
+describe Permission, focus: true do
+  describe "as guest" do
+    subject { Permission.new(nil) }
+    it { should allow("topics", "index") }
+  end
+end
+```
+
+<p>This currently won&rsquo;t work. When the test runs Guard complains about an undefined <code>allow</code> method as there&rsquo;s no matcher with this name. The test reads well, though, so we&rsquo;ll define an <code>allow</code> matcher. For convenience we&rsquo;ll add this definition in the same class but it would be better in a file in the <code>spec/support</code> directory.</p> 
+
+``` /spec/models/permission_spec.rb
+RSpec::Matchers.define :allow do |*args|
+  match do |permission|
+    permission.allow?(*args).should be_true
+  end
+end
+```
+
+<p>Here we define our new matcher, which takes a <code>Permission</code> object that we call <code>allow?</code> on passing in the arguments that we passed to the matcher. We then check that this returns <code>true</code>. Our spec now passes as this is the one page that guests can view. We can now easily define the permissions for the other actions.</p>
+
+``` /spec/models/permission_spec.rb
+describe Permission, focus: true do
+  describe "as guest" do
+    subject { Permission.new(nil) }
+    it { should allow("topics", "index") }
+    it { should_not allow("topics", "show") }
+    it { should_not allow("topics", "new") }
+    it { should_not allow("topics", "create") }
+    it { should_not allow("topics", "edit") }
+    it { should_not allow("topics", "update") }
+    it { should_not allow("topics", "destroy") }
+  end
+end
+```
+
+<p>Guests should be able to view the <code>index</code> and <code>show</code> actions but not any of the others. When this test runs now if fails because guests don&rsquo;t have permissions to view the show action. We can get this passing again by modifying the <code>Permission</code> object and adding show to the list of permitted actions.</p>
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    controller == "topics" && action.in?(%w[index show])
+  end
+end
+```
+
+<p>Our test now passes again so we&rsquo;ll add permissions for admins. These should be able to access all the actions.</p>
+
+``` /spec/models/permission_spec.rb
+describe "as admin" do
+  subject { Permission.new(build(:user, admin: true)) }
+  it { should allow("topics", "index") }
+  it { should allow("topics", "show") }
+  it { should allow("topics", "new") }
+  it { should allow("topics", "create") }
+  it { should allow("topics", "edit") }
+  it { should allow("topics", "update") }
+  it { should allow("topics", "destroy") }
+end
+```
+
+<p>We pass in an admin user to <code>Permission</code> by using Factory Girl and then test each action to make sure that they can access it. Most of these tests all fail but this should be easy to fix.</p> 
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    if user.nil?
+      controller == "topics" && action.in?(%w[index show])
+    elsif user.admin?
+      true
+    end
+  end
+end
+```
+
+<p>All our tests now pass again.</p>
+
+<p>We have one more type of user left to describe: a logged in user who isn&rsquo;t an admin. These should have access to everything except the <code>destroy</code> action.</p>
+
+``` /spec/models/permission_spec.rb
+describe "as member" do
+  subject { Permission.new(build(:user, admin: false)) }
+  it { should allow("topics", "index") }
+  it { should allow("topics", "show") }
+  it { should allow("topics", "new") }
+  it { should allow("topics", "create") }
+  it { should allow("topics", "edit") }
+  it { should allow("topics", "update") }
+  it { should_not allow("topics", "destroy") }
+end
+```
+
+<p>Some of these tests fail, as we&rsquo;d expect. We can make it pass by making another change to the <code>Permission</code> class.</p>
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    if user.nil?
+      controller == "topics" && action.in?(%w[index show])
+    elsif user.admin?
+      true
+    else
+      controller == "topics" && action != "destroy"
+    end
+  end
+end
+```
+
+<p>With this in place the tests all now pass again. If we try this our by visiting various pages in our application while logged as a non-admin user it behaves exactly as we expect it to and we can visit all the pages but not destroy any topics.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1387/original/E385I02.png" width="800" height="500" alt="Trying to visit a page we're not authorized to view now redirects to the home page."/>
+</div>
+
+<p>It would make more sense if the destroy link only appears if the current user has permission to destroy a topic. We can find this link in the <code>index</code> template and we&rsquo;ll wrap it with an <code>if</code> condition and use a helper method called <code>allow?</code> that takes a the name of a controller and an action and returns true if the current user has permissions on that action. We&rsquo;ll use this action on the &ldquo;new&rdquo; and &ldquo;edit&rdquo; links, too.</p>
+
+``` /app/views/topics/index.html.erb
+<h1>Forum</h1>
+
+<div id="topics">
+<% @topics.each do |topic| %>
+  <h2><%= link_to topic.name, topic %></h2>
+  <%= "Sticky |" if topic.sticky? %>
+  <%= pluralize topic.posts.size, "post" %>
+  <% if allow? "topics", "edit" %>
+  | <%= link_to "Edit", edit_topic_path(topic) %>
+  <% end %>
+  <% if allow? "topics", "destroy" %>
+  | <%= link_to "Destroy", topic_path(topic), method: :delete %>
+  <% end %>
+<% end %>
+</div>
+<% if allow? "topics", "new" %>
+<p><%= link_to "New Topic", new_topic_path %></p>
+<% end %>
+```
+
+<p>We need to define the <code>allow?</code> method which we&rsquo;ll do in the <code>ApplicationController</code> by delegating it to the <code>current_permission</code> object and making it a helper method.</p>
+
+``` /app/controllers/application_controller.rb
+delegate :allow?, to: :current_permission
+helper_method :allow?
+```
+
+<p>If we reload the page now these links will disappear as the user we&rsquo;re logged in as doesn&rsquo;t have permission to view them.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1388/original/E385I03.png" width="800" height="500" alt="Links for deleting a product are now hidden."/>
+</div>
+
+<p>We didn&rsquo;t test-drive this change. For most application&rsquo;s it isn&rsquo;t necessary to test the view layer extensively with this kind of logic. If the &ldquo;destroy&rdquo; links were still there a non-admin user still wouldn&rsquo;t be able to destroy a topic as the action itself is protected and that is covered by tests.</p> 
+
+<p>If we try to edit our profile now to make ourselves an admin user this won&rsquo;t work as we aren&rsquo;t authorized to view that page. We need to define permissions for actions in both the <code>SessionsController</code> and <code>UsersController</code> and we&rsquo;ll start by adding some more tests to the <code>Permission</code> spec.</p>
+
+``` /spec/models/permission_spec.rb
+describe "as guest" do
+  subject { Permission.new(nil) }
+  # Other specs omitted.
+    
+  it { should allow("sessions", "new") }
+  it { should allow("sessions", "create") }
+  it { should allow("sessions", "destroy") }        
+    
+  it { should allow("users", "new") }
+  it { should allow("users", "create") }
+  it { should_not allow("users", "edit") }
+  it { should_not allow("users", "update") }
+end
+```
+
+<p>A guest user should be able to access almost everything in these two controllers apart from being able to edit a user. A logged-in user will have similar permissions except that they will be able to edit and update users.</p>
+
+``` /spec/models/permission_spec.rb
+describe "as member" do
+  subject { Permission.new(build(:user, admin: false)) }
+  # Other specs omitted.
+    
+  it { should allow("sessions", "new") }
+  it { should allow("sessions", "create") }
+  it { should allow("sessions", "destroy") }        
+    
+  it { should allow("users", "new") }
+  it { should allow("users", "create") }
+  it { should allow("users", "edit") }
+  it { should allow("users", "update") }    
+end
+```
+
+<p>We should add similar tests for an admin user, but given that they should have access to every controller and action we&rsquo;ll replace all their tests with this one.</p>
+
+``` /spec/models/permission_spec.rb
+describe "as admin" do
+  subject { Permission.new(build(:user, admin: true)) }
+  it { should allow("anything", "here") }
+end
+```
+
+<p>When we save this file Guard runs again and we now have all sorts of failing specs so let&rsquo;s work on getting them to pass. Trying to stick with the pattern we have in the <code>Permission</code> class is a little difficult as it will become more complicated as we add more controllers and actions to it. This is where explicit <code>return</code> statements can be useful in cleaning things up. We&rsquo;ll use them to change the logic in the <code>allow?</code> method to look like this.</p>
+
+``` /app/models/permission.rb
+def allow?(controller, action)
+  return true if controller == "sessions"
+  return true if controller == "users" && action.in?(%w[new create])
+  return true if controller == "topics" && action.in?(%w[index show])
+  if user
+    return true if controller == "users" && action.in?(%w[edit update])
+    return true if controller == "topics" && action != "destroy"
+    return true if user.admin?
+  end
+  false
+end
+```
+
+<p>All session actions should be available so we can return true if the controller matches &ldquo;sessions&rdquo;. For the other controllers we have logic based on the name of the action and whether there&rsquo;s a current user and we return true if one of these lines matches. If not then we fall through to the bottom of the file and return <code>false</code>.</p>
+
+<p>With this change made our tests all now pass again. Now that our authorization is pretty much done let&rsquo;s see if our requests specs pass too. If we remove <code>focus: true</code> from the permission spec and save the file all the tests will be rerun. These tests all pass apart from the one that tests that we can&rsquo;t edit a topic if we&rsquo;re not an admin user. The problem here is that we accidentally wrote conflicting specs. In the <code>Permission</code> spec we said that a member should be able to edit a topic, while the equivalent request spec says the opposite and checks for the test &ldquo;not authorized&rdquo; on the page. Ideally we&rsquo;d only want a member to be able to edit a topic that they have created but we won&rsquo;t be doing that in this episode so for now we&rsquo;ll change the request spec so that it says that guest users can&rsquo;t edit a topic.</p>
+
+``` /spec/requests/topics_spec.rb
+it "cannot edit topic as guest" do
+  topic = create(:topic)
+  visit edit_topic_path(topic)
+  page.should have_content("Not authorized")
+end
+```
+
+<p>Now all the specs pass again and we have a pretty nice authorization system. There&rsquo;s a lot more that we could do to improve it, however. It would be good if the Permission class had a DSL for defining permissions instead of all of the <code>return</code> statements we currently have. Also if we want to change the permissions depending on the attributes of a given topic, such as whether the user owns it or not that&rsquo;s something our authorization system can&rsquo;t currently handle. Some of this will be covered in the next episode.</p>

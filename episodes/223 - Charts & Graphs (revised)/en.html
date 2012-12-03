@@ -1,0 +1,225 @@
+<p>Let&rsquo;s say that we have an e-commerce style application with an administration page that lists the orders that customers have made, including the order number, the time of purchase, whether of not the item is for shipping and the total price.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com//system/photos/1360/original/E223RI01.png" width="800" height="600" alt="Our Orders page."/>
+</div>
+
+<p>It&rsquo;s difficult to get an overview of this data. We have a large number of pages of orders and it would be better if we had a line graph showing how much is coming in each day. The best way to make a graph from some data is to use JavaScript. This way we don&rsquo;t have to worry about dependencies such a Flash on the client or ImageMagick on the server. We&rsquo;ll use the <a href="http://oesmith.github.com/morris.js/">Morris.js library</a> in this episode as it best fits oar example application but there are a large number of other graphing libraries we could use and we&rsquo;ll mention some of them at the end of this episode. Morris.js is lightweight and is a great option if we just need a simple line graph that charts something over time such as our order data.</p> 
+
+<p>To use Morris.js in a Rails application we can download the <a href="https://raw.github.com/oesmith/morris.js/0.3.0/morris.min.js">compressed version of the library</a> or grab the uncompressed version from the <a href="https://github.com/oesmith/morris.js">project&rsquo;s Github pages</a>. We&rsquo;ll use the uncompressed version as it&rsquo;s easier to debug and the asset pipeline will compress it for us. Morris depends on the <a href="http://raphaeljs.com/">Rapha&euml;l JavaScript library</a> so we&rsquo;ll need to download this as well and again we&rsquo;ll download the uncompressed version. Once we&rsquo;ve downloaded these files we can add them to the <code>/vendor/assets/javascripts</code> directory and include them in our app&rsquo;s JavaScript manifest file.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require raphael
+//= require morris
+//= require_tree .
+```
+
+<h3>Adding A Graph</h3>
+
+<p>Now that we have Morris set up we&rsquo;ll add a line graph above the table of orders. There are several examples provided on the Morris site and we&rsquo;ll use one of them to create a simple line graph. We&rsquo;ll add the code to the <code>orders</code> CoffeeScript file.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  Morris.Line
+    element: 'annual'
+    data: [
+      {y: '2012', a: 100}
+      {y: '2011', a: 75}
+      {y: '2010', a: 50}
+      {y: '2009', a: 75}
+      {y: '2008', a: 50}
+      {y: '2007', a: 75}
+      {y: '2006', a: 100}
+    ]
+    xkey: 'y'
+    ykeys: ['a']
+    labels: ['Series a']
+```    
+
+<p>This will look for an HTML element with an <code>id</code> of <code>annual</code> and generate the graph inside it. We&rsquo;ll add one to the index template above the table.</p>
+
+``` /app/views/orders/index.html.erb
+<div id="annual"></div>
+```
+
+<p>When we reload the page now we&rsquo;ll see the graph.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1361/original/E223RI02.png" width="800" height="600" alt="We now have a simple graph on the page."/>
+</div>
+
+<p>Now that we have our graph we need to add data to it based on the orders in the database. We&rsquo;ll change the element that the graph will be displayed in to <code>orders_chart</code> and have Morris look for the data for the graph in a <code>data-orders</code> attribute that we&rsquo;ll add to the <code>orders_chart</code> element.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  Morris.Line
+    element: 'orders_chart'
+    data: $('#orders_chart').data('orders')
+    xkey: 'y'
+    ykeys: ['a']
+    labels: ['Series a']
+```    
+
+<p>We&rsquo;ll use <code>content_tag</code> to create the <code>div</code> now as that will make it easier to convert the JSON data. Note that we pass the orders straight in to the data attribute.</p>
+
+``` /app/views/orders/index.html.erb
+<%= content_tag :div, "", id: "orders_chart", data: {orders: @orders} %>
+```
+
+<p>When we reload the page now we see a blank chart rather than the data we were expecting. If we look at the source for the page we&rsquo;ll see the <code>div</code> that we generated along with its <code>data-orders</code> attribute which contains the orders converted to JSON. The graph doesn&rsquo;t display as we need to tell Morris which attributes to use to create it. We want to use <code>purchased_at</code> for the x-axis and price for the y-axis so we&rsquo;ll set the <code>xkey</code> and <code>ykeys</code> attributes of our <code>Morris.Line</code> to reflect this.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  Morris.Line
+    element: 'orders_chart'
+    data: $('#orders_chart').data('orders')
+    xkey: 'purchased_at'
+    ykeys: ['price']
+    labels: ['Price']
+```    
+
+<p>When we reload the page now well see a graph showing the same orders that are on the current page. Each node represents an order and we can see the time that it was made at and its price.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1362/original/E223RI03.png" width="800" height="600" alt="The graph now shows the last ten orders."/>
+</div>
+
+<p>Instead of just displaying a graph for the last ten orders we want to show a bigger overview where each node is a day and the price is the total price for the orders made on that day. To do this we need to change that data that is passed to Morris and, as the logic to do this is fairly complex we&rsquo;ll move it off into a helper method that we&rsquo;ll call <code>orders_chart_data</code>.</p>
+
+``` /app/views/orders/index.html.erb
+<%= content_tag :div, "", id: "orders_chart", data: {orders: orders_chart_data} %>
+```
+
+<p>We&rsquo;ll define this method in the <code>OrdersHelper</code> module. It will need to return an array of hashes, one for each day. We&rsquo;ll display the last two weeks&rsquo; data.</p>
+
+``` app/helpers/orders_helper.rb
+module OrdersHelper
+  def orders_chart_data
+    (2.weeks.ago.to_date..Date.today).map do |date|
+      {
+        purchased_at: date,
+        price: Order.where("date(purchased_at) = ?", date).sum(:price)
+      }
+    end
+  end
+end
+```
+
+<p>Here we have a range containing the last two weeks&rsquo; dates and we map each one onto a hash. The way we fetch the sum of the orders for each day isn&rsquo;t the most efficient way to get this data but it will suffice for now. When we reload the page now we&rsquo;ll see a graph that shows the last two weeks&rsquo; orders.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1363/original/E223RI04.png" width="800" height="600" alt="Two weeks&rsquo; orders are now displayed."/>
+</div>
+
+<h3>Improving The Query</h3>
+
+<p>If we look at the log file we&rsquo;ll see that a separate SQL query is made to sum up the total price for each day. There are potential performance issues with this and it would be better if we could get all the data in one go. We&rsquo;ll work out this query in the console. We need to group the orders by the day they were purchased and so we&rsquo;ll use group and convert each <code>purchased_at</code> value to a date. We then want to select each date and a <code>SUM</code> of the items about on that day. Finally we&rsquo;ll display the first item that&rsquo;s returned.</p>
+
+``` console
+>> Order.group("date(purchased_at)").select("purchased_at, sum(price) as total_price").first
+  Order Load (1.6ms)  SELECT purchased_at, sum(price) as total_price FROM "orders" GROUP BY date(purchased_at) LIMIT 1
+=> #<Order purchased_at: "2012-09-07 00:00:00">
+```
+
+<p>We can see that this returns an instance of the <code>Order</code> class but what&rsquo;s returned doesn&rsquo;t represent an individual order, rather all the orders that were placed on a single day so we call <code>purchased_at</code> and <code>total_price</code> on this object to get the total value for a given day. We can now use this in our helper method. Instead of using a separate query for each day we&rsquo;ll fetch all the data at once. We&rsquo;ll write a new class method on the Order model to fetch this data then use it in the helper.</p>
+
+``` /app/models/order.rb
+class Order < ActiveRecord::Base
+  attr_accessible :price, :purchased_at, :shipping
+  
+  def self.total_grouped_by_day(start)
+    orders = where(purchased_at: start.beginning_of_day..Time.zone.now)
+    orders = orders.group("date(purchased_at)")
+    orders = orders.select("purchased_at, sum(price) as total_price")
+    orders.group_by { |o| o.purchased_at.to_date }
+  end
+end
+```
+
+<p>This method takes a start date as an argument and does basically the same thing we did in the console, although there are a couple of differences. One is that we only fetch the orders that were purchased between the given start date and the current time. Also we call <code>group_by</code> on the orders, which is a method provided by ActiveSupport to convert the array of orders into a hash with the purchase date as the key. This way we can easily look up the orders for a given date.</p>
+
+<p>We can use this method now in our <code>OrdersHelper</code>. We still loop through each day but now we fetch each day&rsquo;s data from the hash instead of from a separate database call. Because of the way that <code>group_by</code> works each item in the hash has an array as its value so we&rsquo;ll use first to get the first item from it then call <code>total_price</code> on that to get the total for that day. As there may be no orders for a given day we use <code>try</code> here and return <code>0</code> if this is the case.</p>
+
+``` /app/helpers/orders_helper.rb
+module OrdersHelper
+  def orders_chart_data
+    orders_by_day = Order.total_grouped_by_day(2.weeks.ago)    
+    (2.weeks.ago.to_date..Date.today).map do |date|
+      {
+        purchased_at: date,
+        price: orders_by_day(date).first.try(:total_price) || 0
+      }
+    end
+  end
+end
+```
+
+<p>When we reload the page now the graph looks the same but the database query underneath it is much more efficient as it&rsquo;s only making one database query to fetch all the data for the graph.</p>
+
+<h3>Adding Multiple LInes</h3>
+
+<p>When we start visualizing data like this we might notice trends that happen over time. The graph below shows a definite spike in orders after the 27th September and the order are consistently higher after that date.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1364/original/E223RI06.png" width="800" height="600" alt="The orders substantially increase after September 27th."/>
+</div>
+
+<p>It would be nice if we could figure out what caused this spike. To help with this we can break down the graph depending on different attributes of the orders. Some of the orders are for physical products and have shipping while some aren&rsquo;t. We&rsquo;ll add more lines to the graph to show items with shipping separately from those without. To do this we can change our helper method so that we pass the data into the hash for each shipping style. We can call where on the <code>Order</code> model to fetch the shipped and unshipped orders and group them as we do all the orders.</p>
+
+``` /app/helpers/orders_helper.rb
+module OrdersHelper
+  def orders_chart_data(start = 2.weeks.ago)
+    orders_by_day = Order.total_grouped_by_day(start)   
+    shipping_by_day = Order.where(shipping: true).total_grouped_by_day(start)   
+    download_by_day = Order.where(shipping: false).total_grouped_by_day(start)   
+     
+    (start.to_date..Date.today).map do |date|
+      {
+        purchased_at: date,
+        price: orders_by_day[date].first.try(:total_price) || 0,
+        shipping_price: shipping_by_day[date].first.try(:total_price) || 0,
+        download_price: download_by_day[date].first.try(:total_price) || 0
+      }
+    end
+  end
+end
+```
+
+<p>Note that to reduce duplication we&rsquo;ve made the start date an argument to the method, with a default value. Now that we have this additional data we can add it to the chart and Morris makes this easy to do by passing in additional <code>ykeys</code>. We&rsquo;ll add some additional labels, too.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  Morris.Line
+    element: 'orders_chart'
+    data: $('#orders_chart').data('orders')
+    xkey: 'purchased_at'
+    ykeys: ['price', 'shipping_price', 'download_price']
+    labels: ['Total Price', 'Shipping Price', 'Download Price']
+```    
+
+<p>When we reload the page now our graph has two additional lines showing the totals for the unshipped and shipped orders.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1365/original/E223RI07.png" width="800" height="600" alt="The graph now displays shipped and unshipped orders separately."/>
+</div>
+
+<p>We can see now that the extra orders are caused by extra download orders and that the shipped orders remain fairly constant throughout the time period. Also notice that when we hover over a point the amounts for each line at that time are shown, although the amounts aren&rsquo;t shown with their currency symbol. We can fix this by passing in a <code>preUnits</code> argument.</p>
+
+``` /app/assets/javascripts/orders.js.coffee
+jQuery ->
+  Morris.Line
+    element: 'orders_chart'
+    data: $('#orders_chart').data('orders')
+    xkey: 'purchased_at'
+    ykeys: ['price', 'shipping_price', 'download_price']
+    labels: ['Total Price', 'Shipping Price', 'Download Price']
+    preUnits: '$'
+```    
+
+<p>When we reload the page now the currency symbols are shown. There are many more options that we can pass into Morris and the site has details about these.</p>
+
+<p>Morris is an impressive library for adding graphs to a website but because of its simplicity it won&rsquo;t fit every need. There are alternatives that are worth considering and one of these is <a href="http://code.shutterstock.com/rickshaw/">Rickshaw</a>. This is a powerful library for making graphs and offers a lot of flexibility in how the graphs are presented. It&rsquo;s simple to use but can require more code to create a simple timeline graph than Morris.</p>  
+
+<p>Another option is called <a href="http://www.highcharts.com/">Highcharts</a>. Thas is very polished and fual-featured and allows us to create some beautiful graphs. It&rsquo;s biggest downside is that it isn&rsquo;t free for commercial use and this needs to be taken into consideration when comparing it with the other options.</p>

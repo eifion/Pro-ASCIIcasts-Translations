@@ -1,0 +1,259 @@
+<p>There may be times when we need to make an announcement to all the users of our application by displaying a message at the top of every page. For example we might want to take our site down for scheduled maintenance and warn all users in advance no matter what page they&rsquo;re currently on. Once a user has read this message they should be able to hide it, and it should then stay hidden even if they move to another page or even if they leave the application and then come back to it.</p>
+
+<p>As this is a relatively simple change we&rsquo;ll implement it through test-driven development. We already have the testing environment set up for this app; we&rsquo;re using RSpec and Capybara, like we did in <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a>, and PhantomJS and Poltergeist to test JavaScript which we demonstrated in <a href="http://railscasts.com/episodes/391-testing-javascript-with-phantomjs">episode 391</a>.</p>
+
+<h3>Our First Specs</h3>
+
+<p>We&rsquo;ll start with a request spec and run the integration test generator to create one. </p>
+
+``` terminal
+$ rails g integration_test announcement
+```
+
+<p>We&rsquo;ll replace the default test in this spec with the following code. In this spec we create an Announcement with a message and start and end times. We then visit the home page and check that the announcement&rsquo;s message is visible on the page.</p>
+
+``` /spec/requests/announcements_spec.rb
+require 'spec_helper'
+
+describe "Announcements" do
+  it "displays active announcements" do
+    Announcement.create! message: "Hello World", starts_at: 1.hour.ago, ends_at: 1.hour.from_now
+    visit root_path
+    page.should have_content "Hello World"
+  end
+end
+```
+
+<p>This test fails when we run it as our app doesn&rsquo;t have an <code>Application</code> model. We&rsquo;ll generate one now with the fields we use in our test then migrate the database.</p>
+
+``` terminal
+$ rails g model announcement message:text starts_at:datetime ends_at:datetime
+$ rake db:migrate
+```
+
+<p>When we run the spec now it still fails but this time because the text &ldquo;Hello World&rdquo; isn&rsquo;t on the home page. We need to add our announcement to the page and we&rsquo;ll do this in the application layout file so that it shows on every page. For now we&rsquo;ll loop through all the announcements and use <code>div_for</code> to display each one in a <code>div</code>.</p>
+
+``` /app/views/layouts/application.html.erb
+<body>
+  <% Announcement.all.each do |announcement| %>
+    <%= div_for announcement do %>
+      <%= announcement.message %>
+    <% end %>
+  <% end %>
+  <!-- Rest of body omitted -->
+</body>
+```
+
+<p>Our test now passes. We don&rsquo;t want announcements whose start time is later or whose end time is earlier than the current time to be displayed so we&rsquo;ll add a test for this.</p>
+
+``` /spec/requests/announcements_spec.rb
+require 'spec_helper'
+
+describe "Announcements" do
+  it "displays active announcements" do
+    Announcement.create! message: "Hello World", starts_at: 1.hour.ago, ends_at: 1.hour.from_now
+    Announcement.create! message: "Upcoming", starts_at: 10.minutes.from_now, ends_at: 1.hour.from_now
+    visit root_path
+    page.should have_content "Hello World"
+    page.should_not have_content "Upcoming"
+  end
+end
+```
+
+<p>This test fails as we currently display all of the announcements. We could add some where conditions in the view layer to get only the current announcements but instead we&rsquo;ll create a scope called <code>current</code> in the <code>Announcement</code> model and call that in the view instead.</p>
+
+``` /app/views/layouts/application.html.erb
+<% Announcement.current.each do |announcement| %>
+  <%= div_for announcement do %>
+    <%= announcement.message %>
+  <% end %>
+<% end %>
+```
+
+<p>Before we implement this method we&rsquo;ll add some lower-level tests for it.</p>
+
+``` /spec/models/announcement_spec.rb
+require 'spec_helper'
+
+describe Announcement do
+  it "has current scope", focus: true do
+    past = Announcement.create! starts_at: 1.day.ago, ends_at: 1.hour.ago
+    current = Announcement.create! starts_at: 1.hour.ago, ends_at: 1.day.from_now
+    upcoming = Announcement.create! starts_at: 1.hour.from_now, ends_at: 1.day.from_now
+    Announcement.current.should eq([current])
+  end
+end
+```
+
+<p>This test creates three announcements, only one of which falls within the current time and only this one should appear in our current scope. Note that we&rsquo;re using the <code>focus</code> tag here so that we can focus on getting this test passing before we worry about our failing higher-level tests. The <code>focus</code> setting is configured in the spec helper file so it will run the focussed tests first. When we run it it fails, as we expect, as we don&rsquo;t have a current scope so we&rsquo;ll add one to <code>Announcement</code>.</p>
+
+``` /app/models/annoucement.rb
+class Announcement < ActiveRecord::Base
+  attr_accessible :ends_at, :message, :starts_at
+  scope :current, -> { where("starts_at <= :now and ends_at >= :now", now: Time.zone.now) }
+end
+```
+
+<p>Here we&rsquo;re using the Ruby 1.9 lambda syntax to add a where condition to fetch the announcements whose starts_at is less than or equal to the current time and whose ends_at is later than or equal to it. When we run our focussed test now it passes. This means that we can remove our focus tag from the test so that we can run them all. When we do the higher-level tests all pass too.</p>
+
+<h3>Hiding an Announcement</h3>
+
+<p>We want the user to be able to hide an announcement so we&rsquo;ll write a test for this. We&rsquo;ll expand our existing spec to do this but we could consider moving it into a separate one.</p>
+
+``` /spec/requests/announcements_spec.rb
+it "displays active announcements" do
+  Announcement.create! message: "Hello World", starts_at: 1.hour.ago, ends_at: 1.hour.from_now
+  Announcement.create! message: "Upcoming", starts_at: 10.minutes.from_now, ends_at: 1.hour.from_now
+  visit root_path
+  page.should have_content "Hello World"
+  page.should_not have_content "Upcoming"
+  click_on "hide announcement"
+  page.should_not have_content "Hello World"
+end
+```
+
+<p>At the end of our existing spec we now click on an &ldquo;hide announcement&rdquo; link then check to see that the page no longer has the text &ldquo;Hello World&rdquo;. Needless to say this fails as that link doesn&rsquo;t exist on the page. We&rsquo;ll add one now.</p>
+
+``` /app/views/layouts/application.html.erb
+<% Announcement.current.each do |announcement| %>
+  <%= div_for announcement do %>
+    <%= announcement.message %>
+    <%= link_to "hide announcement", hide_announcement_path(announcement) %>
+  <% end %>
+<% end %>
+```
+
+<p>We&rsquo;ve pointed this link to <code>hide_announcement_path</code> which doesn&rsquo;t exist yet. We&rsquo;ll modify our routes file to add this path and point it to a hide action on the <code>AnnouncementsController</code> which we&rsquo;ll need to create.</p>
+
+``` /config/routes.rb
+Blog::Application.routes.draw do
+  resources :articles
+  root to: 'articles#index'
+  match 'announcements/:id/hide', to: 'announcements#hide', as: 'hide_announcement'
+end
+```
+
+<p>Now we&rsquo;ll generate this new controller.</p>
+
+``` terminal
+$ rails g controller announcements
+```
+
+<p>We can now define the <code>hide</code> action. We need to store the announcements that the user has hidden. While we could do this in the session the values won&rsquo;t persist if the user closes their browser so we&rsquo;ll store them in a permanent cookie. We want to store an array of ids and to have the serialization happen automatically so we&rsquo;ll make it a signed cookie so that we can store an array of values inside it.</p> 
+
+``` /app/controllers/announcements_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  def hide
+    ids = [params[:id], *cookies.signed[:hidden_announcement_ids]]
+    cookies.permanent.signed[:hidden_announcement_ids] = ids
+    redirect_to :back
+  end
+end
+```
+
+<p>Here we fetch the <code>id</code> that&rsquo;s passed in from the parameters and merge it with the ids that are already stored in the cookie and  then write the combined array back. We then redirect back to the page the user was previously on.</p>
+
+<p>When we run our tests now they fail but again that&rsquo;s what we expect as the announcements selected as hidden are still shown. We&rsquo;ll need to change the layout file as it&rsquo;s displaying all the current announcements. What we&rsquo;ll do is pass in the announcements that we want to skip into the <code>current</code> scope, although we could make a separate method or create a helper method to clean up the view code here.</p>
+
+``` /app/views/layouts/application.html.erb
+<% Announcement.current(cookies.signed[:hidden_announcement_ids]).each do |announcement| %>
+  <%= div_for announcement do %>
+    <%= announcement.message %>
+    <%= link_to "hide announcement", hide_announcement_path(announcement) %>
+  <% end %>
+<% end %>
+```
+
+<p>Before we change current we&rsquo;ll write some tests for the new functionality. </p>
+
+``` /spec/announcement_spec.rb
+it "does not include ids passed in to current" do
+  current1 = Announcement.create! starts_at: 1.hour.ago, ends_at: 1.day.from_now
+  current2 = Announcement.create! starts_at: 1.hour.ago, ends_at: 1.day.from_now
+  Announcement.current([current2.id]).should eq([current1])
+end
+  
+it "includes current when nil is passed in" do
+  current = Announcement.create! starts_at: 1.hour.ago, ends_at: 1.day.from_now
+  Announcement.current(nil).should eq([current])
+end
+```
+
+<p>The first test here checks that a current announcement passed to current is excluded from the output while the second tests that if no announcements are passed to it then all the current announcements are returned. In the <code>Announcement</code> model we&rsquo;ll replace the <code>current</code> scope with a class method with the same name.</p> 
+
+``` /app/models/annoucement.rb
+class Announcement < ActiveRecord::Base
+  attr_accessible :ends_at, :message, :starts_at
+  
+  def self.current(hidden_ids = nil)
+    result = where("starts_at <= :now and ends_at >= :now", now: Time.zone.now)
+    result = result.where("id not in (?)", hidden_ids) if hidden_ids.present?
+    result
+  end
+end
+```
+
+<p>This fetches the same announcements as before and also excludes those with the ids that we pass in. When we run our tests now they all pass and our feature is pretty much complete so let&rsquo;s try it out in the browser. First we&rsquo;ll need to create an <code>Announcement</code> record, which we&rsquo;ll do in the console. Obviously in a production application we&rsquo;d want to create an admin interface to handle announcements.</p>
+
+``` console
+>> Announcement.create! message: "The site will be down for maintenance tonight between 10:00 and 11:00 PM GMT", starts_at: Time.zone.now, ends_at: 1.day.from_now
+```
+
+<p>When we reload the page in the browser now the message appears. We&rsquo;ve already added some CSS and so it looks good at the top of the page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1410/original/E103RI01.png" width="800" height="354" alt="An announcement showing at the top of the page."/>
+</div>
+
+<h3>Hiding Announcements With JavaScript</h3>
+
+<p>We can now visit any page in our application and the current messagees will be shown until we click &ldquo;hide announcement&rdquo; for one of them at which point it will disappear and isn&rsquo;t shown again for us. Clicking the link reloads the page but it would be better if the announcement was hidden with JavaScript instead. We&rsquo;ll add this functionality, starting by creating a request spec for it.</p>
+
+``` /spec/requests/announcements_spec.rb
+it "displays active announcements", js: true do
+  Announcement.create! message: "Hello World", starts_at: 1.hour.ago, ends_at: 1.hour.from_now
+  visit root_path
+  page.should have_content "Hello World"
+  click_on "hide announcement"
+  page.should_not have_content "Hello World"
+end
+```
+
+<p>This spec is similar to our other request spec. Note that we have the <code>js: true</code> option set so that it uses PhantomJS with Poltergeist which we already have set up in our application. When we run this spec it passes as we&rsquo;ve already implemented this functionality, although it currently works without using JavaScript. While we want our application to degrade gracefully but how do we write a test that checks that the JavaScript is working correctly? We need to start with a failing test and we can do that by changing our spec to look like this:</p>
+
+``` /spec/requests/announcements_spec.rb
+it "displays active announcements with JavaScript", js: true do
+  Announcement.create! message: "Hello World", starts_at: 1.hour.ago, ends_at: 1.hour.from_now
+  visit root_path
+  page.should have_content "Hello World"
+  expect { click_on "hide announcement" }.to_not change { page.response_headers }
+  page.should_not have_content "Hello World"
+end
+```
+
+<p>This time we get a failure because the page&rsquo;s response headers change as we visit a new page when we click the link. We now have a failing test so let&rsquo;s work on getting it fixed. All we need to do is add the remote option to the link and set it to <code>true</code>.</p> 
+
+``` /app/views/layouts/application.html.erb
+<%= link_to "hide announcement", hide_announcement_path(announcement), remote: true %>
+```
+
+<p>In the <code>AnnouncementController</code>&rsquo;s <code>hide</code> action we&rsquo;ll change the redirect behaviour so that it only happens on an HTML request.</p>
+
+``` /app/controllers/announcements_controller.rb
+def hide
+  ids = [params[:id], *cookies.signed[:hidden_announcement_ids]]
+  cookies.permanent.signed[:hidden_announcement_ids] = ids
+  respond_to do |format|
+    format.html { redirect_to :back }
+    format.js
+  end
+end
+```
+
+<p>For JavaScript requests to this action we&rsquo;ll create a view that will return the JavaScript necessary to hide the announcement.</p>
+``` /app/views/announcements/hide.js.erb
+$('#announcement_<%= j params[:id] %>').remove();
+```
+
+<p>Our JavaScript test now passes and if we try hiding an announcement in the browser it&rsquo;s hidden without the page reloading.</p>

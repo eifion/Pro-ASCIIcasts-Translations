@@ -1,0 +1,186 @@
+<p>Below is a page from a Rails application that handles adding an order. The first field on the form accepts a credit card number and if we enter an invalid number in to it we&rsquo;ll see an error message as there&rsquo;s some JavaScript on that page that performs a mod 10 check to validate the number when the field loses the focus. If we enter a valid number into the field the error message disappears when we shift the focus.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1408/original/E391I01.png" width="800" height="426" alt="Our application&rsquo;s orders page."/>
+</div>
+
+<p>The JavaScript that performs this check is a little complicated so it&rsquo;s a good idea to test it at a lower level like we showed in <a href="http://railscasts.com/episodes/261-testing-javascript-with-jasmine">episode 261</a>. That we should also add some high-level tests to test that the code fits in properly with the rest of the application.</p> 
+
+``` /app/assets/javascripts/credit_card.js.coffee
+class @CreditCard
+  constructor: (number) -&gt;
+    @number = number.replace(/[ -]/g, &#x27;&#x27;)
+  
+  validNumber: -&gt;
+    total = 0
+    for i in [(@number.length-1)..0]
+      n = +@number[i]
+      if (i+@number.length) % 2 == 0
+        n = if n*2 &gt; 9 then n*2 - 9 else n*2
+      total += n
+    total % 10 == 0
+
+
+$.fn.validateCreditCardNumber = -&gt;
+  @each -&gt;
+    $(this).blur -&gt;
+      card = new CreditCard(@value)
+      if !card.validNumber()
+        $(this).next(&#x27;.error&#x27;).text(&quot;Invalid card number.&quot;)
+      else
+        $(this).next(&#x27;.error&#x27;).text(&quot;&quot;)
+```        
+
+<p>We&rsquo;ll add a request spec to ensure that this code is well integrated. We already have RSpec and Capybara set up in our gemfile and an empty request spec where we&rsquo;ll write the test for validating a credit card number. If you&rsquo;re unfamiliar with request specs take a look at <a href="http://railscasts.com/episodes/257-request-specs-and-capybara">episode 257</a> which covers this topic. Our first test will visit the &ldquo;new order&rdquo; page, fill in the credit card number field with an invalid number then check that the page has the content &ldquo;Invalid card number&rdquo;.</p>
+
+``` /spec/requests/orders_spec.rb
+require 'spec_helper'
+
+describe "Orders" do
+  it "validates card number" do
+    visit new_order_path
+    fill_in "Credit Card Number", with: "1234"
+    page.should have_content("Invalid card number")
+  end
+end
+```
+
+<p>When we run this spec it fails. At this point we&rsquo;d usually do some test-driven development to implement this functionality but in this case the implementation has already been done so the test should pass. The reason this spec is failing is that request specs don&rsquo;t execute JavaScript by default and we&rsquo;ll need to change this for it to pass. Capybara integrates nicely with JavaScript so all we have to do is add a <code>js: true</code> option to the spec.</p>
+
+``` /spec/requests/orders_spec.rb
+it "validates card number", js: true do
+  visit new_order_path
+  fill_in "Credit Card Number", with: "1234"
+  page.should have_content("Invalid card number")
+end
+```
+
+<h3>Using PhantomJS</h3>
+
+<p>When this test runs now it will execute the JavaScript using Selenium which will start up Firefox and fill in the credit card field on the form. The test still fails, however, and this is because the validation is triggered by the <code>blur</code> event on the text field and the Selenium driver doesn&rsquo;t fire this event when it fills it in. There are workarounds to get this working but instead we&rsquo;ll use a different JavaScript driver for Capybara. Selenium is a little slow and needs to use Firefox so we&rsquo;ll replace this with <a href="http://phantomjs.org/">PhantomJS</a>. This runs a headless version of WebKit and will allow us to test our application&rsquo;s JavaScript without opening a browser window. PhantomJS can be used for a number of other things too but in this episode we&rsquo;ll just be using it for automated testing. We can download PhantomJS from its website or, if we&rsquo;re running Mac OS X install it with Homebrew by running this command.</p>
+
+``` terminal
+$ brew install phantomjs
+```
+
+<p>After we&rsquo;ve installed PhantomJS we&rsquo;ll have access to a <code>phantomjs</code> command. If we run this command without passing any arguments to it it opens up an interactive console. Using this can be a little cumbersome so we&rsquo;ll write a script for it to run instead. We can use JavaScript for CoffeeScript for this file so we&rsquo;ll use CoffeeScript.</p> 
+
+``` try_phantom.coffee
+page = require('webpage').create()
+page.open 'http://localhost:3000', (status) -> 
+  console.log "Status: #{status}"
+  phantom.exit()
+```  
+  
+<p>It&rsquo;s common when using PhantomJS to call <code>require(&#x27;webpage&#x27;).create()</code> to return a new page object and we do that here and assign the result to a variable. We then call open on this and pass it a URL. When the page has loaded it triggers a callback function that takes a <code>status</code> argument and for now we&rsquo;ll just print this value to the console and then exit from script. To run the script we pass the file to the <code>phantomjs</code> command. When we do it visits our Rails application in the background and returns <code>success</code> as we expect.</p>
+
+``` terminal
+$ phantomjs try_phantom.coffee 
+Status: success
+```
+
+<p>The real power comes in executing the page&rsquo;s JavaScript which we can do by calling <code>page.evaluate</code> and passing in a function. The code in the function will be executed in context of the page that we&rsquo;re currently on. As an example we&rsquo;ll use this to print out the page&rsquo;s title.</p>
+
+``` try_phantom.coffee
+page = require('webpage').create()
+page.open 'http://localhost:3000', (status) -> 
+  title = page.evaluate -> document.title
+  console.log "Title: #{title}"
+  phantom.exit()
+```  
+
+<p>When we run this script we&rsquo;ll see the title of our application&rsquo;s home page.</p>
+
+``` terminal
+$ phantomjs try_phantom.coffee 
+Title: Orders
+```
+
+<h3>Using Poltergeist</h3>
+
+<p>There&rsquo;s a lot more we can do when using PhantomJS directly and the <a href="https://github.com/ariya/phantomjs/wiki/API-Reference">API Reference</a> has more details. To use it as a driver for Capybara we can use the <a href="https://github.com/jonleighton/poltergeist">Poltergeist gem</a> which does just what we need. Setting it up is straightforward: we just add it to the test group in the gemfile then run <code>bundle</code> to install it.</p>
+ 
+``` /Gemfile
+gem 'rspec-rails', group: [:test, :development]
+group :test do
+  gem 'capybara'
+  gem 'launchy'
+  gem 'poltergeist'
+end
+```
+
+<p>As we&rsquo;re using RSpec we&rsquo;ll modify the spec helper file next and add these two lines below the other <code>require</code> statements.</p>
+
+``` /spec/spec_helper.rb
+require 'capybara/poltergeist'
+Capybara.javascript_driver = :poltergeist
+```
+
+<p>When we run our specs again now they&rsquo;re run in the background without a browser window showing and this time they pass. It seems that Poltergeist does trigger the <code>blur</code> event when it fills in the field.</p>
+
+<p>We now have a convenient way to ensure that our JavaScript behaviour is well integrated with our Rails application. We wouldn&rsquo;t use this to test any complex logic  or edge cases, for that we&rsquo;d be better off using Jasmine or something else that works at a lower level.</p>
+
+<h3>Another Test</h3>
+
+<p>What if we want to try testing something a little more difficult? We have a page that shows a list of orders which uses endless pagination like we used in <a href="http://railscasts.com/episodes/114-endless-page-revised">episode 114</a>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1409/original/E391I02.png" width="800" height="402" alt="The page that shows a list of orders."/>
+</div>
+
+<p>When we scroll to the bottom of the page the text &ldquo;Fetching more orders...&rdquo; appears until the next page of results is fetched from the server via an AJAX request. We&rsquo;ll use PhantomJS to test this behaviour by adding another test to our orders spec.</p>
+
+``` /spec/requests/orders_spec.rb
+it "fetches more orders when scrolling to the bottom", js: true do
+  11.times { |n| Order.create! number: n+1 }
+  visit orders_path
+  page.should have_content('Order #1')
+end
+```
+
+<p>Our orders page displays ten items per page by default so we first create eleven orders in this test and give each one a number from 1 to 10. We then visit the orders page and check that the text &ldquo;Order #1&rdquo; appears there. When we run this test it fails and the error message suggests that the page doesn&rsquo;t contain any of our orders. The issue here is that each test is run in a separate database transaction. If we look in the spec helper file we&rsquo;ll see that there&rsquo;s a <code>use_transactional_fixtures</code> setting set to <code>true</code>. This doesn&rsquo;t work with PhantomJS because this runs in a separate process which uses a separate database connection and so won&rsquo;t use the same data as the test suite.</p>
+
+<p>To get around this we could set this value to <code>false</code> and clear the database in a different way such as using the Database Cleaner gem like we did in episode 257. An alternative solution is presented by Jos&eacute; Valim on the <a href="http://blog.plataformatec.com.br/2011/12/three-tips-to-improve-the-performance-of-your-test-suite/">Plataformatec blog</a>. There he demonstrates some code to share the database connection across processes which means that PhantomJS will the same database records as our tests. This means that we can continue to use transactions for each test which will make the test suite run more quickly. We&rsquo;ll add this code to a new file in the <code>/spec/support</code> directory.</p>
+
+``` /spec/support/share_db_connection.rb
+class ActiveRecord::Base
+  mattr_accessor :shared_connection
+  @@shared_connection = nil
+ 
+  def self.connection
+    @@shared_connection || retrieve_connection
+  end
+end
+ 
+# Forces all threads to share the same connection. This works on
+# Capybara because it starts the web server in a thread.
+ActiveRecord::Base.shared_connection = ActiveRecord::Base.connection
+```
+
+<p>When we run our specs now they both pass as PhantomJS can see the database records. Next we&rsquo;ll expand on our last test, adding a check to see that the eleventh order isn&rsquo;t displayed on the page as it should only show the first ten when the page first loads. We then use <code>evaluate_script</code> to run some JavaScript that will scroll to the bottom of the page and then check that the eleventh order is then shown.</p>
+
+``` /spec/requests/orders_spec.rb
+it "fetches more orders when scrolling to the bottom", js: true do
+  11.times { |n| Order.create! number: n+1 }
+  visit orders_path
+  page.should have_content('Order #1')
+  page.should_not have_content('Order #11')
+  page.evaluate_script("window.scrollTo(0, document.height)")
+  page.should_not have_content('Order #11')    
+end
+```
+
+<p>When we run our specs now they still both pass so it appears that our endless scrolling behaviour is working. That said it&rsquo;s not the best situation when tests stay green after they&rsquo;ve been modified. We want to be sure that the scrolling is being tested correctly so we&rsquo;ll comment out the code that fetches the next page of orders when we scroll to the bottom of the page. When we do this we get a failing spec so we can uncomment the code again knowing that it&rsquo;s being tested correctly.</p>
+
+<h3>Speeding Up The Test Suite</h3>
+
+<p>Running these JavaScript specs can be a little slow so we could consider not running them every time we run our test suite. We can skip the JavaScript specs and run the others by running this command.</p>
+
+``` terminal
+$ rspec . --tag '~js'
+Run options: exclude {:js=>true}
+```
+
+<p>This won&rsquo;t run any specs for our application as all the specs we have are JavaScript specs but it&rsquo;s a useful tip, especially for application with large test suites.</p>
+
+<p>Poltergeist isn&rsquo;t the only way to run PhantomJS. There are a number of other projects available depending on which test framework we&rsquo;re using. A list of these can be found <a href="https://github.com/ariya/phantomjs/wiki/Headless-Testing">here</a>.</p>

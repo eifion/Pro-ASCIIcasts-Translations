@@ -1,0 +1,159 @@
+<p>Below is a screenshot from an application called You Haiku which allows users to enter Haikus and share them with others. When we add a Haiku it will be displayed at the top of the list along with the time that at which it was added.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1399/original/E106RI01.png" width="800" height="500" alt=""/>
+</div>
+
+<p>We&rsquo;ve just added a new Haiku and it looks correct except for the time at which it was added: it&rsquo;s currently 8:11pm in our timezone, not 7:11pm. By default Rails sets all times to UTC which is why the time shown doesn&rsquo;t match our local time. If we look at the app&rsquo;s configuration file we&rsquo;ll see a commented-out option for setting the time zone and without this set the time zone will default to UTC. We can see a list of the time zones that we can set by running <code>rake time:zones:all</code>. This returns a long list of time zones divided up in to their UTC offsets. We can also run <code>rake time:zones:local</code> to see the time zones that match our machine&rsquo;s UTC offset.</p>
+
+``` terminal
+$ rake time:zones:local
+
+* UTC +01:00 *
+Amsterdam
+Belgrade
+Berlin
+Bern
+Bratislava
+Brussels
+Budapest
+Copenhagen
+Ljubljana
+Madrid
+Paris
+Prague
+Rome
+Sarajevo
+Skopje
+Stockholm
+Vienna
+Warsaw
+West Central Africa
+Zagreb
+```
+
+<p>It&rsquo;s a good idea to use a time zone that matches the one where most of our app&rsquo;s users are located so we&rsquo;ll use North American Central Time here, even though that&rsquo;s not where we&rsquo;re located. In development it&rsquo;s a good idea to use a time zone different from the one on our local machine so that we can more easily detect time zone issues.</p>
+
+``` /config/application.rb
+config.time_zone = 'Central Time (US & Canada)'
+```
+
+<h3>Allowing Users to Set Their Time Zone</h3>
+
+<p>When we restart our server now then reload the page the times are shown in this time zone but this might not match each user&rsquo;s time zone so we&rsquo;ll give them a way to set their preferred time zone. We already have some user authentication in place in our app and we have an &ldquo;edit profile&rdquo; page where we can change our name and password when we&rsquo;re signed in. We&rsquo;ll add the ability to associate a time zone with each account as well. To do this we&rsquo;ll start by creating a migration to add a time zone field to the <code>users</code> table then migrate the database.</p>
+
+``` terminal
+$ rails g migration add_time_zone_to_users time_zone
+$ rake db:migrate
+```
+
+<p>We&rsquo;ll need to add this new field to the list in <code>attr_accessible</code> in the <code>User</code> model so that it can be set through mass-assignment.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_secure_password
+
+  attr_accessible :name, :password, :password_confirmation, :time_zone
+
+  validates_uniqueness_of :name
+  validates_inclusion_of :time_zone, in: ActiveSupport::TimeZone.zones_map(&:name)
+
+  has_many :haikus
+end
+```
+
+<p>We&rsquo;ve also added a validator to ensure that any time zone added is included in Rails&rsquo; list of valid time zones. Next we&rsquo;ll add a new field to the form for a user&rsquo;s profile. Rails provides a helper method called <code>time_zone_select</code> that will provide a select menu of all the valid time zones so we&rsquo;ll use it here.</p>
+
+``` /app/views/users/_form.html.erb
+<div class="field">
+  <%= f.label :time_zone %><br />
+  <%= f.time_zone_select :time_zone %>
+</div>
+```
+
+<p>If most of our customers are in a specific region we might want to prioritize this time zone at the top of the menu and we can do this by adding a second argument to <code>time_zone_select</code>. For example if most of the users will be in the USA we can move the US zones to the top of the list like this.</p>
+
+``` /app/views/users/_form.html.erb
+<div class="field">
+  <%= f.label :time_zone %><br />
+  <%= f.time_zone_select :time_zone, ActiveSupport::TimeZone.us_zones %>
+</div>
+```
+
+<p>When we reload the page now the US time zones will appear at the top of the list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1400/original/E106RI02.png" width="800" height="500" alt="The user can now set their time zone on their profile page."/>
+</div>
+
+<p>Even when we change our profile&rsquo;s time zone the Haiku&rsquo;s times are still displayed for the Central Time Zone. We need to apply the user&rsquo;s preferred time zone to these times and a good way to do this is with a filter in the <code>ApplicationController</code> so that it&rsquo;s applied to every action. We&rsquo;ll use an <code>around_filter</code> here.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  
+  around_filter :user_time_zone, if: :current_user
+
+private
+
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+  
+  def user_time_zone(&block)
+    Time.use_zone(current_user.time_zone, &block)
+  end
+end
+```
+
+<p>In the <code>user_time_zone</code> method here we use the <code>use_zone</code> method on the Time class which is a method that ActiveSupport adds and we pass this the current user&rsquo;s time zone. This method expects a block to be passed to it and sets the time zone for the duration of that block. We can pass in the block that&rsquo;s used by the around filter so that the original time zone is set back when the request completes. If we used a <code>before_filter</code> here instead the time zone would leak through to other requests so it&rsquo;s necessary to use an around filter instead. When we reload the page now the Haiku&rsquo;s times are correctly set to the right time zone.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1401/original/E106RI03.png" width="800" height="500" alt="The Haiku&rsquo;s time is now shown in their preferred time zone."/>
+</div>
+
+<h3>Common Problems</h3>
+
+<p>Rails makes working with time zones pretty easy but it&rsquo;s a good idea to understand how it works so that we can avoid unexpected problems. We&rsquo;ll show some of these in the Rails console. First we&rsquo;ll fetch the last Haiku and look at its <code>published_at</code> attribute.</p>
+
+``` console
+>> h = Haiku.last
+>> h.published_at
+=> Thu, 15 Nov 2012 13:11:15 CST -06:00
+```
+
+<p>This time looks correct but it isn&rsquo;t the time that&rsquo;s stored in the database. We can check that stored time by called <code>published_at_before_type_cast</code>.</p>
+
+``` console
+>> h.published_at_before_type_cast
+=> "2012-11-15 19:11:15.517923"
+```
+
+<p>This value is actually the UTC time which means that behind the scenes Rails is converting to UTC when ever it writes to or reads from the database. This is good as it means that our data is stored in a consistent time zone.</p>
+
+<p>Let&rsquo;s say that we want to fetch the current time. A common way to do this is to call <code>Time.now</code> which returns the time of the current system based on its time zone. If we want to get the time in the zone of the Rails application we should call <code>Time.zone</code>.now to return the time in the time zone set in the configuration file. </p>
+
+``` console
+>> Time.now
+=> 2012-11-15 23:18:22 +0100
+>> Time.zone.now
+=> Thu, 15 Nov 2012 16:18:23 CST -06:00
+```
+
+<p>The output from these two commands looks different and this is because the methods return instances of  different classes. One is a <code>Time</code> class and the other is <code>ActiveSupport::TimeWithZone</code>. This works in a similar way to <code>Time</code> but has added support for different time zones. One way to convert from one to the other is to call <code>in_time_zone</code> on a <code>Time</code> object which will return a <code>TimeWithZone</code> object.</p> 
+
+<p>Another thing we need to watch out for is dates. Calling <code>Date.today</code> will use the local system&rsquo;s time zone which is probably not what we want. To use the Rails-configured time zone we can call <code>Date.current</code>.</p>
+
+``` console
+>> Date.today
+=> Thu, 15 Nov 2012
+>> Date.current
+=> Thu, 15 Nov 2012
+```
+
+<p>These return the same date here but they could differ if we were in a different time zone. It&rsquo;s easy to mix these up so we should always go through <code>Time.zone.now</code> then convert it to date if that&rsquo;s what we need. In short, if we want to avoid time zone headaches in a Rails application we should always go through <code>Time.zone</code>. Most of the <code>Time</code> class&rsquo;s methods are supported here so that we can use, say, <code>parse</code> to parse a string into a date. This returns a date time in the Rails application&rsquo;s time zone and even handle daylight-savings time correctly too. In addition to <code>Time.zone</code> we can also use the convenience methods that ActiveSupport gives us such as <code>weeks.ago</code> and these will use the correct time zone.</p>
+
+<p>If we want some help to detect time zone issues in our Rails applications we can use the <a href="https://github.com/highgroove/zonebie">Zonebie gem</a>. This can set the time zone to a random one each time we run our tests. <a href="https://github.com/travisjeffery/timecop">Timecop</a> is another gem that can be useful when we work with times in our test suite. <a href="http://railscasts.com/episodes/276-testing-time-web-requests">Episode 276</a> has more information on this.</p> 
+
+<p>There are better ways to present time zones than what we&rsquo;ve done here. One option is to use relative times so that we can show, say, &ldquo;5 minutes ago&rdquo; instead of the exact time. We could also use JavaScript to detect the user&rsquo;s time zone so that we don&rsquo;t have to submit it through the form.</p>

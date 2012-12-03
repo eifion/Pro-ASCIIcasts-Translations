@@ -1,0 +1,439 @@
+<p>In this episode we&rsquo;ll continue from where we left off last time where we added authorization to an application from scratch. We&rsquo;ve been using a forum application to do this and we&rsquo;re now at a stage where users can only access certain parts of the application if they&rsquo;re logged in and only have full access if they&rsquo;re logged in as an admin. For example non-admin users can edit topics but not delete them.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1389/original/E386I01.png" width="800" height="550" alt="Our forum application."/>
+</div>
+
+<p>This is accomplished though an <code>allow?</code> method on a <code>Permission</code> class. The controller and view layers delegate to this method so that all authorization logic is contained in one place. This approach allows us to test this behaviour easily at a low level so that authorization doesn&rsquo;t need to be tested with high-level request specs.</p>
+
+<h3>Improving The Permission Class</h3>
+
+<p>The first thing we&rsquo;ll do in this episode is refactor the <code>Permission</code> class so that we can have a type of DSL to define the permissions instead of the <code>return</code> statements that we currently have.</p> 
+
+``` /app/models/permission.rb
+class Permission < Struct.new(:user)
+  def allow?(controller, action)
+    return true if controller == "sessions"
+    return true if controller == "users" && action.in?(%w[new create])
+    return true if controller == "topics" && action.in?(%w[index show])
+    if user
+      return true if controller == "users" && action.in?(%w[edit update])
+      return true if controller == "topics" && action != "destroy"
+      return true if user.admin?
+    end
+    false
+  end
+end
+```
+
+<p>Instead of inheriting from a struct we&rsquo;ll give the class an initializer that takes a User model. In it we&rsquo;ll use an <code>allow</code> method that takes a controller and an array of actions.</p>
+
+``` /app/models/permission.rb
+class Permission
+
+  def initialize(user)
+    allow :users, [:new, :create]
+    allow :sessions, [:new, :create, :destroy]
+    allow :topics, [:index, :show]
+    if user
+      allow :users, [:edit, :update]
+      allow :topics, [:new, :create, :edit, :update]
+      allow_all if user.admin?
+    end
+  end
+end
+```
+
+<p>This code does something similar to what the return statements do, but it&rsquo;s a little cleaner and allows us the flexibility of using symbols or strings. Note that we&rsquo;re using an <code>allow_all</code> method to give admin users access to everything. We need to define these two methods and change the behaviour of the <code>allow?</code> query method. We&rsquo;ll start by defining <code>allow_all</code> which will set an instance variable that we can check at a later point. The allow method will be a little trickier as it takes one or more controller names and action names. A quick way to handle this is to wrap the arguments in a call to <code>Array</code>. This will make a single item into an array with one element but return an array that is passed in unchanged. We then loop through each controller and action and store this information in an instance variable so that we can use it later. We&rsquo;ll store this data in a hash with an array for a key as a quick way to do a lookup of multiple items. We can pass in either strings or symbols as controller or action names and we need to standardize on either one or the other to make it easier to look them up. We&rsquo;ll use strings as using symbols can introduce memory leaks if the content is dynamic.</p>
+
+``` /app/models/permission.rb
+def allow_all
+  @allow_all = true
+end
+  
+def allow(controllers, actions)
+  @allowed_actions ||= {}
+  Array(controllers).each do |controller|
+    Array(actions).each do |action|
+      @allowed_actions[[controller.to_s, action.to_s]] = true
+    end
+  end
+end
+```
+
+<p>The last step here is to implement the <code>allow?</code> method which will check if <code>@allow_all</code> is set to true or if the <code>@allowed_actions</code> hash has a value of true for the key with the controller and action that&rsquo;s passed in. We should also check that these instance variables are defined before checking their values to reduce the chance of warnings but we don&rsquo;t do that here.</p>
+
+``` /app/models/permission.rb
+def allow?(controller, action)
+  @allow_all || @allowed_actions[[controller.to_s, action.to_s]]
+end
+```
+
+<p>When we run our tests now they all pass so our refactoring of the <code>Permission</code> class has worked. That said the class is more complex than it was before and it&rsquo;s up to us to decide whether this extra complexity is worth it in the long run to have a nicer way to set the permissions. For applications with complex permission requirements it probably is.</p>
+
+<p>We might not want to go in this direction if we want to move the permission definitions elsewhere, such as the database. In this case the <code>allow?</code> method could check the database each time to see if the given user has permission to perform a specific action. Whatever the case having this <code>Permission</code> class as a central hub of the authorization allows us to easily change how it all works without affecting the rest of the application.</p> 
+
+<h3>Restricting Access to Certain Items</h3>
+
+<p>Let&rsquo;s move on now to adding some more features to our authorization. Users can currently edit any topic but we only want them to be able to edit a topic that they&rsquo;ve created themselves. How do we add that restriction? We aren&rsquo;t currently passing in enough information to perform this authorization check. We&rsquo;re passing in a controller and action but we also need to pass in the resource record so that we can perform authorization based on various attributes of it. We could pass this resource in as an optional third argument.</p>
+
+<p>Let&rsquo;s test-drive this behaviour. In our <code>Permission</code> spec we&rsquo;ll alter the tests for a non-admin user. We&rsquo;ll move the <code>User</code> record that we create out into a <code>let</code> call so that we can access it directly. This will also allow us to build a topic that is assigned to that user and we&rsquo;ll also create one that isn&rsquo;t assigned to a user. We&rsquo;ll then modify the tests for the <code>edit</code> and <code>update</code> actions so that the user shouldn&rsquo;t be able to access these if we either don&rsquo;t pass a topic or if we pass in a topic that they haven&rsquo;t created. For topics that they have created they should be able to access these actions.</p>
+
+``` /spec/models/permissions_spec.rb
+describe Permission do
+  # Specs for guests and admins omitted.
+
+  describe "as member" do
+    let(:user) { create(:user, admin: false) }
+    let(:user_topic) { build(:topic, user: user) }
+    let(:other_topic) { build(:topic) }
+    
+    subject { Permission.new(user) }
+    
+    it { should_not allow("topics", "edit") }
+    it { should_not allow("topics", "update") }
+    it { should_not allow("topics", "edit", other_topic) }
+    it { should_not allow("topics", "update", other_topic) }
+    it { should allow("topics", "edit", user_topic) }
+    it { should allow("topics", "update", user_topic) }
+
+    # Specs for other actions omitted.
+  end
+end
+```
+
+<p>Of course these tests fail as the <code>allow?</code> method doesn&rsquo;t yet expect a third argument. It&rsquo;s easy enough to add this as an optional argument but how do we perform an authorization check on its attributes? What we&rsquo;ll do is have the <code>allow</code> method accept a block that we can pass that object into so that we can perform the check there. We&rsquo;ll modify the permissions that we specify in the <code>Permission</code> class so that the current topic is only checked for the <code>edit</code> and <code>update</code> actions.</p>
+
+``` /app/models/permission.rb
+def initialize(user)
+  allow :users, [:new, :create]
+  allow :sessions, [:new, :create, :destroy]
+  allow :topics, [:index, :show]
+  if user
+    allow :users, [:edit, :update]
+    allow :topics, [:new, :create]
+    allow :topics, [:edit, :update] do |topic|
+      topic.user_id == user.id
+    end
+    allow_all if user.admin?
+  end
+end
+  
+def allow?(controller, action, resource = nil)
+  @allow_all || @allowed_actions[[controller.to_s, action.to_s]]
+end
+```
+
+<p>Now we have to fill in the missing pieces between the definition and the check. We&rsquo;ll modify the <code>allow</code> method to take a block. We&rsquo;ll need to keep track of this so we&rsquo;ll set it as a value in our <code>allowed_actions</code> hash. If no block is passed in we&rsquo;ll set the value to <code>true</code>.</p>
+
+``` /app/models/permission.rb
+def allow(controllers, actions, &block)
+  @allowed_actions ||= {}
+  Array(controllers).each do |controller|
+    Array(actions).each do |action|
+      @allowed_actions[[controller.to_s, action.to_s]] = block || true
+    end
+  end
+end
+```
+
+<p>This means that <code>allow?</code> will now return either <code>true</code> or a block. We&rsquo;ll set this to a local variable and perform a check on it to see that it&rsquo;s either <code>true</code> or that we have a resource and that calling allowed and passing in that resource returns either <code>true</code> or <code>false</code>.</p> 
+
+``` /app/models/permission.rb
+def allow?(controller, action, resource = nil)
+  allowed = @allow_all || @allowed_actions[[controller.to_s, action.to_s]]
+  allowed && (allowed == true || resource && allowed.call(resource))
+end
+```
+
+<p>Our tests all now pass again. Now when we perform the <code>allow</code> check in the view we can pass in the topic so that the edit and destroy links are only shown for the appropriate user.</p>
+
+
+``` /app/views/topics/index.html.erb
+<% if allow? "topics", "edit", topic %>
+  | <%= link_to "Edit", edit_topic_path(topic) %>
+<% end %>
+<% if allow? "topics", "destroy", topic %>
+  | <%= link_to "Destroy", topic_path(topic), method: :delete %>
+<% end %>
+```
+
+<p>When we reload the page now only the topic that we created has an &ldquo;edit&rdquo; link.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1390/original/E386I02.png" width="800" height="550" alt="Only the topic we created has an edit link now."/>
+</div>
+
+<p>This seems to have worked but when we click that link we stay on the index page and we see the &ldquo;Not authorized&rdquo; message. This is because the controller isn&rsquo;t passing in the resource to the authorization. Before we try to fix this we&rsquo;ll duplicate the bug in a high-level request spec.</p>
+
+``` /spec/requests/topics_spec.rb
+it "edit owned topic as member" do
+  log_in admin: false
+  topic = create(:topic, user: current_user)
+  visit edit_topic_path(topic)
+  page.should_not have_content("Not authorized")
+end
+```
+
+<p>In this test a non-admin user creates a topic then tries to edit it and shouldn&rsquo;t see the text &ldquo;Not authorized&rdquo; when they do. This test fails, just as we&rsquo;d expect. To make is pass we&rsquo;ll need to pass in the current resource into the allow? method that we call in the <code>ApplicationController</code>&rsquo;s <code>before_filter</code>. This can be a little tricky and there are a variety of ways we can do this. We&rsquo;ll add a <code>current_resource</code> method to the <code>ApplicationController</code>. This will return <code>nil</code> but we can override it in each controller. We can then call this in <code>authorize</code>.</p>
+
+``` /app/controllers/application_controller.rb
+def current_resource
+  nil
+end
+
+def authorize
+  if !current_permission.allow?(params[:controller], params[:action], current_resource)
+    redirect_to root_url, alert: "Not authorized."
+  end
+end
+```
+
+<p>In the <code>TopicsController</code> we&rsquo;ll override <code>current_resource</code> to return the current <code>Topic</code> which it finds by the <code>id</code> parameter if that parameter exists.</p>
+
+``` /app/controllers/topics_controller.rb
+def current_resource
+  @current_resource ||= Topic.find(params[:id]) if params[:id]
+end
+```
+
+<p>We could go a step further and use this method every time we fetch a <code>Topic</code> in the other actions to reduce duplication. Our tests are now all passing again and so we should now be able to edit the topic in the browser and when we click the link we now see the edit page like we&rsquo;d expect.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1391/original/E386I03.png" width="800" height="400" alt="We can now edit topics that we own."/>
+</div>
+
+<h3>Restricting Access to Attributes</h3>
+
+<p>With this working let&rsquo;s tackle another problem with authorization: restricting access to specific attributes. Let&rsquo;s say that in the edit form we don&rsquo;t want members to be able to mark a topic as sticky but that admins should be able to do this. We&rsquo;ll start in the form&rsquo;s view because we want that field to be hidden if the user doesn&rsquo;t have permission. Starting here allows us to define the interface and how we want it to behave. We&rsquo;ll define a helper method called <code>allow_param?</code> that we can pass a model name and an attribute name and we&rsquo;ll use this for each attribute that we want to perform an authorization check on. We&rsquo;ll use this method to wrap each field in the form.</p>
+
+``` /app/views/topics/_form.html.erb
+<% if allow_param? :topic, :name %>
+<div class="field">
+  <%= f.label :name %><br />
+  <%= f.text_field :name, size: 50 %>
+</div>
+<% end %>
+
+<% if allow_param? :topic, :sticky %>
+<div class="field">
+  <%= f.check_box :sticky %>
+  <%= f.label :sticky %>
+</div>
+<% end %>
+```
+
+<p>We&rsquo;ll need to define this method and delegate it to the <code>current_permission</code> object in the <code>ApplicationController</code> just like we did with <code>allow?</code>.</p>
+
+``` /app/controllers/application_controller.rb
+delegate :allow?, to: :current_permission
+helper_method :allow?
+
+delegate :allow_param?, to: :current_permission
+helper_method :allow_param?
+```
+
+<p>We need to implement this behaviour in the <code>Permission</code> class, which we&rsquo;ll test drive in the permissions spec. When we&rsquo;re logged in as a member we should be able to access a topic&rsquo;s name but not its <code>sticky</code> attribute. An admin user should be able to access any attributes. We&rsquo;ll add specs to test this behaviour.</p>
+
+``` /spec/models/permissions_spec.rb
+describe "as member" do
+  # Other specs omitted
+  it { should allow_param("topic", "name") }
+  it { should_not allow_param("topic", "sticky") }
+end
+
+describe "as admin" do
+  subject { Permission.new(build(:user, admin: true)) }
+
+  it { should allow("anything", "here") }
+  it { should allow_param("anything", "here") }
+end
+```
+
+<p>We still need to implement the <code>allow_param</code> matcher. This will work in a similar way to the <code>allow</code> matcher that we&rsquo;ve already defined.</p>
+
+``` /spec/models/permissions_spec.rb
+RSpec::Matchers.define :allow_param do |*args|
+  match do |permission|
+    permission.allow_param?(*args).should be_true
+  end
+end
+```
+
+<p>Our new tests fail because our <code>Permission</code> class doesn&rsquo;t respond to <code>allow_param?</code>.  We want the way we define this permission to work in a similar way to the <code>allow</code> method but instead of specifying a controller and an action here we&rsquo;ll specify a model and an attribute. We&rsquo;ll need to define an <code>allow_param</code> and an <code>allow_param?</code> method in this class.</p>
+
+``` /app/models/permission.rb
+def allow_param(resources, attributes)
+  @allowed_params ||= {}
+  Array(resources).each do |resource|
+    @allowed_params[resource.to_s] ||= []
+    @allowed_params[resource.to_s] += Array(attributes).map(&:to_s)
+  end
+end
+
+def allow_param?(resource, attribute)
+  if @allow_all
+    true
+  elsif @allowed_params && @allowed_params[resource.to_s]
+    @allowed_params[resource.to_s].include? attribute.to_s
+  end
+end
+```
+
+<p>The <code>allow_param</code> method accepts either a single resource or an array of resources and an attribute or an array of attributes and stores them in an hash with an array value that stores the attributes. The <code>allow_param?</code> method can then check this hash to see if that resource exists in the array and, if so, whether the requested attribute exists in the values. We can now add the permissions for the <code>Topic</code>&rsquo;s name attribute in <code>initialize</code>.</p>
+
+``` /app/models/permission.rb
+def initialize(user)
+  allow :users, [:new, :create]
+  allow :sessions, [:new, :create, :destroy]
+  allow :topics, [:index, :show]
+  if user
+    allow :users, [:edit, :update]
+    allow :topics, [:new, :create]
+    allow :topics, [:edit, :update] do |topic|
+      topic.user_id == user.id
+    end
+    allow_param :topic, :name
+    allow_all if user.admin?
+  end
+end
+```
+
+<p>When the tests run now they all pass again and if we visit the edit page for a topic we&rsquo;ve written while logged in as a non-admin user we won&rsquo;t see the checkbox for the <code>sticky</code> attribute.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1392/original/E386I04.png" width="800" height="376" alt="Non-admin users no longer see the &lsquo;sticky&rsquo; checkbox."/>
+</div>
+
+<p>We&rsquo;ve only fixed one side of the problem, though. If we POST directly to the <code>update</code> action and supply a <code>sticky</code> parameter the topic will still be updated. To illustrate this problem we&rsquo;ll write a new request spec that tests it.</p>
+
+``` /spec/requests/topics_spec.rb
+it "cannot create sticky topic as member" do
+  user = create(:user, admin: false, password: "secret")
+  post sessions_path, email: user.email, password: "secret"
+  post topics_path, topic: {name: "Sticky Topic?", sticky: "1"}
+  topic = Topic.last
+  topic.name.should eq("Sticky Topic?")
+  topic.should_not be_sticky
+end
+```
+
+<p>We usually use Capybara for request specs but here we&rsquo;re using the Rails integration tests directly so that we can post requests without going through the web interface. In this test we create a non-admin user then log them in. We then try creating a sticky topic by POSTing to <code>update</code> then test that the newly-created topic has a <code>name</code> but isn&rsquo;t <code>sticky</code>. When we run this it fails as we can currently mark a topic as sticky.</p>
+
+<p>We&rsquo;re using strong parameters in this application, like we showed in <a href="http://railscasts.com/episodes/371-strong-parameters">episode 371</a>. This is because it&rsquo;s a lot more flexible with permissions and because it will be the default in Rails 4. We have a <code>topic_params</code> method in the <code>TopicsController</code> which permits the <code>name</code> and <code>sticky</code> parameters on the Topic model.</p>
+
+``` /app/controllers/topics_controller.rb
+def topic_params
+  params.require(:topic).permit(:name, :sticky)
+end
+```
+
+<p>We&rsquo;ll make this more dynamic so that it only accepts the parameters that are marked as accessible in the <code>Permission</code> class. Ideally we&rsquo;d like it so that this controller doesn&rsquo;t have to worry about this at all and can access the topic parameters directly and that we handle the authorization with a <code>before_filter</code>. Our <code>ApplicationController</code> already has a <code>before_filter</code> that calls an <code>authorize</code> method. We&rsquo;ll modify this method so that if the current user is authorized we can permit certain parameters and we&rsquo;ll do this by calling a new <code>permit_params!</code> on the <code>Permission</code> object and passing in the parameters. Note that <code>permit_params!</code> has an exclamation mark at the end as it will modify the parameters that are passed to it.</p>
+
+``` /app/controllers/application_controller.rb
+def authorize
+  if current_permission.allow?(params[:controller], params[:action], current_resource)
+    current_permission.permit_params! params
+  else
+    redirect_to root_url, alert: "Not authorized."
+  end
+end
+```
+
+<p>Next we&rsquo;ll write this method in the <code>Permission</code> class.</p>
+
+``` /app/models/permission.rb
+def permit_params!(params)
+  if @allow_all
+    params.permit!
+  elsif @allowed_params
+    @allowed_params.each do |resource, attributes|
+      if params[resource].respond_to? :permit
+        params[resource] = params[resource].permit(*attributes)
+      end
+    end
+  end
+end
+```
+
+<p>This method accepts the <code>params</code> hash from the controller and first checks to see if the current user has access to everything. If so we call <code>permit!</code> on the params hash which is a method that strong parameters provides to allow everything. Otherwise we loop through all the allowed parameters and call permit on each of them to define them as allowed. When we check our tests now they almost all pass, apart from one that is raising a <code>ForbiddenAttributes</code> exception when we try to update a topic as an admin. For some reason admins aren&rsquo;t able to update a topic&rsquo;s attributes. It turns out that the <code>permit!</code> method we&rsquo;re calling on the params for admins doesn&rsquo;t work recursively. If there are nested hashes in the parameters these won&rsquo;t be permitted. This is a known issue as is fixed in the Git repository for Strong Parameters so there should be a new gem release that includes this fix released soon. In the meantime we can change our gemfile so that it references the Git repository instead of the gem.</p> 
+
+``` /Gemfile
+gem 'strong_parameters', github: 'rails/strong_parameters'
+```
+
+<p>After we run <code>bundle</code> again to install the new version the tests all pass again.</p>
+
+<p>Testing Permissions</p>
+
+<p>Our authorization system is now feature-complete. As a member we can only edit topics that we own and even then we can&rsquo;t mark them as sticky. If we&rsquo;re an admin user, however, we can mark topics as sticky and edit any topic. If we&rsquo;re logged out then we can&rsquo;t really do anything except read existing topics.</p> 
+
+<p>Next we&rsquo;ll give you a few tips about testing with permissions. It&rsquo;s a good idea to keep permission logic out of request specs so that we can avoid all the branching possibilities. It&rsquo;s tempting to always sign in as an admin when testing at this high level so that we don&rsquo;t have to worry about permissions but we shouldn&rsquo;t really do this. Instead we should sign in as the lowest role possible to successfully execute the test. For example the request spec that lists the topics is done as a guest user. This way we don&rsquo;t run into the case where we accidentally forget to grant permission to a guest or member to perform a specific action which is easy to do if we&rsquo;re always signed in as an admin. We do have a few request specs that are specifically about testing authorization but these are kept to a minimum and used mainly to test-drive the functionality rather than for testing all the branching paths.</p>
+
+<p>In the permissions spec we follow the practice where we have one assertion per spec with a lot of <code>it</code> blocks. This can make the tests slow as any setup code will be run for every <code>it</code> call. This means that we might want to consider collapsing multiple tests into a single spec to speed things up. This could look like this:</p>
+
+``` /spec/models/permission_spec.rb
+it "allows topics" do
+  should allow(:topics, :index)
+  should allow(:topics, :show)
+  should allow(:topics, :new)
+  should allow(:topics, :create)
+  should_not allow(:topics, :edit)
+  should_not allow(:topics, :update)
+  should_not allow(:topics, :edit, other_topic)
+  should_not allow(:topics, :update, other_topic)
+  should allow(:topics, :edit, user_topic)
+  should allow(:topics, :update, user_topic)
+  should_not allow(:topics, :destroy)
+  should allow_param(:topic, :name)
+  should_not allow_param(:topic, :sticky)
+end
+```
+
+<p>If one of these assertions fails RSpec will show us the exact line that has failed so it&rsquo;s easy to find the failure even if we have a lot of assertions in a single spec.</p>
+
+<h3>In Summary</h3>
+
+<p>We&rsquo;ve covered a lot in these two episodes on authorization so let&rsquo;s review the end result of what it takes to add authorization from scratch. We&rsquo;ll start in the <code>ApplicationController</code> where we&rsquo;ve added a <code>before_filter</code> called <code>authorize</code> and a couple of method delegations. We also have three methods defined here including <code>authorize</code>, which is run before each request is processed. In the <code>TopicsController</code> we implemented a <code>current_resource</code> method and we&rsquo;d need to implement something like this for each RESTful-style controller in our application.</p> 
+
+<p>Finally we have our <code>Permission</code> class. This contains quite a lot of code but it&rsquo;s all nicely isolated here and the only part we have to manage and be concerned with is the <code>initialize</code> method where we define the permissions for each type of user. This type of setup generally works well but for applications with complicated permissions this class can get a little out of hand. In these cases we can split this up into multiple classes, each of which handles the permissions for a specific role, something like this:</p>
+
+``` /app/models/permissions.rb
+module Permissions
+  def self.permission_for(user)
+    if user.nil?
+      GuestPermission.new
+    elsif user.admin?
+      AdminPermission.new(user)
+    else
+      MemberPermission.new(user)
+    end
+  end
+end
+```
+
+<p>Here we&rsquo;ve split the <code>Permission</code> class up into four classes all of which are in a new <code>Permissions</code> module. This has a <code>permission_for</code> method which is designed to be called from a controller and which takes the current user. This will return a <code>Permission</code> instance depending on the user&rsquo;s role. This way the permission definition logic for each role can be kept separate. As an example our <code>MemberPermission</code> class looks like this:</p>
+
+``` /app/models/permissions/member_permission.rb
+module Permissions
+  class MemberPermission < BasePermission
+    def initialize(user)
+      allow :users, [:new, :create, :edit, :update]
+      allow :sessions, [:new, :create, :destroy]
+      allow :topics, [:index, :show, :new, :create]
+      allow :topics, [:edit, :update] do |topic|
+        topic.user_id == user.id
+      end
+      allow_param :topic, :name
+    end
+  end
+end
+```
+
+<p>All the complex logic is contained within the <code>BasePermission</code> class that each role&rsquo;s permission class inherits from. This is something that we won&rsquo;t need to visit or change regularly so that we can focus entirely on we want the permissions for each role defined. Splitting up the classes like this based on each role can easily be done with CanCan if you want to use that instead of starting from scratch.</p>
+
+
+
+
+
+

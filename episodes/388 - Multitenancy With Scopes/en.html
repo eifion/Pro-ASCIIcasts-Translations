@@ -1,0 +1,214 @@
+<p>Below is a screenshot from a Rails application which managed a forum about cheese. Users can create cheese-related topics and each topic can have many posts.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1394/original/E388I01.png" width="800" height="550" alt="Our cheese forum."/>
+</div>
+
+<p>Let&rsquo;s say that another client comes along wanting a forum application that works in the same way but on the topic of chunky bacon. One option is to duplicate the whole Rails application but this would give us another app to deploy and maintain. Instead we&rsquo;ll turn our application into a multi-tenant app so that it can support multiple clients. This is a good solution if we want to keep the same behaviour but there isn&rsquo;t much data shared between the clients.</p>
+
+<h3>Adding Multi-Tenant Support</h3>
+
+<p>There are many different ways to distinguish one client from another but for this application we&rsquo;ll use subdomains. We&rsquo;re using the Pow server to serve our app to make it easier to manage subdomains on our development machine. If we visit cheese.forum.dev we want our application to display the topics for the Cheese Forum but if we visit <code>chunkybacon.forum.dev</code> we should see a different forum with a different set of data. Our app currently looks the same for every subdomain so let&rsquo;s change that.</p>
+
+<p>First we&rsquo;ll need a way to keep track of the different tenants. We&rsquo;ll generate a model called <code>Tenant</code> (you can call this <code>Account</code> or something that suits your application better if you want) and give it <code>name</code> and <code>subdomain</code> attributes. We&rsquo;ll also migrate the database to create the table.</p>
+
+``` terminal
+$ rails g model tenant name subdomain
+$ rake db:migrate
+```
+
+<p>Next we&rsquo;ll open the Rails console and create a couple of tenants.</p>
+
+``` console
+>> Tenant.create! name: "Cheese", subdomain: "cheese"
+>> Tenant.create! name: "Chunky Bacon", subdomain: "chunkybacon"
+```
+
+<p>Now that we have two <code>Tenant</code> records, we need a way to switch between them depending on the subdomain. We&rsquo;ll do this inside the <code>ApplicationController</code> where we&rsquo;ll create a new <code>current_tenant</code> method in which we&rsquo;ll find the tenant by their subdomain. (If you want to know more about how subdomains work in Rails they were covered in more detail in <a href="http://railscasts.com/episodes/123-subdomains-revised">episode 123</a>.)</p>
+
+``` /app/controllers/application_controller.rb
+def current_tenant
+  Tenant.find_by_subdomain! request.subdomain
+end
+helper_method :current_tenant
+```
+
+<p>This approach is quite flexible as we can fetch the current tenant in any way we want. If, for example, we didn&rsquo;t want to use subdomains we could set up our application so that a <code>User</code> belonged to a <code>Tenant</code> and then use the current user record to get their tenant. Note that we&rsquo;ve made this method a helper method so that we can use it in the views too.</p>
+
+<p>Next we need to go through our application and find anything that&rsquo;s specifically about cheese. One case is the header at the top of the page. We can make this dynamic and use the name of the current tenant.</p>
+
+``` /app/views/topics/index.html.erb
+<h1><%= current_tenant.name %> Forum</h1>
+```
+
+<p>If we want, say, different colours for each tenant we can move this attribute into the <code>Tenant</code> model and reference this throughout the application. When we visit this page now through the <code>chunkybacon</code> subdomain we&rsquo;ll see the correct header.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1395/original/E388I02.png" width="800" height="550" alt="The Chunky Bacon forum now shows the correct header."/>
+</div>
+
+<p>If we visit a subdomain that doesn&rsquo;t exist we get a <code>RecordNotFound</code> exception which in production would return a <code>404</code> error which is generally what we want. We&rsquo;ll get the same error if we visit the site with no subdomain. We might want to have a central hub page here instead and episode 123 has more detail on this.</p> 
+
+<h3>Scoping Data</h3>
+
+<p>Next we&rsquo;ll focus on scoping the data. If we look at the Chunky Bacon forum above we&rsquo;ll see that it shows the data from the Cheese forum but we want a different set of data in the database specifically for this tenant. There are a number of ways to do this but we&rsquo;ll use ActiveRecord scopes. We&rsquo;ll start in the <code>TopicsController</code>&rsquo;s <code>index</code> action  which is the page we&rsquo;ve been viewing. Here we currently just fetch all the topics. Instead we should scope them by the current tenant.</p> 
+
+``` /app/controllers/topics_controller.rb
+def index
+  @topics = current_tenant.topics
+end
+```
+
+<p>This assumes that we have a <code>topics</code> association on the <code>Tenant</code> model. We don&rsquo;t have one so let&rsquo;s set one up.</p> 
+
+``` /app/models/tenant.rb
+class Tenant < ActiveRecord::Base
+  attr_accessible :name, :subdomain
+  has_many :topics
+end
+```
+
+<p>We&rsquo;ll need a foreign key in the <code>topics</code> table so we&rsquo;ll generate a migration to create one then migrate the database again.</p>
+
+``` terminal
+$ rails g migration add_tenant_to_topics tenant_id:integer:index
+$ rake db:migrate
+```
+
+<p>When we reload the Chunky Bacon forum now we don&rsquo;t see any topics which is what we expect. There are still a lot of holes in our application however. If we visit the page for a specific topic in the Cheese forum while using the <code>chunkybacon</code> subdomain we&rsquo;ll be able to view that topic. The same applies to the posts: we can visit a specific post no matter what subdomain we&rsquo;re using. To fix this for the topics we can go back to the controller and go through the <code>topics</code> association for the <code>current_tenant</code> for every single action whenever we show, create or update a topic.</p> 
+
+<p>Fixing the posts isn&rsquo;t quite as easy. We currently fetch them by their <code>id</code> but we need to make sure that the post belongs to a topic that belongs to the current tenant. As we get more deeply-nested associations this can become pretty complex, especially as our application grows. It&rsquo;s also easy to forget to go through the association which can leave a big security hole. Alternatively we can use an authorization library such as CanCan to handle the scoping but this isn&rsquo;t designed for a multi-tenant apps and it won&rsquo;t solve this problem very well. This is one case where it&rsquo;s acceptable to use a default scope so that&rsquo;s what we&rsquo;ll do.</p> 
+
+``` /app/models/topic.rb
+class Topic < ActiveRecord::Base
+  attr_accessible :name, :content
+  belongs_to :user
+  has_many :posts
+  
+  default_scope { where(tenant_id: Tenant.current_id) }
+end
+```
+
+<p>Our default scope has a condition where <code>tenant_id</code> matches the current tenant. We don&rsquo;t have a <code>current_id</code> method in the <code>Tenant</code> model so we&rsquo;ll add one. We can remove the <code>has_many</code> association with topics as we don&rsquo;t need it any more  and use a <code>cattr_accessor</code>, which is provided by ActiveSupport as a way to make a  class-level accessor, to get the <code>current_id</code>.</p> 
+
+``` /app/models/tenant.rb
+class Tenant < ActiveRecord::Base
+  attr_accessible :name, :subdomain
+  cattr_accessor :current_id
+end
+```
+
+<p>The final step here is to modify the <code>ApplicationController</code> by adding an around filter for scoping the current tenant. We don&rsquo;t use these very often but they&rsquo;re basically a way to set up before and after filters at the same time. In it we&rsquo;ll set the current tenant id then yield to the controller, which will trigger the action and render the view. Finally we use an ensure case to set the current tenant <code>id</code> back to <code>nil</code> so that there&rsquo;s no chance of the <code>id</code> floating into other requests.</p>
+
+``` /app/controllers/application_controller.rb
+  around_filter :scope_current_tenant
+
+private
+
+  def scope_current_tenant
+    Tenant.current_id = current_tenant.id
+    yield
+  ensure
+    Tenant.current_id = nil
+  end
+```  
+  
+<p>Now we should no longer be able to be able to access topics that don&rsquo;t belong to the current tenant. When we try this we get a <code>RecordNotFound</code> exception and if we visit the <code>index</code> view the topics are filtered for the current tenant.</p>
+
+<p>A useful feature of a default scope is that it applies to newly-created records. If we create a new topic in the Chunky Bacon forum the tenant <code>id</code> will be added automatically and the topic will be visible in the correct forum. This can easily be applied to any other model. We&rsquo;ll add a <c>tenant_id</c> our <code>Post</code> model and one to our <code>User</code> model as well.</p>
+
+``` terminal
+$ rails g migration add_tenant_to_posts tenant_id:integer:index
+$ rails g migration add_tenant_to_users tenant_id:integer:index
+$ rake db:migrate
+```
+
+<p>We can now add a default scope to the <code>Post</code> model.</p>
+
+``` /app/models/post.rb
+class Post < ActiveRecord::Base
+  attr_accessible :name, :content
+  belongs_to :topic
+  
+  default_scope { where (tenant_id: Tenant.current_id) }
+end
+```
+
+<p>And do something similar to <code>User</code>.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  attr_accessible :email, :password, :password_confirmation
+  has_secure_password
+  validates_uniqueness_of :email
+
+  has_many :topics
+  default_scope { where (tenant_id: Tenant.current_id) }
+end
+```
+
+<p>Now if we try to access a specific post we can&rsquo;t as it doesn&rsquo;t belong to the current tenant.</p> 
+
+<p>When we use a default scope it&rsquo;s important to remember that it&rsquo;s applied globally even if we access our application through a Rake task, in our tests or in the console.  If we call <code>Topic.count</code> in the console we&rsquo;ll see that the SQL query that is run finds all the topics where the <code>tenant_id</code> is <code>NULL</code> as this is what the current <code>id</code> is set to.</p>
+
+``` console
+>> Topic.count
+   (0.2ms)  SELECT COUNT(*) FROM "topics" WHERE "topics"."tenant_id" IS NULL
+=> 4
+```
+
+<p>This command returns <code>4</code> as this is the number of topics that existed earlier and which have never had a tenant assigned to them. We&rsquo;ll do this now and assign all the topics to the &ldquo;Cheese&rdquo; tenant.</p>
+
+``` console
+>> Topic.update_all(tenant_id: 1)
+  SQL (22.0ms)  UPDATE "topics" SET "tenant_id" = 1 WHERE "topics"."tenant_id" IS NULL
+=> 4 
+```
+
+<p>This update query also only applies to the topics without a tenant which shows that the default scope is fairly global. If we run <code>Topic.count</code> again now we&rsquo;ll get zero results as all of the topics now have a <code>tenant_id</code> set.</p> 
+
+<p>If we want to perform a query without a default scope we can do this by calling <code>unscoped</code>. Calling <code>count</code> on this will return five results and the SQL statement won&rsquo;t be run with the extra WHERE Clause.</p>
+
+``` console
+>> Topic.unscoped.count
+   (0.2ms)  SELECT COUNT(*) FROM "topics" 
+=> 5
+```
+
+<p>We can change this behaviour easily it we want to. Whenever we add a default scope we can check to see if the current <code>id</code> exists before executing the where clause.</p>
+
+``` /app/models/topic.rb
+default_scope { where (tenant_id: Tenant.current_id) if Tenant.current_id }
+```
+
+<p>Now if we&rsquo;re outside a Rails request and the current <code>id</code> isn&rsquo;t set all the records will be fetched and they won&rsquo;t be scoped at all. That said, the code feels a little more secure without this check in place as it means that we have to explicitly specify a tenant or call <code>unscoped</code> whenever we work with our application outside a request.</p>
+
+<h3>Fixing Some Other Problems</h3>
+
+<p>Our multi-tenant support is working well; we can swap between tenants and all the data is scoped for us automatically. That said there are some potential problems that we need to be aware of. One of these can show itself when we need to test the uniqueness of an attribute. In our signup form, for example, a user with the email address <code>foo@example.com</code> can&rsquo;t sign up for both the Cheese and Chunky Bacon forums as they&rsquo;ll be told that their email address has already been taken when they try signing up for the second forum. If we use <code>validates_uniqueness_of</code> in a model it won&rsquo;t have the default scope applied to it so we have to add a scope option.</p>
+
+``` /app/models/user.rb
+validates_uniqueness_of :email, scope: :tenant_id
+```
+
+<p>Now we can sign up to both forums with the the same email address.</p>
+
+<p>We can find another potential issue in the Tenant model where we call <code>cattr_accessor</code> for the <code>current_id</code> attribute. While this is convenient it&rsquo;s not really thread-safe so we might want to do something like this instead.</p>
+
+``` /app/models/tenant.rb
+class Tenant < ActiveRecord::Base
+  attr_accessible :name, :subdomain
+  
+  def self.current_id=(id)
+    Thread.current[:tenant_id] = id
+  end
+  
+  def self.current_id
+    Thread.current[:tenant_id]
+  end
+end
+```
+
+<p>Now we have getter and setter methods that use <code>Thread.current</code> to set the value which is more thread-safe.</p>
+
+<p>With these issues taken care of we now have a solid multi-tenant application using default scopes. Building this functionality from scratch has been quite easy but if you&rsquo;d rather not do this there are some gems you can use to help you out. There&rsquo;s a <a href="https://www.ruby-toolbox.com/categories/Multitenancy">multi-tenancy category</a> on The Ruby Toolbox which has a number of gems that mostly work in a similar way to what we&rsquo;ve done here by using ActiveRecord scopes. A good option here is the <a href="https://www.ruby-toolbox.com/projects/apartment">Apartment gem</a> which takes a different approach. This gem splits up each tenant into a separate database which greatly reduces the changes of a bug sharing data between tenants. It also has support for a great Postgresql feature called schemas. This is a way of providing namespaces for tables and while we won&rsquo;t be covering it here it will be covered in a future episode.</p>

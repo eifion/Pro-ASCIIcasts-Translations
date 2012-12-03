@@ -1,0 +1,374 @@
+<p>In the past we&rsquo;ve covered uploading files in a number of episodes, but we haven&rsquo;t talked about where the files are stored once they&rsquo;ve been uploaded to the server. Files are often stored on the application server&rsquo;s file system but there are several disadvantages to this. The server may have limited disk space or bandwidth and if the app runs on a cluster of servers this can add complications, too. There are also several potential security issues with allowing users to upload files to the server.</p> 
+
+<h3>Storing Images on S3</h3>
+
+<p>So, given that there are good reasons for storing uploaded files elsewhere that&rsquo;s what we&rsquo;ll cover in this episode. We already have a Rails application set up with CarrierWave to handle file uploads like we covered in <a href="http://railscasts.com/episodes/253-carrierwave-file-uploads">episode 253</a>. The <code>ImageUploader</code> class in this application is set up to store uploaded files on the local file system but we can easily change this by changing the storage engine to fog and CarrierWave will use this to then upload files to a cloud-based system.</p>
+
+``` /app/uploaders/image_uploader.rb
+class ImageUploader < CarrierWave::Uploader::Base
+  include CarrierWave::RMagick
+
+  # Include the Sprockets helpers for Rails 3.1+ asset pipeline compatibility:
+  include Sprockets::Helpers::RailsHelper
+  include Sprockets::Helpers::IsolatedHelper
+
+  storage :fog
+
+  def store_dir
+    "uploads/#{model.class.to_s.underscore}/#{mounted_as}/#{model.id}"
+  end
+
+  version :thumb do
+    process resize_to_fill: [200, 200]
+  end
+end
+```
+
+<p><a href="http://fog.io/1.6.0/index.html">Fog</a> is a Ruby gem that provides a standardized interface for interacting with a variety of cloud services. It can do much more than just manage file storage but that&rsquo;s the part of it we&rsquo;ll cover here. With it we can store our uploaded files on Amazon S3, Rackspace&rsquo;s CloudFiles or Google&rsquo;s Cloud Storage. We&rsquo;ll use Amazon S3 here but Fog gives us the option to change this easily should be want to. This <a href="http://fog.io/1.6.0/storage/">tutorial</a> does a nice job of walking you through how to use Fog but we won&rsquo;t need to go through it as CarrierWave handles the Fog interaction for us.</p>
+
+<p>What we do need to do is set up an Amazon Web Services account so that we can provide an access key and secret. Setting up an AWS account is free and easy to do, although we will need to pay for the bandwidth that we use. Once we&rsquo;ve signed up we can go to the Security Credentials page and then scroll down to the Access Keys section. Here we can create a new access key if we need to and then copy that and the associated secret to use in our application. We&rsquo;ll also need an S3 bucket to store the created files in and we can create this in the management console. We&rsquo;ll create an <code>asciicasts-example</code> bucket here for storing the images.</p> 
+
+<p>We now have a bucket that we can tell CarrierWave to upload the files to and if we look at CarrierWave&rsquo;s <a href="http://github.com/jnicklas/carrierwave">README</a> we&rsquo;ll find some documentation on how set it up with Amazon S3. We need to add Fog to our gemfile and add an initializer file with various configuration options including the credentials we set up for our bucket. First we&rsquo;ll add the gem then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'fog'
+```
+
+<p>Next we&rsquo;ll create an initializer file to set Fog&rsquo;s credentials. We&rsquo;ll use environment variables to store these so that we don&rsquo;t have to store them in the application.</p> 
+
+``` /config/carrierwave.rb
+CarrierWave.configure do |config|
+  config.fog_credentials = {
+    provider: "AWS",
+    aws_access_key_id: ENV["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key: ENV["AWS_SECRET_ACCESS_KEY"]
+  }
+  config.fog_directory = ENV["AWS_S3_BUCKET"]
+end
+```
+
+<p>We&rsquo;ve already set <code>ImageUploader</code> to use Fog for storage but it&rsquo;s recommended that we add another couple of lines to this file to include the <code>MimeTypes</code> module and to process the image through <code>set_content_type</code>. This will set the MIME type for the image in case it&rsquo;s incorrect.</p>
+
+``` /app/uploaders/image_uploader.rb
+include CarrierWave::MimeTypes
+process :set_content_type
+```
+
+<p>When we visit our Rails application now any existing attachments will be broken and their images aren&rsquo;t stored on S3. If we upload a new file now it will take a while to respond and that&rsquo;s because it&rsquo;s processing the image and uploading it to S3.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1377/original/E383I01.png" width="800" height="500" alt="An image uploaded via S3."/>
+</div>
+
+<h3>Uploading Files in The Background</h3>
+
+<p>While this works it isn&rsquo;t very efficient because our entire Rails process is tied up while it uploads the file to S3. There are a couple of CarrierWave add-ons that can help us to resolve this problem. One is <a href="https://github.com/lardawge/carrierwave_backgrounder">carrierwave_backgrounder</a> which moves the processing and uploading into a background process. Another is <a href="https://github.com/dwilkie/carrierwave_direct">carrierwave_direct</a>  which handles uploading the file from the client-side directly up to S3 and which we&rsquo;ll use here. To set it up we add it to the Gemfile. We&rsquo;ll also need to add another gem to handle the background jobs and we&rsquo;ll use Sidekiq here although we could use any similar gem. We&rsquo;ll need to run bundle again to install them both. Sidekiq is covered further in <a href="http://railscasts.com/episodes/366-sidekiq">episode 366</a>.</p>
+
+``` /Gemfile
+gem 'carrierwave_direct'
+gem 'sidekiq'
+```
+
+<p>Next we&rsquo;ll modify the <code>ImageUploader</code> class by including a module called <code>CarrierWaveDirect::Uploader</code>.</p> 
+
+``` /app/uploaders/image_uploader.rb
+include CarrierWaveDirect::Uploader
+```
+
+<p>Adding this sets the default storage to Fog so we can remove the <code>storage :fog</code> line from the class and also the <code>store_dir</code> method which sets the directory where the files are stored. To get this to work we&rsquo;ll need to change the way the file upload works in our application. We currently have a form with a text field and a file upload field but this won&rsquo;t work now as the file needs to be uploaded directly to S3 which means that it will need to be in a separate form from the one that&rsquo;s submitted to our Rails application.</p> 
+
+<p>We&rsquo;ll move the upload form into the <code>index</code> template and let the user enter the painting&rsquo;s name after it&rsquo;s been uploaded. Creating a form that uploads directly to S3 can be a little tricky but thankfully the gem provides a helper method called <code>direct_upload_form_for</code> that will do just what we want. We pass this an instance of an uploader and tell it what URL to redirect to after it has successfully uploaded a file. Next in the <code>index</code> template we&rsquo;ll replace the link to the new painting page with a form for directly uploading an image.</p>
+
+``` /app/views/paintings/index.html.erb
+<h1>Painting Gallery</h1>
+
+<div id="paintings">
+  <%= render @paintings %>
+</div>
+<div class="clear"></div>
+
+<%= direct_upload_form_for @uploader do |f| %>
+  <p><%= f.file_field :image %></p>
+  <p><%= f.submit "Upload Image" %></p>
+<% end %>
+```
+
+<p>We pass this form an uploader (which we still need to set in the controller) and it contains a file upload field and a submit button.  We&rsquo;ll add the uploader now and set the action that it redirects to after a successful upload.</p>
+
+``` /app/controllers/paintings_controller.rb
+def index
+  @paintings = Painting.all
+  @uploader = Painting.new.image
+  @uploader.success_action_redirect = new_painting_url
+end
+```
+
+<p>When we reload the index page now the form is there and we can upload an image. When we do this we&rsquo;ll be redirected to Amazon S3 where the image is uploaded then redirected back to the new painting form where we can fill in the rest of the details about the painting. When we&rsquo;re redirected to the form the path to the uploaded image is stored in a key parameter in the query string. This is important and we&rsquo;ll need to remember it when we submit the second form. We&rsquo;ll pass it in to the <code>Painting</code> model that we create in the new action. This is an attribute that the CarrierWave Direct gem provides when we mount the uploader and the gem makes it accessible in the model.</p>
+
+``` /app/controllers/paintings_controller.rb
+def new
+  @painting = Painting.new(key: params[:key])
+end
+```
+
+<p>In the form template for the painting we need to pass that key in through a hidden field so that it persists when the form is submitted. We can remove the file field from the form too now as we&rsquo;ve already uploaded the image but it would be nice to have something that displays the name of the file we&rsquo;ve uploaded so we&rsquo;ll replace the file field with that. There isn&rsquo;t a consistent way to get the name so we&rsquo;ll add this logic to the <code>Painting</code> model in a new <code>image_name</code> method.</p>
+
+``` /app/views/paintings/_form.html.erb
+<%= form_for @painting do |f| %>
+  <!-- Validation code omitted --> 
+ 
+  <%= f.hidden_field :key %>
+  
+  <p>File: <%= @painting.image_name %></p>
+
+  <div class="field">
+    <%= f.label :name %><br />
+    <%= f.text_field :name %>
+  </div>
+  <div class="actions">
+    <%= f.submit %>
+  </div>
+<% end %>
+```
+
+<p>Next we&rsquo;ll add this new <code>image_name</code> method in the model.</p>
+
+``` /app/models/painting.rb
+def image_name
+  File.basename(image.path || image.filename) if image 
+end
+```
+
+<p>Here we call <code>image.path || image.filename</code>. One of these will be set depending on whether the record was created with the file. We then call <code>File.basename</code> on this and return it, but only if an image has been uploaded. When we reload the page now we see the filename and we can give the image a name and add the painting.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1378/original/E383I02.png" width="800" height="400" alt="Adding a name to an uploaded file."/>
+</div>
+
+<p>This partly works: the record is created but our thumbnail image is broken. Clicking the thumbnail to show the full image works, however, as this references the same image that we uploaded, not the thumbnail version. CarrierWave Direct disables the processing of the images so it&rsquo;s up to us to manually trigger creating the thumbnails in a background job. We&rsquo;ll do this within the <code>Painting</code> model.</p>
+
+``` /app/models/painting.rb
+class Painting < ActiveRecord::Base
+  attr_accessible :image, :name
+  mount_uploader :image, ImageUploader
+  
+  after_save :enqueue_image
+  
+  def image_name
+    File.basename(image.path || image.filename) if image
+  end
+
+  def enqueue_image
+    ImageWorker.perform_async(id, key) if key.present?
+  end
+
+  class ImageWorker
+    include Sidekiq::Worker
+    
+    def perform(id, key)
+      painting = Painting.find(id)
+      painting.key = key
+      painting.remote_image_url = painting.image.direct_fog_url(with_path: true)
+      painting.save!
+    end
+  end
+end
+```
+
+<p>We now have an <code>after_save</code> callback that queues up the image processing. This will only take place if the key is present which will be the case if we&rsquo;ve uploaded the image through S3. We call <code>perform_async</code> on the ImageWorker class. This is defined in the same file, and includes <code>Sidekiq::Worker</code> which we use to handle the background job. (While we&rsquo;re including this class directly inline in the model we could move it into a workers directory.) This class will find the matching <code>Painting</code> record and set its key and its <code>remote_image_url</code> to the file on S3. This will retrigger the image processing so that the thumbnail is generated.</p> 
+
+<p>We already have Redis set up and running so all we need to do is startup Sidekiq so that it can process the background jobs.</p>
+
+``` terminal
+$ bundle exec sidekiq
+```
+
+<p>When we try uploading another image now the thumbnail image is still broken. If we wait a little while until the image has been processed in the background then reload the page the image will appear.  It would be nice to have something displaying to show that the image is being processed instead of a broken image and the first step to implementing this is to add a boolean column to the <code>paintings</code> table that will say whether the image has been processed or not. We&rsquo;ll then migrate the database to add that column.</p>
+
+``` terminal
+$ rails g migration add_image_processed_to_paintings image_processed:boolean
+$ rake db:migrate
+```
+
+<p>Now, in the <code>ImageWorker</code> model we&rsquo;ll set this attribute to <code>true</code> for each painting when it has finished being processed.</p>
+
+``` /app/models/painting.rb
+def perform(id, key)
+  painting = Painting.find(id)
+  painting.key = key
+  painting.remote_image_url = painting.image.direct_fog_url(with_path: true)
+  painting.save!
+  painting.update_column(:image_processed, true)
+end
+```
+
+<p>Next we&rsquo;ll change in the partial that displays each image so that it shows some placeholder text if the image hasn&rsquo;t yet been processed.</p>
+
+``` /app/views/paintings/_painting.html.erb
+<div class="painting">
+  <% if painting.image_processed? %>
+    <%= link_to image_tag(painting.image_url(:thumb)), painting if painting.image? %>
+  <% else %>
+    <em>Processing...</em>
+  <% end %>
+  <div class="name"><%= painting.name %></div>
+  <div class="actions">
+    <%= link_to "edit", edit_painting_path(painting) %> |
+    <%= link_to "remove", painting, :confirm => 'Are you sure?', :method => :delete %>
+  </div>
+</div>
+```
+
+<p>When we upload a painting now we see the placeholder instead of a broken image.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1379/original/E383I03.png" width="800" height="500" alt="The placeholder showing for a newly-uploaded image."/>
+</div>
+
+<p>If we wait until the image has been processed then reload the page we&rsquo;ll see the thumbnail image instead.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1380/original/E383I04.png" width="800" height="500" alt="The processed thumbnail."/>
+</div>
+
+<h3>Uploading Directly to S3</h3>
+
+<p>Our image uploading works well now but we can only upload one image at a time. <a href="http://railscasts.com/episodes/381-jquery-file-upload">Episode 381</a> covered jQuery File Upload and while we could integrate that into our application with CarrierWave direct we&rsquo;ll take a different approach that doesn&rsquo;t use CarrierWave at all but which just uploads directly to S3. What we want to end up with a a page with a file upload control that accepts multiple files and which shows progress bars while each file uploads followed by the images themselves once they&rsquo;ve uploaded and have finished being processed.</p>
+
+<p>To do this we  have a form on our <code>index</code> page that uploads directly to S3. We use a custom helper method called <code>s3_uploader_form</code> to generate the form which submits to the PaintingsController&rsquo;s submit action and which passes in the uploaded file&rsquo;s URL as a parameter.</p>
+
+``` /app/views/paintings/index.html.erb
+<h1>Painting Gallery</h1>
+
+<div id="paintings">
+  <%= render @paintings %>
+</div>
+<div class="clear"></div>
+
+<%= s3_uploader_form post: paintings_url, as: "painting[image_url]" do %>
+  <%= file_field_tag :file, multiple: true %>
+<% end %>
+
+<script id="template-upload" type="text/x-tmpl">
+<div class="upload">
+  {%=o.name%}
+  <div class="progress"><div class="bar" style="width: 0%"></div></div>
+</div>
+</script>
+```
+
+<p>The <code>s3_uploader_form</code> method is defined in the  <code>UploadHelper</code> module. The logic in it is fairly complex so most of it is delegated to an <code>S3Uploader</code> class.</p> 
+
+``` /app/helpers/upload_helper.rb
+def s3_uploader_form(options = {}, &block)
+  uploader = S3Uploader.new(options)
+  form_tag(uploader.url, uploader.form_options) do
+    uploader.fields.map do |name, value|
+    hidden_field_tag(name, value)
+    end.join.html_safe + capture(&block)
+  end
+end
+```
+
+<p>The <code>S3Uploader</code> class is too long to be shown in full here, but can be found <a href="https://github.com/railscasts/383-uploading-to-amazon-s3/blob/master/gallery-jquery-fileupload/app/helpers/upload_helper.rb#L11">on Github</a>. Its <code>initialize</code> method shows the options that can be passed in and sets some default values for them. These include the S3 access key and secret, the name of the bucket and so on.</p> 
+
+``` /app/helpers/upload_helper.rb
+def initialize(options)
+  @options = options.reverse_merge(
+    id: "fileupload",
+    aws_access_key_id: ENV["AWS_ACCESS_KEY_ID"],
+    aws_secret_access_key: ENV["AWS_SECRET_ACCESS_KEY"],
+    bucket: ENV["AWS_S3_BUCKET"],
+    acl: "public-read",
+    expiration: 10.hours.from_now,
+    max_file_size: 500.megabytes,
+    as: "file"
+  )
+end
+```
+
+<p>Most of the rest of the class is fairly straightforward apart from the methods where we set the policy and signature that Amazon S3 expects. This needs to be encoded properly and S3 also expects the various attributes that we have in the <code>policy_data</code> method to be passed in.</p>
+
+``` /app/helpers/upload_helper.rb
+def policy
+  Base64.encode64(policy_data.to_json).gsub("\n", "")
+ end
+
+def policy_data
+  {
+    expiration: @options[:expiration],
+    conditions: [
+      ["starts-with", "$utf8", ""],
+      ["starts-with", "$key", ""],
+      ["content-length-range", 0, @options[:max_file_size]],
+      {bucket: @options[:bucket]},
+      {acl: @options[:acl]}
+    ]
+  }
+end
+
+ def signature
+  Base64.encode64(
+    OpenSSL::HMAC.digest(
+      OpenSSL::Digest::Digest.new('sha1'),
+      @options[:aws_secret_access_key], policy
+    )
+  ).gsub("\n", "")
+end
+```
+
+<p>Finally we have a CoffeeScript file which works in a similar way to the code we wrote in episode 381 with <code>add</code> and <code>progress</code> callback functions. The main difference is the done callback which handles posting the data to the URL that is supplied by the form.</p> 
+
+``` /app/assets/javascripts/paintings.js.coffee
+jQuery ->
+  $('#fileupload').fileupload
+    add: (e, data) ->
+      types = /(\.|\/)(gif|jpe?g|png)$/i
+      file = data.files[0]
+      if types.test(file.type) || types.test(file.name)
+        data.context = $(tmpl("template-upload", file))
+        $('#fileupload').append(data.context)
+        data.submit()
+      else
+        alert("#{file.name} is not a gif, jpeg, or png image file")
+    
+    progress: (e, data) ->
+      if data.context
+        progress = parseInt(data.loaded / data.total * 100, 10)
+        data.context.find('.bar').css('width', progress + '%')
+    
+    done: (e, data) ->
+      file = data.files[0]
+      domain = $('#fileupload').attr('action')
+      path = $('#fileupload input[name=key]').val().replace('${filename}', file.name)
+      to = $('#fileupload').data('post')
+      content = {}
+      content[$('#fileupload').data('as')] = domain + path
+      $.post(to, content)
+      data.context.remove() if data.context # remove progress bar
+    
+    fail: (e, data) ->
+      alert("#{data.files[0].name} failed to upload.")
+      console.log("Upload failed:")
+      console.log(data)
+``` 
+     
+<p>Another important piece of the puzzle is configuring our S3 buckets. We can set its CORS configuration file to determine which other domains access its files.</p> 
+
+``` xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration xmlns="http://s3.amazon.com/doc/2006-03-01/">
+    <CORSRule>
+        <AllowedOrigin>http://localhost:3000</AllowedOrigin>
+        <AllowedMethod>GET</AllowedMethod>
+        <AllowedMethod>POST</AllowedMethod>
+        <AllowedMethod>PUT</AllowedMethod>
+        <MaxAgeSeconds>3000</MaxAgeSeconds>
+        <AllowedHeader>*</AllowedHeader>
+    </CORSRule>
+</CORSConfiguration>
+```
+
+<p>This configuration allows us to upload files to our bucket using JavaScript and to check their progress. This configuration will need to change once our application is put into production, if only to change the <code>AllowedOrigin</code> from <code>localhost</code> to our application&rsquo;s domain name.</p> 
+
+<p>One thing that this version of the application does not do is generate thumbnail versions of each image. Instead the full version of each image is shown scaled down. There are a variety of ways that we could add this functionality. We could set up an EC2 instance and have that process the images, or we could stick with CarrierWave Direct and have this process the thumbnail within our application. We could even do the processing on the client-side before we upload the images.</p>

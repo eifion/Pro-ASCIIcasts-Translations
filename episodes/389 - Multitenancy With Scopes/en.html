@@ -1,0 +1,312 @@
+<p>Last week we created a multi-tenanted application using ActiveRecord scopes. In this episode we&rsquo;ll do the same thing but at the database-level using features that Postgres supports. We&rsquo;ll work with the same example application which manages a forum dedicated to cheese. Each forum has topics each of which has many posts.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1396/original/E389I01.png" width="800" height="550" alt="Our forum application."/>
+</div>
+
+<p>We want to turn this into a multi-tenant application where each tenant has their own forum and set of data. We&rsquo;ll distinguish each forum with a subdomain so that <code>cheese.forum.dev</code> will point to this forum while <code>chunkybacon.forum.dev</code> will point to a new forum with its own set of data. Note that we&rsquo;re using the Pow server so that we can use subdomains in development. Our application&rsquo;s database configuration file is already set up to work with PostgreSQL like we showed in <a href="http://railscasts.com/episodes/342-migrating-to-postgresql">episode 342</a>. Postgres provides an interesting feature  called schemas which allows us to separate each tenant&rsquo;s data. If you&rsquo;re using MySQL or another database which doesn&rsquo;t support this feature you can accomplish something similar by using a separate database for each tenant but this can get messy and has scaling issues.</p>
+
+
+<h3>Schemas and Search Paths</h3>
+
+<p>The <a href="http://www.postgresql.org/docs/9.1/static/ddl-schemas.html">documentation on Postgres schemas</a> is good and worth taking the time to read. One way to think of them is as a way to namespace tables and this can become quite powerful when we combine it with search paths. We can set a search path in Postgres to specify which schemas the database should look in the data for. A good place to try this out is in the database console which we can open by running <code>rails db</code> from our app&rsquo;s directory. If we type <code>\dt</code> here we get a list of tables for the current database and the schema that they belong to. Currently all the tables in our Rails application are in the <code>public</code> schema which is provided by default.</p>
+
+``` postgres
+forum_development=# \dt
+              List of relations
+ Schema |       Name        | Type  | Owner  
+--------+-------------------+-------+--------
+ public | posts             | table | eifion
+ public | schema_migrations | table | eifion
+ public | topics            | table | eifion
+ public | users             | table | eifion
+(4 rows)
+```
+
+<p>We can get a list of the available schemas by running the <code>\dn</code> command.</p>
+
+``` postgres
+forum_development=# \dn
+  List of schemas
+  Name  |  Owner   
+--------+----------
+ public | postgres
+(1 row)
+```
+
+<p>We&rsquo;ll create a new schema, that we&rsquo;ll call <code>foo</code>.</p>
+
+``` postgres
+forum_development=# CREATE SCHEMA foo;
+CREATE SCHEMA
+forum_development=# \dn
+  List of schemas
+  Name  |  Owner   
+--------+----------
+ foo    | eifion
+ public | postgres
+(2 rows)
+```
+
+<p>If we create a new table now it&rsquo;s created in the <code>public</code> schema but we can prefix a table with a schema name to create it elsewhere.</p>
+
+``` postgres
+forum_development=# CREATE TABLE foo.items ();
+```
+
+<p>If we perform an action on this table it won&rsquo;t work unless we specify the schema.</p>
+
+``` postgres
+forum_development=# DELETE FROM items;
+ERROR:  relation "items" does not exist
+LINE 1: DELETE FROM items;
+                    ^
+forum_development=# DELETE FROM foo.items;
+DELETE 0
+```
+
+<p>To avoid having to specify the schema every time we can add it to our search path. By default this is set to the public schema for the current user but we can add other schemas to it. If we add the foo schema we&rsquo;ll be able to delete from our items table without specifying a prefix.</p> 
+
+``` postgres
+forum_development=# SET search_path TO foo, public;
+SET
+forum_development=# DELETE FROM items;
+DELETE 0
+```
+
+<p>If we run the <code>\dt</code> command now we&rsquo;ll see the tables from both schemas listed.</p>
+
+``` postgres
+forum_development=# \dt
+              List of relations
+ Schema |       Name        | Type  | Owner  
+--------+-------------------+-------+--------
+ foo    | items             | table | eifion
+ public | posts             | table | eifion
+ public | schema_migrations | table | eifion
+ public | topics            | table | eifion
+ public | users             | table | eifion
+(5 rows)
+```
+
+<p>Now that we&rsquo;ve finished experimenting with our <code>foo</code> schema we can drop it and we&rsquo;ll use the <code>cascade</code> option to delete all the data relevant to the schema.</p>
+
+``` postgres
+forum_development=# DROP SCHEMA foo CASCADE;
+NOTICE:  drop cascades to table items
+DROP SCHEMA
+```
+
+<h3>Using Schemas in Our Application</h3>
+
+<p>Now that we know how schemas work we can use a different one for each tenant in our application to separate the data. First we&rsquo;ll generate a model called <code>Tenant</code> with a <code>subdomain</code> attribute then migrate the database.</p>
+
+``` terminal
+$ rails g model tenant subdomain
+$ rake db:migrate
+```
+
+<p>We&rsquo;ll set this up in the Rails console. First we&rsquo;ll create a new <code>Tenant</code> record called &ldquo;cheese&rdquo;. We&rsquo;ll need to create a schema for this tenant and to do that we&rsquo;ll need to interact directly with the database connection so we&rsquo;ll get this from the newly-created tenant and store it in a variable. We&rsquo;ll then use execute to execute some SQL to create the schema and call <code>schema_search_path</code> to set the search path to our new schema.</p> 
+
+``` console
+>> t = Tenant.create! subdomain: "cheese"
+>> c = t.connection
+>> c.execute("create schema tenant1")
+>> c.schema_search_path = "tenant1"
+```
+
+<p>As we haven&rsquo;t included the <code>public</code> schema in the search path if we try to query anything on the database, such as calling <code>Post.all</code>, an exception will be raised as ActiveRecord won&rsquo;t be able to find the table. Next we need to load all the tables in to this schema and we can do that by loading the <code>schema.rb</code> file in our Rails app.</p>
+
+``` console
+>> load 'db/schema.rb'
+```
+
+<p>If we call <code>Post.all</code> now we&rsquo;ll get an empty array returned as we don&rsquo;t have any data in that table and this is what we want: each tenant can now have a separate set of data. That said there is some data that we do want to share between tenants, for example the tenants table. If we call <code>Tenant.all</code> now we get an empty array back when we want all of the tenants. To do this we need to drop the table in the current schema and change the search path to include both <code>tenant1</code> and <code>public</code>. When we try to fetch all the tenants now we&rsquo;ll see the tenants from that table in the <code>public</code> schema as this is now in our search path.</p> 
+
+``` console
+>> c.execute("drop table tenants")
+=> #<PG::Result:0x007fbc0492bfe0>
+>> c.schema_search_path = "tenant1, public"
+=> "tenant1, public"
+>> Tenant.all
+  Tenant Load (1.0ms)  SELECT "tenants".* FROM "tenants" 
+=> [#<Tenant id: 1, subdomain: "cheese", created_at: "2012-11-12 18:46:29", updated_at: "2012-11-12 18:46:29">]
+```
+
+<p><code>Post.all</code> still returns nothing as the <code>tenant1</code> schema&rsquo;s version of that table doesn&rsquo;t include any records even though the <code>public</code> schema has a table with the same name which does contain data. This shows that the order of the search path is important and that it stops at the first schema it finds with a matching table. To create a schema automatically whenever a tenant is created we can use a callback.</p>
+
+``` /app/models/tenant.rb
+class Tenant < ActiveRecord::Base
+  attr_accessible :subdomain, :name
+  after_create :create_schema
+
+  def create_schema
+    connection.execute("create schema tenant#{id}")
+    scope_schema do
+      load Rails.root.join("db/schema.rb")
+      connection.execute("drop table #{self.class.table_name}")
+    end
+  end
+
+  def scope_schema(*paths)
+    original_search_path = connection.schema_search_path
+    connection.schema_search_path = ["tenant#{id}", *paths].join(",")
+    yield
+  ensure
+    connection.schema_search_path = original_search_path
+  end
+end
+```
+
+<p>This will do the same thing that we&rsquo;ve done in the console, but automatically. We have an <code>after_create</code> callback which triggers a <code>create_schema</code> method and this method creates the schema then calls a <code>scope_schema</code> method that calls a block. This allows us to scope the search path to that tenant and any other paths that we pass in and means that we can load the schema to load the tables into the new schema. We then drop the tenants table from that schema so that any calls to it use the <code>public</code> version. There might be other tables that we want to drop here if we want other models to be available to all tenants such as maybe a <code>users</code> table but for our application dropping <code>tenants</code> is enough.</p>
+
+<p>We can try this out in the console. First we&rsquo;ll create a new <code>chunkybacon</code> tenant.</p>
+
+``` console
+>> Tenant.create! subdomain: "chunkybacon"
+```
+
+<p>When we do this now it creates not just a <code>Tenant</code> record but also sets up a new schema, loads all the tables into it then drops the <code>tenants</code> table from it. The time taken to do all this isn&rsquo;t long but we might consider moving it into a background process, especially if we were loading in a large schema.</p>
+
+<p>Fetching The Right Data For Our Forums</p>
+
+<p>Now that we have our database set up we can hook it into our controller layer. We want our forum app to work so that if we specify a subdomain in the URL a schema will be used to restrict the data. We&rsquo;ll do this in the <code>ApplicationController</code> so that it&rsquo;s done globally. We&rsquo;ll use an <code>around_filter</code> that calls a method called <code>scope_current_tenant</code>. In this method we&rsquo;ll fetch the current tenant by calling a new <code>current_tenant</code> method and calling <code>scope_schema</code> on this which is the method that we set up in the <code>Tenant</code> model earlier and which changes the schema&rsquo;s search path for that tenant. We can pass additional search paths into this and we&rsquo;ll pass the <code>public</code> schema in as we want to include it in the scope. The <code>current_tenant</code> method is the same we had in last week&rsquo;s episode where we find a <code>Tenant</code> by the subdomain based on the request&rsquo;s subdomain. We&rsquo;ll also make this method a helper method so that we can access it in the view.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  
+  around_filter :scope_current_tenant
+
+private
+
+  def current_user
+    @current_user ||= User.find(session[:user_id]) if session[:user_id]
+  end
+  helper_method :current_user
+
+  def current_tenant
+    @current_tenant ||= Tenant.find_by_subdomain!(request.subdomain)
+  end
+  helper_method :current_tenant
+  
+  def scope_current_tenant(&block)
+    current_tenant.scope_schema("public", &block)
+  end
+end
+```
+
+<p>With this change in place we can try visiting <code>chunkybacon.forum.dev</code>. When we do we see a forum with no topics, just like we expect. We&rsquo;re now working with a completely new set of data in a new schema with, as yet, no topics or posts.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1397/original/E389I02.png" width="800" height="300" alt="The Chunky Bacon forum has no topics of its own."/>
+</div>
+
+<p>If we try creating a new topic it should just be created in that schema&rsquo;s <code>topics</code> table and it should not appear in the cheese forum.</p>
+
+<h3>Dealing With Migrations</h3>
+
+<p>With very little code we&rsquo;ve successfully scoped all of the data for each tenant but there is a problem with migrations. To demonstrate this we&rsquo;ll try adding a <code>sticky</code> column to the <code>topics</code> table.</p>
+
+``` terminal
+$ rails g migration add_sticky_to_topics sticky:boolean
+```
+
+<p>When we run <code>rake db:migrate</code> now this column is added to the <code>topics</code> table but only for the <code>public</code> schema; all of the tenants schemas tables are unaffected. What we need to do is loop through each of the tenants and migrate the database for each one. We&rsquo;ll do this in a custom Rake task that we&rsquo;ll put in the <code>lib/tasks</code> directory.</p>
+
+``` /lib/tasks/multitenant.rake
+db_tasks = %w[db:migrate db:migrate:up db:migrate:down db:rollback db:forward]
+
+namespace :multitenant do
+  db_tasks.each do |task_name|
+    desc "Run #{task_name} for each tenant"
+    task task_name => %w[environment db:load_config] do
+      Tenant.find_each do |tenant|
+        puts "Running #{task_name} for tenant#{tenant.id} (#{tenant.subdomain})"
+        tenant.scope_schema { Rake::Task[task_name].execute }
+      end
+    end
+  end
+end
+
+db_tasks.each do |task_name|
+  Rake::Task[task_name].enhance(["multitenant:#{task_name}"])
+end
+```
+
+<p>In this code we first make an array of the various Rake tasks that we want to add multi-tenancy to. We then make a <code>multitenant</code> namespace and loop through each of these tasks so that we can make a new task in this namespace for each one. This will loop through each tenant, scope it to that tenant&rsquo;s schema then run the original Rake task. Optionally we might want to enhance the original task as well so at the bottom of the file we enhance each task which means that we add the <code>multitenant</code> task to the original task so that when we run, say, <code>rake db:migrate</code> it will automatically run the <code>multitenant:db:migrate</code> task. This means that when we run <code>rake db:migrate</code> now it&rsquo;s run for each of our tenants.</p>
+
+``` terminal
+$ rake db:migrate
+Running db:migrate for tenant1 (cheese)
+==  AddStickyToTopics: migrating ==============================================
+-- add_column(:topics, :sticky, :boolean)
+   -> 0.0020s
+==  AddStickyToTopics: migrated (0.0021s) =====================================
+
+Running db:migrate for tenant2 (chunkybacon)
+==  AddStickyToTopics: migrating ==============================================
+-- add_column(:topics, :sticky, :boolean)
+   -> 0.0019s
+==  AddStickyToTopics: migrated (0.0020s) =====================================
+```
+
+<p>This is great but sometimes we might want to run a migration for only the <code>public</code> schema for instance when we add a column to the tenants table.</p>
+
+``` terminal
+$ rails g migration add_name_to_tenants name
+```
+
+<p>What we can do here is modify this migration so that it checks to see if a tenants table exists.</p> 
+
+``` /db/migrate/20121113000000_add_name_to_tenants.rb
+class AddNameToTenants < ActiveRecord::Migration
+  def change
+    add_column :tenants, :name, :string if table_exists? :tenants
+  end
+end
+```
+
+<p>Now the migration won&rsquo;t be run on other schemas as this table doesn&rsquo;t exist there.</p>
+
+``` terminal
+$ rake db:migrate
+Running db:migrate for tenant1 (cheese)
+==  AddNameToTenants: migrating ===============================================
+-- table_exists?(:tenants)
+   -> 0.0017s
+==  AddNameToTenants: migrated (0.0018s) ======================================
+
+Running db:migrate for tenant2 (chunkybacon)
+==  AddNameToTenants: migrating ===============================================
+-- table_exists?(:tenants)
+   -> 0.0011s
+==  AddNameToTenants: migrated (0.0012s) ======================================
+
+==  AddNameToTenants: migrating ===============================================
+-- table_exists?(:tenants)
+   -> 0.0010s
+-- add_column(:tenants, :name, :string)
+   -> 0.0161s
+==  AddNameToTenants: migrated (0.0173s) ======================================
+```
+
+<p>We can see here that the <code>table_exists?</code> check was run for all the schemas but that <code>add_column</code> is only run for the public schema.</p>
+
+<h3>Customizing Each Forum</h3>
+
+<p>Now that we have a <code>name</code> attribute on our <code>Tenant</code> model we can use it elsewhere in our application. For example in the <code>index</code> view we display the name of the forum and this is currently hard-coded, but we can use this attribute instead.</p>
+
+``` /app/views/topics/index.html.erb
+<h1><%= current_tenant.name %> Forum</h1>
+```
+
+<p>If we set the names of our two tenants then reload the &ldquo;Chunky Bacon&rdquo; forum we&rsquo;ll see the correct title displayed and only the topics for this forum as it has its own data, completely set apart for the other forums&rsquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1398/original/E389I03.png" width="800" height="400" alt="Topics are now only shown in the correct forum."/>
+</div>
+
+<p>There&rsquo;s more information about using Postgres schemas for multi-tenancy in this <a href="http://blog.jerodsanto.net/2011/07/building-multi-tenant-rails-apps-with-postgresql-schemas/">blog post</a>. If you&rsquo;d rather not implement this all from scratch take a look at the <a href="https://github.com/influitive/apartment">Apartment gem</a> which gives you the tools to do most of what we&rsquo;ve done here.</p>
+
+<p>We&rsquo;ve now implemented multi-tenancy in two different ways. How should we choose between scopes and schemas? A good question to ask is whether you&rsquo;ll have a few large tenants or many smaller ones. If your application is going to have a lot of tenants it&rsquo;s better to go with scopes so that you don&rsquo;t have to manage a large number of schemas and run migrations on each one separately. If you&rsquo;re going to only have a few tenants then Postgres schemas make more sense.</p>

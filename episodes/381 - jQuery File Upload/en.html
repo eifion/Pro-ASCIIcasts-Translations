@@ -1,0 +1,233 @@
+<p>Let&rsquo;s say that we have a Rails application designed to display a gallery of paintings. To add a painting to the gallery we have a form with a text field to give the painting a name and a standard file upload field.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1366/original/E381I01.png" width="800" height="400" alt="The page for adding a painting."/>
+</div>
+
+<p>When we submit this form our image is resized, cropped and added to the gallery. The file upload is handled by CarrierWave which we covered in detail in <a href="http://railscasts.com/episodes/253-carrierwave-file-uploads">episode 253</a>. We have a <code>Painting</code> model with a call to <code>mount_uploader</code> and which is passed an ImageUploader class, a subclass of <code>CarrierWave::Uploader::Base</code>.</p>
+
+``` /app/models/painting.rb
+class Painting < ActiveRecord::Base
+  attr_accessible :image, :name
+  mount_uploader :image, ImageUploader
+end
+```
+
+<p>The uploader class is a fairly standard uploader. It creates a thumbnail version that resizes the image using RMagick and this version is displayed on the gallery page.</p>
+
+``` /app/uploaders/image_uploader.rb
+class ImageUploader < CarrierWave::Uploader::Base
+  include CarrierWave::RMagick
+
+  # Include the Sprockets helpers for Rails 3.1+ asset pipeline compatibility:
+  include Sprockets::Helpers::RailsHelper
+  include Sprockets::Helpers::IsolatedHelper
+
+  storage :file
+
+  def store_dir
+    "uploads/#{model.class.to_s.underscore}/#{mounted_as}/#{model.id}"
+  end
+
+  def extension_white_list
+    %w(jpg jpeg gif png)
+  end
+
+  version :thumb do
+    process resize_to_fill: [200, 200]
+  end
+end
+```
+
+<h3>Improving The Uploader</h3>
+
+<p>The issue with our application is that we can only upload one painting at a time. It would be better if we could upload multiple images at once from the main gallery page so we&rsquo;ll implement this. We want a file upload button on the gallery page that allows us to select multiple images so to start we&rsquo;ll replace the link to the new painting page with a form where we can upload multiple images at once.</p>
+
+``` /app/views/paintings/index.html.erb
+<h1>Painting Gallery</h1>
+
+<div id="paintings">
+  <%= render @paintings %>
+</div>
+<div class="clear"></div>
+
+<%= form_for Painting.new do |f| %>
+  <%= f.label :image, "Upload paintings:" %>
+  <%= f.file_field :image %>
+<% end %>
+```
+
+<p>If we reload the gallery page now we&rsquo;ll see the form but its file upload field will only allow us to select a single painting. We can fix this by passing the <code>multiple</code> option to our <code>file_field</code> and setting it to <code>true</code>.</p>
+
+``` /app/views/paintings/index.html.erb
+<%= f.file_field :image, multiple: true %>
+```
+
+<p>Now, in some browsers at least, we can select multiple images in the file upload dialog. There is an issue with this, however. If we view the source for the form field we&rsquo;ll see that the name of the file input field has a pair of square brackets at the end. This means that the images are submitted as an array to our Rails application.</p>
+
+``` html
+<input id="painting_image" multiple="multiple" name="painting[image][]" type="file" />
+```
+
+<p>Unfortunately this causes some issues with CarrierWave and we&rsquo;ll need to fix it. There are a number of different ways that we can handle this situation, the simplest is to hard-code the name of the field.</p>
+
+``` /app/views/paintings/index.html.erb
+<%= f.file_field :image, multiple: true, name: "painting[image]" %>
+```
+
+<p>If we change the name of the <code>Painting</code> model or its <code>image</code> attribute we&rsquo;ll need to remember to change the name of this attribute, too but with this change in place there&rsquo;ll no longer be square brackets at the end of the file field&rsquo;s name and any images we upload won&rsquo;t be sent in an array. We now have another problem, however, in that if we do upload multiple files only one of them will be used to create a painting. This is where a JavaScript library can come to our aid and allow us to upload multiple files at once. We&rsquo;ll use the <a href="http://blueimp.github.com/jQuery-File-Upload/">jQuery File Upload</a> which is a polished solution that allows us to upload multiple files at once. With it we can select a number of files then click a &lsquo;start upload&rsquo; button to upload the files and it will even show upload progress bars while the files are uploading.</p> 
+
+<p>There are a couple of different ways that we can set this up. The first option is known as the UI version and this works well if we just need a quick way to get a file upload, although it works best with Twitter Bootstrap and makes a lot of decisions for us. The other option is a minimal setup which uses the basic upload functionality and which leaves the user interface up to us. This way we can customize it further and make it fit and integrate with our existing interface and it&rsquo;s what we&rsquo;ll using in this episode.</p>
+
+<p>We need to integrate this library into the Rails asset pipeline and for this we&rsquo;ll be using the <a href="https://github.com/tors/jquery-fileupload-rails">jQuery FileUpload Rails gem</a>. This gives us several files that we we can require to add its functionality to our application. To use it we&rsquo;ll add it to the assets group of our Rails application then run bundle to install it.</p>
+
+``` /Gemfile
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer', :platforms => :ruby
+
+  gem 'uglifier', '>= 1.0.3'
+  gem 'jquery-fileupload-rails'
+end
+```
+
+<p>Next we&rsquo;ll modify the application&rsquo;s JavaScript manifest file to add the <code>jquery-fileupload/basic</code> as demonstrated in the README.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery-fileupload/basic
+```
+
+<p>We still need to add this functionality to the file upload form on the paintings page and we&rsquo;ll do this inside the paintings CoffeeScript file.</p> 
+
+``` /app/assets/javascripts/paintings.js.coffee
+jQuery ->
+  $('#new_painting').fileupload()
+```  
+
+<p>All we need to do here is call <code>fileupload()</code> on the new paintings form after the DOM has loaded. When we reload the page now our file upload form has some extra functionality, although it looks the same. If we use the file control to select several files nothing appears to happen, although if we refresh the page afterwards we&rsquo;ll see that the images we selected have been uploaded.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1367/original/E381I02.png" width="800" height="500" alt="The images appear when we refresh the page."/>
+</div>
+
+<p>It&rsquo;s important to understand that when we select multiple files the form is submitted once for each file. This triggers the <code>PaintingsController</code>&rsquo;s <code>create</code> action for each file, creating a new <code>Painting</code> record each time. We&rsquo;d like the new paintings to be shown in the gallery as soon as they&rsquo;re uploaded without the user needing to upload the page. To accomplish this we first need to customize the file uploader. This accepts various options and we&rsquo;ll use the <code>dataType</code> option here.</p>
+
+``` /app/assets/javascripts/application.js
+jQuery ->
+  $('#new_painting').fileupload
+    dataType: "script"
+```    
+    
+<p>The <code>dataType</code> option determines the type of data that the uploader expects back from the server. Most examples will return JSON but this means that our Rails application will need to generate some JSON and that we&rsquo;d also need to write some JavaScript code to render the new paintings in the gallery. This approach usually leads to duplication on the client and server and it can be easier in these situations to work with JavaScript instead. Using <code>script</code> as the data type means that we can return a script from the server and it will be executed after the file uploads. This means that we need to change the <code>PaintingsController</code>&rsquo;s <code>create</code> action so that it returns some JavaScript. While we could support both HTML and JavaScript formats we&rsquo;ll keep things simple and just use a JavaScript template. First we&rsquo;ll change the controller so that it just creates a new <code>Painting</code> record.</p>
+
+``` /app/controllers/paintings_controller.rb
+def create
+  @painting = Painting.create(params[:painting])
+end
+```
+
+<p>Next we&rsquo;ll create a new JavaScript template for this action.</p>
+
+``` /app/views/paintings/create.js.erb
+<% if @painting.new_record? %>
+  alert("Failed to upload painting: <%= j @painting.errors.full_messages.join(', ').html_safe %>");
+<% else %>
+  $("#paintings").append("<%= j render(@painting) %>");
+<% end %>
+```
+
+<p>This template is fairly simple. First we check to see if the painting is a new record. If this is the case then the validations have failed and so we&rsquo;ll display an <code>alert</code> that shows the validation error messages. If the painting is saved successfully we&rsquo;ll append the rendered partial for the painting to the <code>paintings</code> <code>div</code> so that it&rsquo;s added to the gallery. We can try this out now by reloading the page then adding a couple of files. We&rsquo;ll use another feature of jQuery File Upload to do this and drag and drop the images instead of using the file upload dialog. When we do so the new images automatically appear in the gallery without us having to reload the page.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1368/original/E381I03.png" width="800" height="600" alt="The pictures are now automatically added to the page."/>
+</div>
+
+<p>There are some layout issues on the page and these are primarily because the paintings that we&rsquo;ve just uploaded don&rsquo;t have names. This is a common problem when dealing with multiple file uploads as the user isn&rsquo;t entering any other data about the uploaded files. To work around this we can set some default values based on the files that are uploaded. We&rsquo;ll add a <code>before_create</code> callback which will set a default name for each file based on its filename.</p>
+
+``` /app/models/painting.rb
+class Painting < ActiveRecord::Base
+  attr_accessible :image, :name
+  mount_uploader :image, ImageUploader
+  
+  before_create :default_name
+  
+  def default_name
+    self.name ||= File.basename(image.filename, '.*').titleize if image
+  end
+end
+```
+
+<p>Now when we upload a file its name is set automatically.</p>
+
+<h3>Adding Progress Bars</h3>
+
+<p>So far the files we&rsquo;ve been uploading appear almost instantly as we&rsquo;re running our application on the local machine. If we were running it across a slow connection then it could be minutes before the files appear in the gallery so we should provide some feedback to the user during this time. We&rsquo;ll do this by showing a progress bar for each image immediately after the user chooses the files to upload. This will need to be all on the client which means that for convenience it would be nice if we had some way to render a client-side template. To do this we&rsquo;ll go back to the JavaScript manifest file and add another <code>require</code> statement to it.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery-fileupload/vendor/tmpl
+```
+
+<p>This library is included within the jQuery File Upload gem and it will easily allow us to render out a template which is embedded inside the HTML. We&rsquo;ll paste the code for the template at the bottom of our <code>index</code> action.</p>
+
+``` /app/views/paintings/index.html.erb
+<script id="template-upload" type="text/x-tmpl">
+<div class="upload">
+  {%=o.name%}
+  <div class="progress"><div class="bar" style="width: 0%;"></div></div>
+</div>
+</script>
+```
+
+<p>We&rsquo;ve added a <code>script</code> element here with a type of <code>text/x-tmpl</code>. We can add some HTML inside this element that we can render on command through JavaScript and use special tags to reference an object that&rsquo;s passed in and add dynamic content. The rest of the code in here is just some <code>div</code>s to handle displaying the progress bar. Next we&rsquo;ll add <code>add</code> and <code>progress</code> options to <code>fileupload</code> to render the template.</p> 
+
+``` /app/assets/javascripts/paintings.js.coffee
+jQuery ->
+  $('#new_painting').fileupload
+    dataType: "script"
+    add: (e, data) ->
+      data.context = $(tmpl("template-upload", data.files[0]))
+      $('#new_painting').append(data.context)
+      data.submit()
+    progress: (e, data) ->
+      if data.context
+        progress = parseInt(data.loaded / data.total * 100, 10)
+        data.context.find('.bar').css('width', progress + '%')
+```        
+    
+<p>The <code>add</code> option is passed a function and this is triggered when a new file is added. Each separate file that is uploaded will trigger this function and it&rsquo;s passed a <code>data</code> object that we can use to fetch various information such as the file object that we can pass to the template which we reference by the <code>id</code> we gave it. Calling <code>tmpl</code> will render this template and we pass this to the jQuery function, <code>$</code>. We set the <code>data.context</code> to the result of this so that we can reference it later. We then append the template to the <code>new_painting</code> form then call <code>data.submit</code> to trigger the uploading of the file.</p>
+
+<p>The <code>progress</code> callback updates a the progress bar. First we check that the data context that we set in <code>add</code> exists; if it does then we find the progress bar and set its width depending on the current progress of the uploaded file.</p>
+
+<p>We can try this out now. We&rsquo;ve removed all the pictures from the gallery so that we&rsquo;ve got a clean slate to start from. If we drag and drop a couple of pictures into the browser window we&rsquo;ll see a progress bar for each one.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1369/original/E381I04.png" width="800" height="600" alt="A progress bar is now displayed for each image we upload."/>
+</div>
+
+<p>If we upload a file that isn&rsquo;t a valid image file, say a <code>zip</code> file, we&rsquo;ll see an alert message after the file has uploaded and it isn&rsquo;t a valid file type. It would be better if we did the validation on the client before it was uploaded to save the time and bandwidth it takes to upload. We can do this quite easily by changing the <code>add</code> callback function to this:</p>
+
+``` /app/assets/javascripts/paintings.js.coffee
+jQuery ->
+  $('#new_painting').fileupload
+    dataType: "script"
+    add: (e, data) ->
+      types = /(\.|\/)(gif|jpe?g|png)$/i
+      file = data.files[0]
+      if types.test(file.type) || types.test(file.name)
+        data.context = $(tmpl("template-upload", file))
+        $('#new_painting').append(data.context)
+        data.submit()
+      else
+        alert("#{file.name} is not a gif, jpeg, or png image file")
+    progress: (e, data) ->
+      if data.context
+        progress = parseInt(data.loaded / data.total * 100, 10)
+        data.context.find('.bar').css('width', progress + '%')
+```        
+        
+<p>Now we check that file&rsquo;s type or name matches a regular expression that matches a number of common image types before we upload it. If it doesn&rsquo;t match we&rsquo;ll show an error message instead of uploading the file. Now if we try to upload something like a zip file it won&rsquo;t be uploaded and we&rsquo;ll see a validation error message straight away.</p> 
+
+<p>Our example is pretty much complete now. We have a gallery where we can upload files by drag-and-drop and we have a progress bar that shows the progress of each file as it uploads. To learn more about jQuery File Upload it&rsquo;s worth taking a look at its wiki4, especially the options page which includes a lot of information about the options that we pass in to the uploader. There&rsquo;s also some information about setting Rails up with the UI version of jQuery File Upload.</p>
