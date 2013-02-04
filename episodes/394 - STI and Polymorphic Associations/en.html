@@ -1,0 +1,391 @@
+<p>In the previous episode we showed how to set up guest users so that people can try an application without signing up first. Guest users can try the all of the application&rsquo;s functionality then later on become a full member by completing the signup process. Everything they&rsquo;ve done up to then will then be persisted to their new permanent account. In this episode we&rsquo;ll build upon this application and looking at some ways that we can improve its code. At the end of the last episode our User model looked like this:</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :tasks, dependent: :destroy
+
+  attr_accessible :username, :email, :password, :password_confirmation
+
+  validates_presence_of :username, :email, :password_digest, unless: :guest?
+  validates_uniqueness_of :username, allow_blank: true
+  validates_confirmation_of :password
+
+  # override has_secure_password to customize validation until Rails 4.
+  require 'bcrypt'
+  attr_reader :password
+  include ActiveModel::SecurePassword::InstanceMethodsOnActivation
+  
+  def self.new_guest
+    new { |u| u.guest = true }
+  end
+  
+  def move_to(user)
+    tasks.update_all(user_id: user.id)
+  end
+  
+  def name
+    guest ? "Guest" : username
+  end
+end
+```
+
+<p>What we want to draw attention to are the checks to see if the user is a guest. The first of these is in the validations so that the <code>username</code>, <code>email</code> and <code>password_digest</code> fields aren&rsquo;t required when a guest user is created. We also check this when we display the current user&rsquo;s name. This in itself isn&rsquo;t too bad but as our application grows this check will be used more and more in the <code>User</code> model. For example we might add methods to handle restricting the number of tasks that a guest user can create and whether tasks can be shared while a method that sends a password reset to a user will also need to check to see if the current user is a guest.</p>
+
+``` /app/models/user.rb
+def task_limit
+  guest ? 10 : 1000
+end
+
+def can_share_task?(task)
+  task.user_id == id && !guest?
+end
+
+def send_password_reset
+  UserMailer.password_reset(self).deliver unless guest?
+end
+```
+
+<h3>Using Single Table Inheritance</h3>
+
+<p>All this behaviour should make us think about putting this logic into separate classes that speak the same interface and one way to do this is to use <a href="http://api.rubyonrails.org/classes/ActiveRecord/Base.html#label-Single+table+inheritance">Single Table Inheritance</a>. This works by adding a <code>type</code> column to the database which stores the name of a class for each record and this means that we can use inheritance to differentiate behaviour.  STI has got a bad reputation over the years. There are some good use cases for it but it can easily be abused. We&rsquo;ll try it in our application to see how it fits and start by creating a two new migrations: one to add a <code>type</code> column to our users table and another to remove the guest column.</p>
+
+``` terminal
+$ rails g migration add_type_to_users type
+$ rails g migration remove_guest_from_users guest:boolean
+$ rake db:migrate
+```
+
+<p>Now we need to split the code in the <code>User</code> model into separate classes. Most of this code won&rsquo;t be shared between our new <code>Member</code> and <code>Guest</code> classes; all we&rsquo;ll leave here is the <code>tasks</code> association.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :tasks, dependent: :destroy
+end
+```
+
+<p>We can now start putting our two new classes together, starting with <code>Guest</code>. We won&rsquo;t need any of the validation or authorization code here so we can remove this. While we need a way to create a new guest user we won&rsquo;t use the <code>new_guest</code> method to do this so it can be removed. The code to move a guest user&rsquo;s data when they register belongs here so we&rsquo;ll keep that and we can simplify the <code>name</code>, <code>task_limit</code> and <code>can_share_task?</code> methods to return the correct values for guest users. Sending a password reset will do nothing for guests so we&rsquo;ll leave this method empty. Finally, as some of the view logic is dependent of whether the current user is a guest or not we&rsquo;ve added a <code>guest?</code> method here to check.</p>
+
+``` /app/models/guest.rb
+class Guest < User
+  def guest?
+    true
+  end
+  def move_to(user)
+    tasks.update_all(user_id: user.id)
+  end
+  
+  def name
+    "Guest"
+  end
+
+  def task_limit
+    10
+  end
+  
+  def can_share_task?(task)
+    false
+  end
+  
+  def send_password_reset
+  end
+end
+```
+
+<p>This class is a lot cleaner and it&rsquo;s easier now to see the behaviour for a guest user. The <code>Member</code> class will be similar, although it will have more code in it as it needs the validations and the authorization behaviour. That said we can simplify it a little by returning to <code>has_secure_password</code> as no longer need to make the validations dynamic based on whether the user is a guest or not. We can remove the <code>new_guest</code> and <code>move_to</code> methods from this class and simplify the name, <code>task_limit</code> and <code>can_share_task?</code> and <code>send_password_reset</code> methods. Again we&rsquo;ve added a <code>guest?</code> method in this class but this time it returns <code>false</code>.</p>
+
+``` /app/models/member.rb
+class User < ActiveRecord::Base
+  has_many :tasks, dependent: :destroy
+
+  attr_accessible :username, :email, :password, :password_confirmation
+
+  validates_presence_of :username, :email
+  validates_uniqueness_of :username, allow_blank: true
+
+  has_secure_password
+  
+  def guest?
+    false
+  end
+    
+  def name
+    username
+  end
+
+  def task_limit
+    1000
+  end
+  
+  def can_share_task?(task)
+    task.user_id == id
+  end
+  
+  def send_password_reset
+    UserMailer.password_reset(self).deliver
+  end
+end
+```
+
+<p>Our code is now a lot cleaner. Although we have two classes they&rsquo;re both much simpler than our old <code>User</code> class with no conditionals. We&rsquo;re not done yet with our refactoring, though, we also need to change the way the <code>UsersController</code> works so that when a user signs up a new <code>Member</code> is created instead of a <code>User</code>. When we create a guest user here we now call <code>Guest.new</code> instead of the class method we had earlier. If we&rsquo;re creating a guest member we call <code>Member.new</code> and pass in the parameters from the form but we need to pass <code>:member</code> parameters instead of <code>:user</code> parameters as that&rsquo;s what will be submitted by the form.</p>
+
+``` /app/controllers/users_controller.rb
+class UsersController < ApplicationController
+  def new
+    @user = Member.new
+  end
+
+  def create
+    @user = params[:member] ? Member.new(params[:member]) : Guest.new
+    if @user.save
+      current_user.move_to(@user) if current_user && current_user.guest?
+      session[:user_id] = @user.id
+      redirect_to root_url
+    else
+      render "new"
+    end
+  end
+end
+```
+
+<p>We can try out what we&rsquo;ve done now to see if it works. When we click the &ldquo;Try it for free&rdquo; button we&rsquo;re taken to our task list as a guest and this works as we&rsquo;d expect. When we try to become a member, however, we get an error message about an undefined method called <code>members_path</code>. It looks like the action is trying to redirect to a route that we haven&rsquo;t defined. If we look at our routes file we&rsquo;ll see that we have a <code>:users</code> resource but when we create a <code>Member</code> model it will look for a <code>:members</code> resource instead. We could add a <code>:members</code> resource and set it up so that it redirects to the users controller so that we don&rsquo;t have to set up separate controllers for members and guests but this depends on how we want our application to work and how separate the controller behaviour is for members and guests. For our application creating a guest is quite different from creating a member so we&rsquo;ll split the <code>UsersController</code> up into two new controllers and modify the routes file appropriately.</p>
+
+``` /config/routes.rb
+Checklist::Application.routes.draw do
+  get 'signup', to: 'users#new', as: 'signup'
+  get 'login', to: 'sessions#new', as: 'login'
+  get 'logout', to: 'sessions#destroy', as: 'logout'
+
+  resources :members
+  resources :guests
+  resources :sessions
+  resources :tasks
+  root to: 'tasks#index'
+end
+```
+
+<p>Next we&rsquo;ll rename the <code>UsersController</code> to <code>MembersController</code> and remove the code in it that creates guest users. We no longer need to check for <code>:member</code> parameters to determine if we&rsquo;re creating a guest user or not as this now happens elsewhere. This makes sense as the rest of the code here validates the form parameters and redirects back to the form if the validation fails and we don&rsquo;t want to do this for guest users as these should never fail. It makes sense to move this logic into another controller so this is what we&rsquo;ll do.</p>
+
+``` /app/controllers/members_controller.rb
+class MembersController < ApplicationController
+  def new
+    @user = Member.new
+  end
+
+  def create
+    @user = Member.new(params[:member])
+    if @user.save
+      current_user.move_to(@user) if current_user && current_user.guest?
+      session[:user_id] = @user.id
+      redirect_to root_url
+    else
+      render "new"
+    end
+  end
+end
+```
+
+<p>Next we&rsquo;ll create a <code>GuestsController</code>. This will only have a <code>create</code> action that creates a guest user, sets a session variable and redirects back to the home page.</p>
+ 
+``` /app/controllers/guests_controller.rb
+class GuestsController < ApplicationController
+  def create
+    guest = Guest.create!
+    session[:user_id] = guest.id
+    redirect_to root_url
+  end
+end
+```
+
+<p>This is much simpler than the equivalent action in the <code>MembersController</code> and it makes sense to keep these separate. There are other places where we need to rename users to members but we won&rsquo;t show those changes are they&rsquo;re not that interesting.</p>
+
+<p>Now when we use the application as a guest and click &ldquo;Become a member&rdquo; we&rsquo;re redirected to the signup form instead of getting an exception as this is properly handled by the <code>MembersController</code>. When we complete the signup process we&rsquo;re taken back to our to-do list but signed in as a member.</p>
+
+<h3>Polymorphic Associations</h3>
+
+<p>The behaviour of our application hasn&rsquo;t changed but the code is cleaner now that we&rsquo;re using STI. It&rsquo;s hard to say the same thing about the database, though. If we look at our schema we&rsquo;ll see that the users table has three columns that only apply to members.</p>
+
+``` /db/schema.rb
+ActiveRecord::Schema.define(:version => 20121212202638) do
+  create_table "tasks", :force => true do |t|
+    t.integer  "user_id"
+    t.string   "name"
+    t.boolean  "complete",   :default => false, :null => false
+    t.datetime "created_at",                    :null => false
+    t.datetime "updated_at",                    :null => false
+  end
+
+  create_table "users", :force => true do |t|
+    t.string   "username"
+    t.string   "email"
+    t.string   "password_digest"
+    t.datetime "created_at",      :null => false
+    t.datetime "updated_at",      :null => false
+    t.string   "type"
+  end
+end
+```
+
+<p>This doesn&rsquo;t look too bad in our application but it can quickly get out of hand as our application grows and we add more columns that apply to one type of user or the other the <code>users</code> table can become the dumping ground for a lot of different fields that take up space because it isn&rsquo;t properly normalized. A general rule of thumb is that we have several fields in a table that aren&rsquo;t shared by all the records then Single Table Inheritance isn&rsquo;t the best approach. If we&rsquo;re in this situation a good alternative to STI is Polymorphic Associations. This allows one model to belong to multiple other types of model. The end result is similar to STI but  it allows each different type to have its own model and database table.</p>
+
+<p>There are a couple of different ways that we can use a polymorphic association in our application. One is where a model relates to the users. A <code>Task</code> belongs to a <code>User</code> and has a <code>user_id</code> column. We could add a <code>user_type</code> column here so that it can belong to a either a guest or a member user and have these as separate tables but this means that whenever we add another model that needs to relate to a user this also needs to be a polymorphic association and this is best avoided. A better approach is to keep the <code>users</code> table but to move the columns specific to a member out into a <code>member_profile</code> table. We can then also have a <code>guest_profile</code> table and have a polymorphic association between users and profiles. To do this we&rsquo;ll start by generating a migration to remove the member-related columns from the users table along with the <code>type</code> column as we&rsquo;re no longer using STI.</p>
+
+``` terminal
+$ rails g migration remove_member_from_users username email password_digest type
+```
+
+<p>Next we&rsquo;ll create two new models, one called <code>MemberProfile</code> with <code>username</code>, <code>email</code> and <code>password_digest</code> fields, as these contain the authentication logic.</p> 
+
+``` terminal
+$ rails g model MemberProfile username email password_digest
+```
+
+<p>We&rsquo;ll also need a <code>GuestProfile</code> model. This won&rsquo;t have any database fields as we won&rsquo;t store any data specific to guests.</p> 
+
+``` terminal
+$ rails g model GuestProfile
+```
+
+<p>Now that we have these two models we&rsquo;ll need to generate another migration to add two fields to associate them with a user. We can then migrate the database.</p>
+
+``` terminal
+$ rails g migration add_profile_to_users profile_id:integer profile_type
+$ rake db:migrate
+```
+
+<p>We should add an index to these database columns to improve performance but we won&rsquo;t do that here. We can now set up the associations. A User should belong to a profile and this needs to be a polymorphic association.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :tasks, dependent: :destroy
+  belongs_to :profile, polymorphic: true
+end
+```
+
+<p>A <code>GuestProfile</code> should have one user.</p>
+
+``` /app/models/guest_profile.rb
+class GuestProfile < ActiveRecord::Base
+  has_one :user, as: profile, dependent: :destroy
+end
+```
+
+<p>We&rsquo;ve used <code>dependent: :destroy</code> here so that when we delete a profile the related User record is deleted too. We&rsquo;ll also do this in the MemberProfile.</p>
+
+``` /app/models/member_profile.rb
+class MemberProfile < ActiveRecord::Base
+  has_one :user, as: :profile, dependent: :destroy
+  attr_accessible :email, :password_digest, :username
+end
+```
+
+The methods we&rsquo;ll add to these two classes are the same as the ones we defined for our <code>Guest</code> and <code>Member</code> classes that we used with STI. First we&rsquo;ll move the <code>Guest</code> methods over.
+
+```/app/models/guest_profile.rb
+class GuestProfile < ActiveRecord::Base
+  has_one :user, as: profile, dependent: :destroy
+  
+  def guest?
+    true
+  end
+  def move_to(user)
+    tasks.update_all(user_id: user.id)
+  end
+  
+  def name
+    "Guest"
+  end
+
+  def task_limit
+    10
+  end
+  
+  def can_share_task?(task)
+    false
+  end
+  
+  def send_password_reset
+  end
+end
+```
+
+<p>Then the <code>Member</code> methods.</p>
+
+``` /app/models/member_profile.rb
+class MemberProfile < ActiveRecord::Base
+  has_one :user, as: :profile, dependent: :destroy
+  
+  attr_accessible :username, :email, :password, :password_confirmation
+
+  validates_presence_of :username, :email
+  validates_uniqueness_of :username, allow_blank: true
+
+  has_secure_password
+  
+  def guest?
+    false
+  end
+    
+  def name
+    username
+  end
+
+  def task_limit
+    1000
+  end
+  
+  def can_share_task?(task)
+    task.user_id == id
+  end
+  
+  def send_password_reset
+    UserMailer.password_reset(self).deliver
+  end  
+end
+```
+
+<p>We have to watch out when we do this as we might access user-specific attributes. One example here is in the <code>can_share_task?</code> method where we should check the <code>user.id</code> rather than the <code>id</code>, which will now be a profile&rsquo;s <code>id</code>.</p>
+
+``` /app/models/member_profile.rb
+def can_share_task?(task)
+  task.user_id == user.id
+end
+```
+
+<p>In the <code>GuestProfile</code> class we have a <code>move_to</code> method which uses the <code>tasks</code> association which isn&rsquo;t present in the profile. Before we change this let&rsquo;s consider what we need to do here. Do we still need to create a separate <code>User</code> record when a guest user becomes a member? Instead of updating all the user ids for the associated records we could just change the profile that&rsquo;s associated with the user record to make them a member. We&rsquo;ll rename this method to <code>become_member</code> and modify it to look like this:</p>
+
+``` /app/models/guest_profile.rb
+def become_member(member_profile)
+  user.profile = member_profile
+  user.save!
+end
+```
+
+<p>We now have a lot of methods that we can call on a profile but in our app we&rsquo;re calling them against <code>User</code> records. We&rsquo;ll modify the <code>User</code> class to delegate these.</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  has_many :tasks, dependent: :destroy
+  belongs_to :profile, polymorphic: true
+  
+  delegate :guest?, :name, :can_share_task?, :send_password_reset, 
+    :become_member, to: :profile
+end
+```
+
+<p>There are other changes that we&rsquo;ll need to make throughout this application. For example the <code>GuestsController</code> creates a new <code>Guest</code> record but it should now create a <code>User</code> and assign a guest profile to them.</p>
+
+``` /app/controllers/guests_controller.rb
+class GuestsController < ApplicationController
+  def create
+    guest = User.create! { |u| u.profile = GuestProfile.create! }
+    session[:user_id] = guest.id
+    redirect_to root_url
+  end
+end
+```
+
+<p>There are similar changes that we&rsquo;ll need to make throughout the application but we won&rsquo;t show those there. The end result is an application that behaves the same way but which uses a polymorphic association. This feels like a cleaner solution as we no longer have all those NULL values in the database and transitioning a user from a guest to a member is a lot cleaner, too.</p> 
+
+<p>There are many other solutions to this problem. The <code>guests_profiles</code> table might not be necessary at all. It doesn&rsquo;t contain any special data in our application and we could have a NULL <code>profile_id</code> to represent a guest user. In this case we wouldn&rsquo;t need to use polymorphic association and we could use a simple Ruby class to handle guest profiles. This is an approach that&rsquo;s worth considering if we only have two different types in our polymorphic association.</p> 
+
+<p>Another alternative to Single Table Inheritance is the State Machine gem which we showed in <a href="http://railscasts.com/episodes/392-a-tour-of-state-machines">episode 392</a>. This allows us to define specific validations and methods for each state which is useful if we need to transition from one type to another frequently. In our situation the polymorphic solution is much nicer.</p>

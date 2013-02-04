@@ -1,0 +1,266 @@
+<p>Let&rsquo;s say that we&rsquo;re building a chat application. Below is a screenshot showing what we&rsquo;ve got so far. A user can type in a message and when they click &ldquo;send&rdquo; an AJAX request is submitted to save it to the database and to append it to the chat window.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1441/original/E401I01.png" width="800" height="450" alt="Our basic chat application."/>
+</div>
+
+<p>If two users are chatting only the user who posts a message sees it appear in their chat window. Everyone has to reload the page to see messages from other users. There are several solutions to this problem and one option is to poll for new messages like we did in <a href="http://railscasts.com/episodes/229-polling-for-changes-revised">episode 229</a>. This works but it means that there&rsquo;s a delay before the other users see the message and also dramatically increases the number of requests made to our application. Alternatively we could use WebSockets and publish over this using something like Faye which we did in <a href="http://railscasts.com/episodes/260-messaging-with-faye">episode 260</a>. In this episode we&rsquo;ll use a third technique using server-sent events which allow us to publish notifications over the HTTP protocol.</p>
+
+<p>With server-sent events we can create a new <code>EventSource</code> on the client and pass it a path or URL. This will maintain a persistent connection to the server and we can also supply a callback function that is triggered whenever an event is received from the server, which needs to send data in a specific format. Unfortunately this isn&rsquo;t supported by all browsers, but recent versions of all the major browsers will work with the exception of Internet Explorer, although <a href="https://github.com/Yaffle/EventSource">a third-party library is available</a> to add IE support. As far as Rails is concerned the tricky part of this is streaming the event data from the server. In previous versions of Rails this was quite difficult but Rails 4 has a new feature has a new feature called <code>ActionController::Live</code> which simplifies this greatly. Aaron Patterson has written <a href="http://tenderlovemaking.com/2012/07/30/is-it-live.html">a blog post about this</a> which shows how it can be used with server-sent events which is well worth taking the time to read.</p>
+
+<h3>Using ActiveController::Live in Our Application</h3>
+
+<p>We&rsquo;ll use server-sent events to receive notifications in our chat app. To use <code>ActiveController::Live</code> we&rsquo;ll need to use Rails 4, which is currently unreleased. We&rsquo;ve already done that in our app and you can find out how by looking at <a href="http://railscasts.com/episodes/400-what-s-new-in-rails-4">episode 400</a>. We can then include the <a href="http://railscasts.com/episodes/400-what-s-new-in-rails-4">ActionController::Live</a> module in any of our controller and use it to steam responses. We&rsquo;ll use this in our <code>MessagesController</code> and create an events action that will publish events to the client. We write to the stream by calling <code>response.stream.write</code> and for now we&rsquo;ll just write three pieces of test data to the stream and pause for two seconds between each piece. After we&rsquo;ve finished writing to a stream it&rsquo;s important to close it so that it doesn&rsquo;t stay open for ever and we do that by calling <code>response.stream.close</code>. It&rsquo;s a good idea to use this with <code>ensure</code> so that it&rsquo;s called even if an exception is raised.</p>
+
+``` /app/controllers/messages_controller.rb
+class MessagesController < ApplicationController
+  include ActionController::Live
+
+  def index
+    @messages = Message.all
+  end
+
+  def create
+    @message = Message.create!(params[:message].permit(:content, :name))
+  end
+
+  def events
+    3.times do |n|
+      response.stream.write "#{n}...\n\n"
+      sleep 2
+    end
+  ensure
+    response.stream.close
+  end
+end
+```
+
+<p>In order to try this out we need to add this action to our routes so we&rsquo;ll do that now.</p>
+
+``` /config/routes.rb
+Chatter::Application.routes.draw do
+  resources :messages do
+    collection { get :events }
+  end
+  root to: 'messages#index'
+end
+```
+
+<p>We can now see if we&rsquo;re streaming data by using <code>curl</code>.</p>
+
+``` terminal
+$ curl localhost:3000/messages/events
+0...
+
+1...
+
+2...
+
+```
+
+<p>When we do this there is a long pause before the data is returned all at once. This is because we&rsquo;re using WEBrick as our server and it buffers the output. We&rsquo;ll have to switch servers to one that can steam responses and handle multiple connections asynchronously. We&rsquo;ll use <a href="http://puma.io/">Puma</a>, but we could use Thin or Rainbows. To install it we just need to add it to the gemfile and run bundle.</p>
+
+``` /Gemfile
+gem 'puma'
+```
+
+<p>We can start up this server by running <code>rails s puma</code> and when we run the <code>curl</code> command again we see the response being streamed just like we want. We can also test to see if we can handle multiple connections at once and by repeating the <code>curl</code> command a couple of times. (Note that <code>repeat</code> only works with zsh, not bash.)</p>
+
+``` terminal
+% repeat 2 (curl localhost:3000/messages/events)
+```
+
+<p>When we do this the responses come in one request at a time so it seems that they&rsquo;re not being handle asynchronously. Threading isn&rsquo;t enabled by default in development mode; to enable it we&rsquo;ll have to set both <code>cache_classes</code> and <code>eager_load</code> to true.</p>
+
+``` /config/environments/development.rb
+config.cache_classes = true
+
+config.eager_load = true
+```
+
+<p>With these settings in place we&rsquo;ll need to restart the server each time we make a change to our application. For more information on multi-threading in Rails applications take a look at <a href="http://railscasts.com/episodes/365-thread-safety">episode 365</a>.</p>
+
+<h3>Streaming Useful Data</h3>
+
+<p>When we restart the server then run the <code>curl</code> command once more the responses will come in asynchronously. With this working we&rsquo;ll update the client so that it listens to new events at that path. We do so by creating a new <code>EventSource</code> and passing in the correct path, then adding an event listener. We need to pass this the name of the event we want to listen to and if we pass <code>&#039;message&#039;</code> this works as a default. We can also pass a callback function which will be called whenever an event is triggered. For now we&rsquo;ll just show an <code>alert</code> that displays the event&rsquo;s data.</p>
+
+
+``` /app/assets/javascripts/messages.js.coffee
+source = new EventSource('/messages/events')
+source.addEventListener 'message', (e) ->
+  alert e.data
+```
+
+<p>Back in the controller we can customize the events action so that it responds in the way the browser expects.</p> 
+
+``` /app/controller/message_controller.rb
+def events
+  response.headers["Content-Type"] = "text/event-stream"
+  3.times do |n|
+    response.stream.write "data: #{n}...\n\n"
+    sleep 2
+  end
+rescue IOError
+  logger.info "Stream closed"
+ensure
+  response.stream.close
+end
+```
+
+<p>First we set the <code>Content-Type</code> header. Whenever we customize headers on a streaming response we need to do this before we write to or close the stream as an exception is raised if we try to do it later on. This needs to be done to all the controller&rsquo;s actions, even though the other ones aren&rsquo;t using streaming, as they all include the <code>ActionController::Live</code> behaviour. If we want to avoid this we&rsquo;ll have to move our streaming actions into a separate controller. In order to trigger events in the browser we&rsquo;ll need to start each line of the response stream with &ldquo;data:&rdquo; and end it with two newline characters. It&rsquo;s also a good idea to rescue any <code>IOError</code> exceptions which can occur if the stream connection is closed when we try to write to it. When this happens we log this error. After we&rsquo;ve restarted the server and reloaded the page, we should now see an alert for each line of data that&rsquo;s streamed to the browser.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1442/original/E401I02.png" width="802" height="502" alt="An alert showing for each line of data that&rsquo;s streamed from the server."/>
+</div>
+
+<p>After all three events have been received the connection will be closed, but <code>EventSource</code> tries to keep it open so it&rsquo;s reopened and the events are retriggered.</p>
+
+<p>With our events system now in place we can use it to display messages as they come in. One way to do this is to poll the database for new messages and that&rsquo;s what we&rsquo;ll do. We&rsquo;ll modify our <code>events</code> action to do this.</p> 
+
+``` /app/controller/message_controller.rb
+def events
+  response.headers["Content-Type"] = "text/event-stream"
+  start = Time.zone.now
+  10.times do
+    Message.uncached do
+      Message.where('created_at > ?', start).each do |message|
+        response.stream.write "data: #{message.to_json}\n\n"
+        start = Time.zone.now
+     end 
+   end
+  sleep 2
+  end
+rescue IOError
+  logger.info "Stream closed"
+ensure
+  response.stream.close
+end
+```
+
+<p>Here we fetch the messages that were created after the current time and return each on as JSON. Once we&rsquo;ve done that we&rsquo;ll reset the time so that only new messages are fetched next time. We&rsquo;ll do this ten times per request for now, though it will automatically reconnect after. In production we&rsquo;d do this for a longer period of time but keeping it short in development will help if the connection hangs. ActiveRecord caches the database query we make per request so new message won&rsquo;t be found each time. To fix this we wrap this code in a <code>Message.uncached</code> block. Queries performed in the block won&rsquo;t be cached so we&rsquo;ll get any new messages that appear.</p>
+
+<p>Now we&rsquo;ll modify our CoffeeScript file so that instead of showing an <code>alert</code> when an event&rsquo;s received we parse the JSON to get a message and append it to the list.</p>
+
+``` /app/assets/javascripts/messages.js.coffee
+source = new EventSource('/messages/events')
+source.addEventListener 'message', (e) ->
+  message = $.parseJSON(e.data).message
+  $('#chat').append($('<li>').text("#{message.name}: #{message.content}))
+```
+
+<p>We&rsquo;ll need to restart the server to try this out but once we have we can open two windows and enter a message in one of them to see if it appears in the other.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1443/original/E401I03.png" width="904" height="502" alt="Any message we add is shown twice in our window."/>
+</div>
+
+<p>The message does appear in the other window but it&rsquo;s also repeated in the one that we entered the message in. This is because we add it on response to the AJAX request but this is easy to fix. In the <code>create</code> action we have a JavaScript template that&rsquo;s executed when a message is added and we can remove this to stop the duplicate message from appearing.</p>
+
+``` /app/views/messages/create.js.erb
+$("#message_content").val('');
+```
+
+<h3>Removing Polling</h3>
+
+<p>There&rsquo;s still a noticeable delay when we send the message before it shows up in the other windows and this is because we&rsquo;re polling the database every two seconds. It would be much better if we were notified when a new message was created and there are a variety of ways that we can do this. If we&rsquo;re using Postgres as our app&rsquo;s database we could use the <a href="http://www.postgresql.org/docs/9.2/static/sql-notify.html">NOTIFY and LISTEN commands</a> to send data across a channel to all listeners. Another option is to use Redis which has <a href="http://redis.io/topics/pubsub">its own pub/sub features</a> and that&rsquo;s what we&rsquo;ll use here. First, we&rsquo;ll add its gem to the gemfile.</p>
+ 
+``` /Gemfile
+gem 'redis'
+```
+
+<p>Next we&rsquo;ll create an initializer file and set up a shared Redis connection in it.</p>
+
+``` /config/initializers/redis.rb
+$redis = Redis.new
+```
+
+<p>Whenever we create a new message now we&rsquo;ll publish it over Redis.</p>
+
+``` /app/controllers/messages_controller.rb
+def create
+  attributes = params.require(:message).permit(:content, :name)
+  @message = Message.create!(attributes)
+  $redis.publish('messages.create', @message.to_json)
+end
+```
+
+<p>When we listen for events we no longer need to poll the database. Instead we can subscribe to the Redis database and stream any messages that arrive.</p>
+
+``` /app/controllers/messages_controller.rb
+def events
+  response.headers["Content-Type"] = "text/event-stream"
+  start = Time.zone.now
+  redis = Redis.new
+  redis.subscribe('messages.create') do |on|
+    on.message do |event, data|
+      response.stream.write("data: #{data }\n\n")
+    end
+  end
+rescue IOError
+  logger.info "Stream closed"
+ensure
+  redis.quit
+  response.stream.close
+end
+```
+
+<p>Doing this locks the connection so we need to create a new connection to the database.  We can then subscribe to <code>messages.create</code> and when a message arrives we can stream it out. Finally we ensure that the connection is closed.</p>
+
+<p>We can try this out now. We&rsquo;ll start up the Redis server and restart the Puma server then open two browser windows.</p> 
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1444/original/E401I04.png" width="924" height="435" alt="Messages now appear in each window correctly."/>
+</div>
+
+<p>When we enter a message in one window it now immediately appears in the other. There does seem to be a small issue, however, as the message we&rsquo;ve entered hasn&rsquo;t been cleared from the text box. This is because we&rsquo;re returning the wrong MIME type from the <code>create</code> action but this is easy to fix.</p>
+
+``` /app/controllers/messages_controller.rb
+def create
+  response.headers["Content-Type"] = "text/javascript"
+  attributes = params.require(:message).permit(:content, :name)
+  @message = Message.create!(attributes)
+  $redis.publish('messages.create', @message.to_json)
+end
+```
+
+<p>It seems that when we started publishing to Redis the content type changed to <code>text/html</code> and so we need to override it.</p>
+
+<p>While we&rsquo;re in the controller we&rsquo;ll show you something else that we can do with our Redis setup. Instead of using <code>subscribe</code> we can use <code>psubscribe</code>, which stands for pattern subscribe, to match all the message-related events. We can then use <code>pmessage</code> to listen to all the events that match a pattern.</p>
+
+``` /app/controllers/messages_controller.rb
+def events
+  response.headers["Content-Type"] = "text/event-stream"
+  start = Time.zone.now
+  redis = Redis.new
+  redis.psubscribe('messages.*') do |on|
+    on.pmessage do |pattern, event, data|
+      response.stream.write("event: #{event}\n")
+      response.stream.write("data: #{data}\n\n")
+    end
+  end
+rescue IOError
+  logger.info "Stream closed"
+ensure
+  redis.quit
+  response.stream.close
+end
+```
+
+<p>With this set up we can send the event name back to the client along with the data. Note that there&rsquo;s only one newline character after the event, unlike after the data where we sent two. We can now modify our CoffeeScript file so that we listen for the <code>create</code> event.</p>
+
+``` /app/assets/javascripts/messages.js.coffee
+source = new EventSource('/messages/events')
+source.addEventListener 'message.create', (e) ->
+  message = $.parseJSON(e.data).message
+  $('#chat').append($('<li>').text("#{message.name}: #{message.content}"))
+```
+
+<p>We can now easily add other events to the controller for updating or anything else we might want to do with the messages and have them reflected instantly on the client.</p> 
+
+<h3>Scaling For Production</h3>
+
+<p>Our solution is pretty much complete now and adding a message instantly sends it to all the listening clients. Let&rsquo;s take a quick look at how we might scale this for a production setup. If we use Puma as our web server it will default to a maximum of 16 threads. This means that we could only have 16 persistent connections open at once and these will be used up quickly if we&rsquo;re using long-running connections , as we are in our app. We&rsquo;ll need to either increase this number or try a different server such as Thin or Rainbows. Another setting we&rsquo;ll need to change is the pool limit that&rsquo;s set in the database YAML file. This has a default of 5 but we should bump it up to the number of threads that we want to accept per Rails instance. Rails reserves a database connection for every request that comes in even if that request doesn&rsquo;t talk to the database.</p>
+
+<p>Managing long-running requests, like our event action, is something that Rails hasn&rsquo;t done much of in the past so there may be some optimizations which aren&rsquo;t in place when Rails 4.0 is released. If you use this technique you should keep an eye our for memory leaks or other potential issues.</p> 
+
+<p><code>ActionController:::Live</code> has a lot of potential but given the current state of Rails 4 it&rsquo;s not easy to recommend over moving long-running requests into smaller process outside Rails, such as Faye.</p>

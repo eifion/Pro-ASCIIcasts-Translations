@@ -1,0 +1,260 @@
+<p>In this episode we&rsquo;ll continue the walk through the Rails source code that we started in <a href="http://railscasts.com/episodes/395-action-controller-walkthrough">episode 395</a> this time looking at the view layer. What exactly happens when Rails renders a template in response to a request? The first thing we&rsquo;ll do is try to get some context as to where our code is being executed in the Rails stack so we&rsquo;ll modify the template for a page in a Rails application to display the current class.</p>
+
+``` /app/views/articles/index.html.erb
+<h1>Articles</h1>
+
+<%= self.class %>
+
+<div id="articles">
+  <%= render @articles %>
+</div>
+
+<p><%= link_to "New Article", new_article_path %></p>
+```
+
+<p>When we load this page now we&rsquo;ll see what looks like an anonymous class which isn&rsquo;t very helpful. If we change this to get the current class&rsquo;s <code>superclass</code> instead we&rsquo;ll get a more useful result.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1426/original/E397I01.png" width="800" height="500" alt="The page showing its superclass, ActionView::Base."/>
+</div>
+
+<p>Now we&rsquo;re getting somewhere. The code inside our layout file is executed in the context of <code>ActionView::Base</code>; where is this in the Rails source code? We can get the Rails source code by cloning its Git repository by running the following command. We&rsquo;ll then move into the <code>rails</code> directory and check out the branch of the code that matches the version of Rails that our application is using.</p>
+
+``` terminal
+$ git clone https://github.com/rails/rails.git
+$ cd rails
+$ git checkout v3.2.9
+```
+
+<p>The view and controller code is under the <code>actionpack/lib</code> directory and in here we&rsquo;ll find the <code>ActionView::Base</code> class. This class includes a number of modules, three of which are <code>Helpers</code>, <code>::ERB::Util</code> and <code>Context</code>. The <code>Helpers</code> module includes a large number of other modules that contain all the helper methods that we use all the time in our views, while <code>::ERB::Util</code> contains code to handle escaping, such as HTML escaping. The <code>Context</code> module is rather interesting. According to its documentation it can be used in another class that we want to act as a view context beside <code>ActionView::Base</code>. There aren&rsquo;t many examples of this in action but it seems like an interesting idea.</p>
+
+<h3>Following a Request</h3>
+
+<p>Now that we have some idea as to where the view code is located we&rsquo;ll take a look at what happens when a request comes in to our index action. In episode 395 we walked through what happens in the controller layer when a request comes in. In the <code>AbstractController::Rendering</code> module we have a <code>render</code> method which is where the controller and view layers meet.</p> 
+
+``` /abstract_controller/rendering.rb
+def render(*args, &block)
+  options = _normalize_render(*args, &block)
+  self.response_body = render_to_body(options)
+end
+```
+
+<p>It&rsquo;s this method that renders the template and sets it to the body of the response. Before it does the rendering it generates some options by calling <code>_normalize_render</code>. This method calls <code>_normalize_args</code> and if we pass it a symbol or a string it will convert it to an <code>:action</code> option. It then calls <code>_normalize_options</code> which in most cases will add <code>:template</code> and <code>:prefixes</code> options to our render call.</p>
+
+<h3>Lookup Contexts, View Contexts, View Renderers</h3>
+
+<p>Let&rsquo;s go back to our Rails app to see what this is doing. We saw in episode 395 that if there&rsquo;s no call to <code>render</code> in an action it&rsquo;s called implicitly without any arguments. In the case the <code>:template</code> option is set to the name of the action and <code>:prefixes</code> is set to the name of the controller and its superclasses, in this case to <code>%w[articles application]</code>. This means that <code>render</code> will look for an <code>index</code> template in the <code>articles</code> directory or in the <code>application</code> directory if this doesn&rsquo;t exist. Back in the <code>render</code> method in the Rails source code after we normalize the options we call <code>render_to_body</code> and this calls <code>_render_template</code>.</p> 
+
+``` /abstract_controller/rendering.rb
+def _render_template(options) #:nodoc:
+  lookup_context.rendered_format = nil if options[:formats]
+  view_renderer.render(view_context, options)
+end
+```
+
+<p>This method first clears the <code>lookup_context.rendered_format</code> if a <code>:formats</code> option exists, then calls <code>render</code> on a view renderer, passing in a view context. There are three different objects that we&rsquo;re introducing here: <code>view_context</code>, <code>view_renderer</code> and <code>lookup_context</code> and these are all related to rendering out the view. We&rsquo;ll look at each one, starting with the <code>view_context</code>.</p>
+
+<p>This instantiates a new <code>view_context_class</code> which calls <code>ActionView::Base.prepare</code>. This method calls <code>Class.new</code> which creates a new anonymous class and as we pass <code>self</code> to it it will create a subclass of <code>ActionView::Base</code>. This is the anonymous class that we saw at the beginning of this episode when we inspected it in the template.</p>
+
+``` action_view/base.rb
+def prepare(routes, helpers) #:nodoc:
+  Class.new(self) do
+    if routes
+      include routes.url_helpers
+      include routes.mounted_helpers
+    end
+
+    if helpers
+      include helpers
+      self.helpers = helpers
+    end
+  end
+end
+```
+
+<p>This class inherits all the behaviour of <code>ActionView::Base</code> and also includes a few modules passed in from the controller. This gives us some custom routing and helper behaviour so that each controller can have its own context that has specific methods in it. When the <code>view_context_class</code> is instantiated we pass in a few arguments, including one called <code>view_assigns</code>. This is where we transfer the instance variables from the controller to the view.</p> 
+
+``` /abstract_controller/rendering.rb
+def view_assigns
+  hash = {}
+  variables  = instance_variable_names
+  variables -= protected_instance_variables
+  variables -= DEFAULT_PROTECTED_INSTANCE_VARIABLES
+  variables.each { |name| hash[name.to_s[1, name.length]] = instance_variable_get(name) }
+  hash
+end
+```
+
+<p>Here we grab the instance variable names from the controller and assign their values into a hash. This is passed in to <code>ActionView::Base</code> when we instantiate it and an <code>assign</code> method is then called which sets instance variables for each value in that hash. Some developers don&rsquo;t like the fact that Rails does this as it goes against the grain of objects but it&rsquo;s good to know that the code involved isn&rsquo;t too complex.</p> 
+
+<p>Now that we have some idea as to how a view context is set up we&rsquo;ll take a look at the <code>lookup_context</code> next. This method is defined in the <code>view_paths</code> module and it creates a new <code>ActionView::LookupContext</code>, passing in the view paths along with a few other details.</p>
+
+``` abstract_controller/view_paths.rb
+def lookup_context
+  @_lookup_context ||=
+        ActionView::LookupContext.new(self.class._view_paths, details_for_lookup, _prefixes)
+end
+```
+
+<p>To get a better understanding as to what view paths are we&rsquo;ll take a look at this in the Rails console. If we call <code>view_paths</code> on our <code>ArticlesController</code> we get a <code>PathSet</code> object back.</p>
+
+``` console
+>> ArticlesController.view_paths
+=> #<ActionView::PathSet:0x007fc2e1f49088 @paths=[/Users/eifion/blog/app/views]>
+```
+
+<p>This object includes the paths to the views directory for that controller and there are ways to extend this and add other directory paths and <a href="http://railscasts.com/episodes/269-template-inheritance">episode 269</a> has more details on how to do this.</p>
+
+<p>What does a <code>LookupContext</code> do? This class is defined in the <code>action_view</code> directory and as its name implies it&rsquo;s used to look up templates so it makes sense that we need to pass our view paths into it. We&rsquo;ll look at this class later when we look at rendering a template. Speaking of rendering let&rsquo;s go back to the <code>Rendering</code> module and take a look at the third piece of the puzzle: <code>ActionView::Renderer</code>. We pass in the lookup context when this is instantiated and this is the object that we call <code>render</code> on when we call <code>render</code> in a controller.</p>
+
+
+``` action_view/renderer/renderer.rb
+# Main render entry point shared by AV and AC.
+def render(context, options)
+  if options.key?(:partial)
+    render_partial(context, options)
+  else
+    render_template(context, options)
+  end
+end
+```
+
+<p>The behaviour for rendering a partial and for rendering a template is quite different so this split is made early on. The <code>render_template</code> method calls render on a <code>TemplateRenderer</code> class. There&rsquo;s quite a lot of code in that method but it basically fetches a template object then renders that template. Let&rsquo;s see how we fetch the template first. This is done in a <code>determine_template</code> method in <code>TemplateRenderer</code>.</p>
+
+``` action_view/renderer/template_renderer.rb
+def determine_template(options) #:nodoc:
+  keys = options[:locals].try(:keys) || []
+
+  if options.key?(:text)
+    Template::Text.new(options[:text], formats.try(:first))
+  elsif options.key?(:file)
+    with_fallbacks { find_template(options[:file], nil, false, keys, @details) }
+  elsif options.key?(:inline)
+    handler = Template.handler_for_extension(options[:type] || "erb")
+    Template.new(options[:inline], "inline template", handler, :locals => keys)
+  elsif options.key?(:template)
+    options[:template].respond_to?(:render) ?
+          options[:template] : find_template(options[:template], options[:prefixes], false, keys, @details)
+  else
+    raise ArgumentError, "You invoked render but did not give any of :partial, :template, :inline, :file or :text option."
+  end
+end
+```
+
+<p>The behaviour in this method changes a lot depending on the options that are passed in. We&rsquo;ll focus on the code that&rsquo;s executed if a <code>:template</code> option is passed in as this is the option that&rsquo;s automatically added when we normalize the render options from the controller action. This code calls <code>find_template</code> and this method is delegating to the lookup context. This makes sense since that is designed to fetch a template. In <code>LookupContext</code> <code>find_template</code> is delegated to find which uses the view paths to find it.</p>
+
+``` action_view/lookup_context.rb
+def find(name, prefixes = [], partial = false, keys = [], options = {})
+  @view_paths.find(*args_for_lookup(name, prefixes, partial, keys, options))
+end
+alias :find_template :find
+```
+
+<p>The <code>@view_paths</code> variable is set to an instance of <code>PathSet</code> and this class&rsquo;s <code>find</code> method looks for all the templates and fetches the first one. If it doesn&rsquo;t find any it raises a <code>MissingTemplate</code> exception.</p>
+
+``` action_view/path_set.rb
+def find(*args)
+  find_all(*args).first || raise(MissingTemplate.new(self, *args))
+end
+
+def find_all(path, prefixes = [], *args)
+  prefixes = [prefixes] if String === prefixes
+  prefixes.each do |prefix|
+    paths.each do |resolver|
+      templates = resolver.find_all(path, prefix, *args)
+      return templates unless templates.empty?
+    end
+  end
+  []
+end
+```
+
+<p>The <code>find_all</code> method here loops through all the different paths that are available and returns a resolver which we call <code>find_all</code> on. The <code>Resolver</code> class lives in the <code>template</code> directory and its <code>find_all</code> method looks for a cached template that matches the details passed in and calls <code>find_templates</code> if it fails to find one.</p>
+
+``` action_view/template/resolver.rb
+# Normalizes the arguments and passes it on to find_template.
+def find_all(name, prefix=nil, partial=false, details={}, key=nil, locals=[])
+  cached(key, [name, prefix, partial], details, locals) do
+    find_templates(name, prefix, partial, details)
+  end
+end
+```
+
+<p>The <code>find_templates</code> method raises a <code>NotImplementedError</code> if it&rsquo;s called unless we&rsquo;re calling it on a subclass, which is what we&rsquo;re doing in our Rails application. The resolver can fetch templates in different ways depending on the class that we&rsquo;re using and the Crafting Rails book has an example of how we can make a custom resolver. This method is also defined in the <code>PathResolver</code> class which inherits from <code>Resolver</code> and which is in the same file as it. This calls <code>query</code> which is finally the code that reads the contents of the template file and creates a <code>Template</code> object. We pass the file&rsquo;s contents into this object and also a handler object which will interpret the template. Rails comes built-in with a couple of handlers for erb and XML builder but we can create our own as we demonstrated in <a href="http://railscasts.com/episodes/379-template-handlers">episode 379</a>.</p>
+
+<p>Now that we have our template object let&rsquo;s quickly review what it took to get it. Our template renderer delegated to the lookup context which in turn delegated to the path set and this delegated to the resolver. The code goes through quite a few layers but this allows for some flexibility in which layers we can swap out if we want to change some of the lookup behaviour.</p> 
+
+<p>Let&rsquo;s go all the way back up the chain to our template renderer. We now know that its <code>find_template</code> method ends up returning a <code>Template</code> object. Once we have this object we can render it and this is done in a <code>render_template</code> method. Before we attempt to render the template  we first try to render it with a layout.</p> 
+
+``` action_view/renderer/template_renderer.rb
+def render_template(template, layout_name = nil, locals = {})
+  view, locals = @view, locals || {}
+
+  render_with_layout(layout_name, locals) do |layout|
+    instrument(:template, :identifier => template.identifier, :layout => layout.try(:virtual_path)) do
+    template.render(view, locals) { |*name| view._layout_for(*name) }
+    end
+  end
+end
+```
+
+<p>To fetch a layout <code>render_with_layout</code> we call <code>find_layout</code> which calls <code>resolve_layout</code> and this fetches a layout in one of a variety of ways, most of which call <code>find_template</code>. A layout template is fetched in the same way as a normal template and once we&rsquo;ve fetched it we yield to the block that&rsquo;s passed in which will render the template first and then the layout. The content of the rendered template goes into the layout wherever it calls <code>yield</code> without an argument being passed in.</p>
+
+<p>Next let&rsquo;s find out what the render method on the <code>Template</code> object does. The rendering behaviour is split into two parts. First the template is compiled which generates a new method on the view context. This method is then called on the view. This is done for performance reasons.</p>
+
+``` action_view/template.rb
+def render(view, locals, buffer=nil, &block)
+  ActiveSupport::Notifications.instrument("!render_template.action_view", :virtual_path => @virtual_path) do
+    compile!(view)
+    view.send(method_name, locals, buffer, &block)
+  end
+rescue Exception => e
+  handle_render_error(view, e)
+end
+```
+
+<p>The <code>compile!</code> method ends up calling a <code>compile</code> method but before that it checks to see which module it should add the method to. Ours will be added to <code>ActionView::CompiledTemplates</code> which is a module that holds the compiled template code which is the module we&rsquo;re adding the compile method to.</p>
+
+``` action_view/template.rb
+if view.is_a?(ActionView::CompiledTemplates)
+  mod = ActionView::CompiledTemplates
+else
+  mod = view.singleton_class
+end
+
+compile(view, mod)
+```
+
+<p>This module is passed to the <code>compile</code> method and this calls <code>@handler.call</code>. If you&rsquo;re familiar with template handlers you&rsquo;ll know that this should return some Ruby code that needs to be compiled into a method. This code is added to the end of a dynamic method definition and this method is then added to the module.</p>
+
+``` action_view/template.rb
+def compile(view, mod) #:nodoc:
+  encode!
+  method_name = self.method_name
+  code = @handler.call(self)
+  
+  source = <<-end_src
+    def #{method_name}(local_assigns, output_buffer)
+      _old_virtual_path, @virtual_path = @virtual_path, #{@virtual_path.inspect};_old_output_buffer = @output_buffer;#{locals_code};#{code}
+    ensure
+      @virtual_path, @output_buffer = _old_virtual_path, _old_output_buffer
+     end
+  end_src
+
+  # rest of method omitted.
+end
+```
+
+<p>The name of the compiled method is determined in the <code>method_name</code> method.</p>
+
+``` action_view/template.rb
+def method_name #:nodoc:
+  @method_name ||= "_#{identifier_method_name}__#{@identifier.hash}_#{__id__}".gsub('-', "_")
+end
+```
+
+<p>This will look familiar if you&rsquo;ve ever seen an exception raised in the view. The method name is long and includes the name of the template and it&rsquo;s here where it&rsquo;s generated.</p>
+
+<p>Back in the render method after <code>compile!</code> is called we call <code>view.send</code> and pass in the name of the generated method. It&rsquo;s this that renders out the template and returns the string of content. The code defined in the compiled method it determined by the handler, in this case an erb template. The string of rendered content is returned in the template renderer from the render method and is eventually set to the <code>response_body</code> in the <code>Rendering</code> module.</p> 
+
+<p>There&rsquo;s quite a bit going on behind the scenes when a request comes in to a Rails application and a template is rendered, but as there&rsquo;s a lot of caching built into the framework so this all works fairly quickly. One thing we haven&rsquo;t covered in this episode are the helper methods that can be called in a template such as <code>render</code> or <code>link_to</code>, but these are easy to explore on your own.</p>

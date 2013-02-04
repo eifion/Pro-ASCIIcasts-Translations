@@ -1,0 +1,311 @@
+<p>The topic of state machines has never been covered by any previous episode. They can be overused in Rails applications but there are good uses for them and there is no shortage of gems to help us out when we want to use them. In this episode we&rsquo;ll give you a tour of three different state machine gems but before we do that we&rsquo;ll show an application where a state machine would be a good fit. A classic case for a state machine is an e-commerce application with an Order model. Usually each order will go through a number of states as a user works their way through the checkout process and their order is processed. In our current application we use <code>datetime</code> columns in the database to do this, although we could use boolean fields.</p>
+
+``` /db/schema.rb
+create_table "orders", :force => true do |t|
+  t.datetime "purchased_at"
+  t.datetime "canceled_at"
+  t.datetime "shipped_at"
+  t.datetime "created_at",   :null => false
+  t.datetime "updated_at",   :null => false
+end
+```
+
+<p>In the database table we store the time that the order is purchased and either cancelled or shipped. If we find ourselves adding a lot of <code>datetime</code> or <code>boolean</code> fields to a table this is a good indication that we should use a state machine instead, especially if these fields depend upon each other. For example in our application we don&rsquo;t want to ship an order unless it&rsquo;s already been purchased or if it&rsquo;s been cancelled. Another indication that we should use a state machine is when we have a lot of boolean logic in a model. Our <code>Order</code> model has an <code>open?</code> method and for an order to be considered open it must be purchased and not cancelled or shipped. This kind of logic is duplicated in our database queries where we have an <code>open_orders</code> query which performs a similar check.</p>
+
+``` /app/model/order.rb
+def self.open_orders
+  where('purchased_at is not null and canceled_at is null and shipped_at is null')
+end
+
+def open?
+  purchased_at && !canceled_at && !shipped_at
+end
+```
+
+<p>This isn&rsquo;t too bad in itself but things can quickly get out of hand if we need to handle returned shipments, refund payments or add some other processing state. It would be better if we had a way to track the state that an order is currently in without having all this logic. (By the way, the rest of our <code>Order</code> class has methods that handle different events such as the order being purchased, shipped or cancelled.)</p>
+
+<p>We also have specs for this class which mainly check the behaviour of when an order is considered open. For example it&rsquo;s considered open after a purchase, but not after an invalid purchase. Our goal is to modify these specs as little as possible as we want this overall behaviour to stay the same as we change our application to use a state machine.</p>
+
+<p>If you&rsquo;re unfamiliar with state machines it&rsquo;s worth reading the <a href="http://en.wikipedia.org/wiki/Finite-state_machine">Wikipedia article on the subject</a> which provides a nice example using a turnstile with two states: locked and unlocked. When an event happens, such as adding a coin or pushing the turnstile the turnstile will move from one state to the other. The key words here are state, event and transition and these are often used in the DSL in the various gems.</p>
+
+<h3>The State Machine Gem</h3>
+
+<p>We&rsquo;ll start our look at the various Ruby state machine gems with the most popular, which is simply called <a href="https://github.com/pluginaweek/state_machine">State Machine</a>. This is fully-featured and can be used with a simple Ruby class although it also can be used with a number of ORMs such as ActiveRecord, DataMapper, Mongoid and more. To set it up in our application we first need to add the <code>state_machine</code> gem to our gemfile.</p>
+
+``` /Gemfile
+gem 'state_machine'
+```
+
+<p>Next we need to generate a migration to add a string column called <code>state</code> to the model that we want to affect.</p> 
+
+``` /db/migrate/20121203000000_create_orders.rb
+class CreateOrders < ActiveRecord::Migration
+  def change
+    create_table :orders do |t|
+      t.string :state
+      t.timestamps
+    end
+  end
+end
+```
+
+<p>Inside this model we need to add a call to <code>state_machine</code>. We can set an initial state here if we want then specify different events using the gem&rsquo;s DSL. Each event can have a <code>transition</code> so that it can transition from one state to another.</p>
+
+``` /app/models/order.rb
+class Order < ActiveRecord::Base
+  scope :open_orders, -> { with_state(:open) }
+  attr_accessor :invalid_payment
+
+  state_machine initial: :incomplete do
+    event :purchase do
+      transition :incomplete => :open
+    end
+
+    event :cancel do
+      transition :open => :canceled
+    end
+
+    event :resume do
+      transition :canceled => :open
+    end
+
+    event :ship do
+      transition :open => :shipped
+    end
+
+    before_transition :incomplete => :open do |order|
+      # process payment ...
+      !order.invalid_payment
+    end
+  end
+end
+```
+
+<p>Note that we&rsquo;re not using the Ruby 1.9 hash syntax in our transitions, though there&rsquo;s nothing to stop us from doing so. This gem also supports transitions and we have a <code>before_transition</code> block in our class which is fired when we go from an <code>incomplete</code> state to an open order and it&rsquo;s this block that processes the payment. This returns a boolean value and if it returns <code>false</code> the transition won&rsquo;t continue so if the payment is invalid the order will stay as incomplete. Finally if we look at the top of the class we&rsquo;ll see that the gem provides a <code>with_state</code> scope which can be used to query the database. The scope we have returns all the open orders.</p>  
+
+<p>We haven&rsquo;t had to change the specs for the class at all. We can still call <code>purchase</code> on an order to trigger an event and each event has its own method that we can call which will transition to the appropriate state. If the transition fails then it will fall back to the previous state. All the behaviour defined in our order spec works like we expect and so there is no need to make any changes.</p>
+
+<p>There&rsquo;s a lot more that we can do with this gem and we&rsquo;ll show you some of them in the Rails console. First we&rsquo;ll create a new <code>Order</code> then check its state by calling <code>state</code> on it; this returns &ldquo;incomplete&rdquo;. We can also check a state by calling it with a query method such as <code>incomplete?</code>. If we want to see if we can perform a specific event from the current state by calling <code>can_</code> and the name of the event, such as <code>can_cancel?</code> or <code>can_purchase?</code>.</p> 
+
+``` console
+>> o = Order.create
+>> o.state
+=> "incomplete"
+>> o.incomplete?
+=> true
+>> o.can_cancel?
+=> false
+>> o.can_purchase?
+=> true
+```
+
+<p>Given that <code>can_purchase?</code> returned <code>true</code> we&rsquo;ll call <code>purchase</code> on our order then call <code>state_events</code> to see what events we can call from the order&rsquo;s current state.</p>
+
+``` console
+>> o.purchase
+>> o.state_events
+=> [:cancel, :ship]
+```
+
+<p>Most of the other state machine gems we&rsquo;ll show here provide similar functionality but one feature that&rsquo;s unique to this gem is the ability to define behaviour for a specific state. For example we can add validations or define methods inside a <code>state</code> block which will only take place when the object is in that given state. This can be really useful for multi-page forms, although it can be a little too &ldquo;magical&rdquo;. One issue with this gem is its the size. It&rsquo;s <code>lib</code> directory contains over 3,000 lines of code which is around ten times that of some of the alternatives. If the size of your app&rsquo;s dependencies is an issue then you might want to consider a different solution.</p>
+
+<h3>Acts As State Machine</h3>
+
+<p>Let&rsquo;s take a look at another gem, <a href="https://github.com/aasm/aasm">Acts As State Machine</a>. This project seems to be more active than the alternatives and it also works on plain Ruby classes or on ActiveRecord models. It&rsquo;s installed in a similar way to the State Machine gem. First we need to add the gem to our Gemfile and run bundle to install it.</p>
+
+``` /Gemfile
+gem 'aasm'
+```
+
+<p>We also need a migration to add an <code>aasm_state</code> field to our orders table.</p>
+
+``` /db/migrations/20121203000000_create_orders.rb
+class CreateOrders < ActiveRecord::Migration
+  def change
+    create_table :orders do |t|
+      t.string :aasm_state
+      t.timestamps
+    end
+  end
+end
+```
+
+<p>The name of this column is configurable, as it is will all of the gems we&rsquo;re showing here, and there are more details about this in the README.</p> 
+
+<p>Things are a little different in the <code>Order</code> model here.</p> 
+
+``` /app/models/order.rb
+class Order < ActiveRecord::Base
+  include AASM
+
+  scope :open_orders, -> { where(aasm_state: "open") }
+  attr_accessor :invalid_payment
+
+  aasm do
+    state :incomplete, initial: true
+    state :open
+    state :canceled
+    state :shipped
+
+    event :purchase, before: :process_purchase do
+      transitions from: :incomplete, to: :open, guard: :valid_payment?
+    end
+
+    event :cancel do
+      transitions from: :open, to: :canceled
+    end
+
+    event :resume do
+      transitions from: :canceled, to: :open
+    end
+
+    event :ship do
+      transitions from: :open, to: :shipped
+    end
+  end
+
+  def process_purchase
+    # process order ...
+  end
+
+  def valid_payment?
+    !invalid_payment
+  end
+end
+```
+
+<p>We need to include the <code>AASM</code> module in our class to add its functionality and we use  an <code>aasm</code> block to define the states and events. First we use state to define the states and we can set one of these to be the initial state. The events are defined in a similar way as before except that callbacks are handled a little differently. Here we add them directly to the event and they trigger a method when the callback happens. AASM doesn&rsquo;t seem to care what the callback methods return but we can add a <code>guard</code> clause to a specific transition and this will stop the transition from taking place if its method returns <code>false</code>. Another difference is how we query the database. There doesn&rsquo;t seem to be a specific named scope for this, but we can easily use a <code>where</code> condition as we have here.</p>
+
+<p>We had to make some changes to our specs to get the tests to pass. One key difference is that if we call an event and that event fails the object doesn&rsquo;t revert back to its previous state. Instead an <code>AASM::InvalidTransaction</code> is raised. Another difference is that a record isn&rsquo;t automatically saved to the database when  it transitions to a new state; we need to call an event with an exclamation mark if we want it so save. Acts As State Machine is a decent option but its code does feel a little old, especially the ActiveRecord adapter and how it integrates with Rails.</p> 
+
+<h3>Workflow</h3>
+
+<p>Next we&rsquo;ll try <a href="https://github.com/geekq/workflow">Workflow</a>. This gem is much lighter than the others and is made up of a single file that&rsquo;s only a few hundred lines long. This is installed in the same way as the other gems.</p>
+
+``` /Gemfile
+gem 'workflow'
+```
+
+<p>Next we need to add a string column called <code>workflow_state</code> to the table we want to modify.</p>
+
+``` /db/migrate/20121203_create_orders.rb
+class CreateOrders < ActiveRecord::Migration
+  def change
+    create_table :orders do |t|
+      t.string :workflow_state
+      t.timestamps
+    end
+  end
+end
+```
+
+<p>We also need to include a <code>Workflow</code> module in our model.</p>
+
+``` /app/model/orders.rb
+class Order < ActiveRecord::Base
+  include Workflow
+
+  scope :open_orders, -> { where(workflow_state: "open") }
+
+  workflow do
+    state :incomplete do
+      event :purchase, transition_to: :open
+    end
+    state :open do
+      event :cancel, transition_to: :canceled
+      event :ship, transition_to: :shipped
+    end
+    state :canceled do
+      event :resume, transition_to: :open
+    end
+    state :shipped
+  end
+
+  def purchase(valid_payment = true)
+    # process purchase ...
+    halt unless valid_payment
+  end
+end
+```
+
+<p>The DSL for defining states and events is a little different from the other gems&rsquo;. We pass a block to the <code>state</code> method along with the name of the state and define the events and transitions inside that block. This works really well in our situation where we have a nice concise workflow, although the other gems&rsquo; DSLs make the events stand out a little more. What is good about Workflow is that we can handle callbacks by defining a method with the same name as the event. In our class we have a <code>purchase</code> callback where we process the purchase  then halt the transition if it isn&rsquo;t valid. This allows an event to take arguments and we&rsquo;ve used these in some of our specs when we call <code>purchase!</code>.</p>
+
+``` /spec/model/order_spec.rb
+it "is not open after invalid purchase" do
+  order = Order.create!
+  order.purchase!(false)
+  order.should_not be_open
+end
+```
+
+<p>Because of this each of the events needs to be called with an exclamation mark so that they don&rsquo;t conflict with the defined method.</p>
+
+<h3>Other Options</h3>
+
+<p>So far we&rsquo;ve only covered three gems but there are a many alternatives that are worth considering, such as the <a href="https://github.com/troessner/transitions">Transitions gem</a>. All these work in a similar way, storing the state in a database column. We might want to keep track of more information, though, such as the history of the different states and the time that the transition took place. To accomplish this we can use the <a href="https://github.com/wvanbergen/state_machine-audit_trail">State Machine Audit Trail gem</a> that builds on State Machine or use something more generic such as Paper Trail. That said doing this from scratch isn&rsquo;t difficult so to end this episode we&rsquo;ll write an alternative solution which keeps track of the history of events without using any external gems.</p>
+
+<p>We&rsquo;re starting with an <code>orders</code> table which has nothing to keep track of the current state. Instead we have an <code>order_events</code> table handled by an <code>OrderEvent</code> model. This model belongs to <code>Order</code> and has a <code>state</code> field. In the <code>Order</code> model we have a <code>has_many</code> association with events. We define the various states in this model and delegate query versions of each state to a <code>current_state</code> method.</p> 
+
+``` /app/models/order.rb
+class Order < ActiveRecord::Base
+  has_many :events, class_name: "OrderEvent"
+
+  STATES = %w[incomplete open canceled shipped]
+  delegate :incomplete?, :open?, :canceled?, :shipped?, to: :current_state
+
+  def self.open_orders
+    joins(:events).merge OrderEvent.with_last_state("open")
+  end
+
+  def current_state
+    (events.last.try(:state) || STATES.first).inquiry
+  end
+
+  def purchase(valid_payment = true)
+    if incomplete?
+      # process purchase ...
+      events.create! state: "open" if valid_payment
+    end
+  end
+
+  def cancel
+    events.create! state: "canceled" if open?
+  end
+
+  def resume
+    events.create! state: "open" if canceled?
+  end
+
+  def ship
+    events.create! state: "shipped" if open?
+  end
+end
+```
+
+<p>This method determines the current state based on the latest event or, if there isn&rsquo;t one it grabs the first state as the initial state, and calls <code>inquiry</code> on it. This provides some additional query methods that we can call on the current state. ActiveSupport provides this and makes it possible. The events are simply method definitions which means that they can take arguments. We first check the state that we want to transition from then transition to the new state by creating a new event.</p> 
+
+<p>This approach means that there&rsquo;s no need for a DSL or using callbacks. The only tricky part is querying the database. This is done is a class method called <code>open_orders</code> where we join the <code>events</code> table and merge some additional clauses from inside the <code>OrderEvent</code> scope. This finds all the latest events that match a certain state. This is defined in <code>OrderEvent</code>.</p>
+
+``` /app/models/order_event.rb
+class OrderEvent < ActiveRecord::Base
+  belongs_to :order
+  attr_accessible :state
+
+  validates_presence_of :order_id
+  validates_inclusion_of :state, in: Order::STATES
+
+  def self.with_last_state(state)
+    order("id desc").group("order_id").having(state: state)
+  end
+end
+```
+
+<p>This class also has some validations to ensure that the state is in the list of valid states.</p>
+
+<p>Overall this is about fifty lines of code and our custom solution keeps track of the history of events and timing of them all. While it doesn&rsquo;t have all the conveniences of some of the gems we&rsquo;ve looked at these can be added if necessary.</p>
+
+
+
+
+
+

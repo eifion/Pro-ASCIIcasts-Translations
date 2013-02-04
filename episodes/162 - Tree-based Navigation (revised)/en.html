@@ -1,0 +1,213 @@
+<p>If we&rsquo;re working with an application that has a lot of content we might want to create a nested menu system with multiple root menu items displayed at the top and each top menu item displaying a sidebar of nested items. We could even add a breadcrumb trail so that the user can see where in the navigation they currently are and get get back to the root items easily.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1419/original/E162RI06.png" width="800" height="450" alt="The application we want to build."/>
+</div>
+
+<p>In this episode we&rsquo;ll create this project from scratch and we&rsquo;ll start by creating a new Rails application that we&rsquo;ll call <code>cms</code>.</p>
+
+``` terminal
+$ rails new cms
+$ cd cms
+```
+
+<p>So, how should we start building our application? We&rsquo;ll use the user interface to drive the design and to do so we&rsquo;ll look for hints of resources within it. A good indication is a list, especially if its something whose contents should be stored in the database. The list of pages in the left sidebar is such a thing; we want to be able to manage it through an administrative interface and so we&rsquo;ll turn it into a resource.</p>
+
+<p>The next question is &ldquo;what are the attributes for each of the items?&rdquo;. Each page should have a name and in this case some content, although we might want to add use a URL attribute instead of the content if we want the link to go to a more dynamic page if we don&rsquo;t have a CMS-type app. The list is displayed in a tree structure so we&rsquo;ll need to keep track of the place of each item. We could display this tree structure on our own but instead we&rsquo;ll take advantage of a gem. There are a lot of <a href="https://www.ruby-toolbox.com/categories/Active_Record_Nesting">different gems to choose from</a> which all provide a similar interface but which are quite different in how they&rsquo;re implemented and how they perform. We&rsquo;ll use a gem called <a href="https://www.ruby-toolbox.com/projects/ancestry">Ancestry</a> which was covered in more detail back in <a href="http://railscasts.com/episodes/262-trees-with-ancestry">episode 262</a>. If we look at the README for this gem we can see the list of methods that it provides and some of these will help a lot in building our tree-based navigation, such as <code>root</code> to get the root node, <code>ancestors</code> to get a node&rsquo;s ancestors and <code>descendants</code> to get a node&rsquo;s children. We&rsquo;ll install the gem in the usual way by adding it to the gemfile then running <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'ancestry'
+```
+
+<p>Now we can start building our application. We&rsquo;ll generate a scaffold for a <code>Page</code> model to get an interface up and running quickly and give it <code>name</code>, <code>content</code> and <code>ancestry</code> attributes.</p>
+
+``` terminal
+$ rails g scaffold page name content:text ancestry:string:index
+$ rake db:migrate
+```
+
+<p>We now have a scaffold set up where we can create new pages. The new page form has an <code>ancestry</code> field which is a text field. We&rsquo;ll replace this with a dropdown list of all the existing pages so the we can select a parent for the new page. We&rsquo;ll modify the generated template to replace the <code>text_field</code> with a <code>collection_select</code>.</p>
+
+``` /app/views/pages/_form.html.erb
+<div class="field">
+  <%= f.label :parent_id %><br />
+  <%= f.collection_select :parent_id, Page.order(:name), :id, :name, include_blank: true %>
+</div>
+```
+
+<p>Note that we&rsquo;ve changed the name to <code>parent_id</code>. Next we&rsquo;ll change the <code>Page</code> model so that it allows the new <code>parent_id</code> field to be accessible through mass assignment and add a call to <code>has_ancestry</code> to add all the tree-based behaviour including the <code>parent_id</code> getter and setter methods.</p>
+
+``` /app/models/page.rb
+class Page < ActiveRecord::Base
+  attr_accessible :parent_id, :content, :name
+  
+  has_ancestry
+end
+```
+
+<p>Now when we create a page we have a select menu, although it currently doesn&rsquo;t have anything in it. If we create a page then go back to create another one we&rsquo;ll be able to select the first page we created as its parent.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1414/original/E162RI01.png" width="800" height="500" alt="The new page scaffold with the modified control for selecting a parent page."/>
+</div>
+
+<p>We&rsquo;ll quickly create some more pages so that we&rsquo;ve got some data to work with.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1415/original/E162RI02.png" width="800" height="500" alt="The listing page showing the pages wersquo;ve added."/>
+</div>
+
+<p>Now we have a number of pages, some of which are nested under others and we have enough data to begin building our navigation with. When we visit a page we want some links at the top that will take us to the different root pages. We add these at the top of the template that displays a single page.</p> 
+
+``` /app/views/pages/show.html.erb
+<ul id="menu">
+  <% Page.roots.each do |page| %>
+  <li><%= link_to page.name, page %></li>
+  <% end %>
+</ul>
+```
+
+<p>We get the root pages by using <code>Page.roots</code> which Ancestry provides. For each root page we display a list item containing a link to the page. We&rsquo;ve already added some CSS so when we reload the page now the navigation appears and looks good.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1416/original/E162RI03.png" width="800" height="500" alt="The new top navigation bar showing the three root pages."/>
+</div>
+
+<p>It would be better if the tab for the current page looked active. We&rsquo;ll modify the template to add an <code>active</code> CSS class to the tab whose page is the current one.</p>
+
+``` /app/views/pages/show.html.erb
+<ul id="menu">
+  <% Page.roots.each do |page| %>
+  <li><%= link_to page.name, page, class: ("active" if @page.root == page) %></li>
+  <% end %>
+</ul>
+```
+
+<p>Now the tab will appear active if the current page or one of its children is showing.</p>
+
+<h3>Creating The Sidebar</h3>
+
+<p>Next we&rsquo;ll work on the sidebar of nested menu items. This will work like the top menu but instead of displaying the root pages we&rsquo;ll loop through the current page&rsquo;s children. We can do this by using Ancestry&rsquo;s <code>children</code> method. The tricky part here is that we want this menu to be nested so that it includes the children&rsquo;s children in another list. We can make this work by moving the code that renders the current page&rsquo;s children into a partial then calling that partial from the <code>show</code> page. We&rsquo;ll call this partial <code>submenu_pages</code> and start by rendering the children of the root page so that the menu is consistent no matter what page we&rsquo;re on.</p>
+
+``` /app/views/pages/show.html.erb
+<div id="submenu">
+  <%= render 'submenu_pages', pages: @page.root.children %>
+</div>
+```
+
+<p>This loops through the pages that are passed to it and renders them out. For pages with children the partial is called again and their children will be rendered too.</p>
+
+``` /app/views/pages/_submenu_pages.html.erb
+<ul>
+  <% pages.each do |page| %>
+  <li>
+    <%= link_to_unless_current page.name, page %>
+    <%= render 'submenu_pages', pages: page.children if page.children.present? %>
+  </li>
+  <% end %>
+</ul>
+```
+
+<p>When we reload the page now the submenu is displayed on the left side of the page and when we visit a page its link is removed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1417/original/E162RI04.png" width="800" height="450" alt="The left navigation is now in place."/>
+</div>
+
+<p>Every time this sidebar is rendered out it checks the pages&rsquo; children. It would be good if we could avoid the second check for each item as this could affect performance if there are a large number of items. Ancestry provides a method that can help with this called <code>arrange</code>. This takes an array of nodes and generates a set of nested hashes for the parent and its children. To get this to work we need to change the code that renders the submenu_pages partial. Instead of passing the root page&rsquo;s <code>children</code> into this partial we&rsquo;ll pass its descendants instead.</p> 
+
+``` /app/views/pages/show.html.erb
+<div id="submenu">
+  <%= render 'submenu_pages', pages: @page.root.descendants.arrange %>
+</div>
+```
+
+<p>Instead of just fetching the immediate children <code>descendants</code> fetches all the sub-children in one giant array. Calling <code>arrange</code> on this rearranges it into a set of nested hashes which we can use to get all the data for the left menu without needing to make multiple queries. We&rsquo;ll need to update our partial as it will now have the children passed to it.</p>
+
+``` /app/views/pages/_submenu_pages.html.erb
+<ul>
+  <% pages.each do |page, children| %>
+  <li>
+    <%= link_to_unless_current page.name, page %>
+    <%= render 'submenu_pages', pages: children if children.present? %>
+  </li>
+  <% end %>
+</ul>
+```
+
+<p>When we reload the page now it looks just like it did before but it performs better as it&rsquo;s making fewer database queries.</p> 
+
+<h3>Adding a Breadcrumb Trail</h3>
+
+<p>The last piece of navigation we&rsquo;ll add to the page is the breadcrumb trail. To render this we want to loop through the current page&rsquo;s ancestors and Ancestry provides an <code>ancestors</code> method which will do just this.</p>
+
+``` /app/views/pages/show.html.erb
+<div id="breadcrumbs">
+  <% @page.ancestors.each do |page| %>
+    <%= link_to page.name, page %> &gt;
+  <% end %>
+</div>
+```
+
+<p>When we visit a sub-page we&rsquo;ll see the breadcrumb trail at the top.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1418/original/E162RI05.png" width="800" height="450" alt="The breadcrumb trail now appears at the top of the page."/>
+</div>
+
+<p>We&rsquo;re pretty much done with the navigation part of our application, but to finish up we&rsquo;ll clean the page up a little so that it&rsquo;s more finished. We&rsquo;ll put the page&rsquo;s name in an <code>h1</code> element so that it&rsquo;s more visible and use <code>simple_format</code> for the content so that we can add paragraphs and so on. We&rsquo;ll remove the ancestry information as this isn&rsquo;t really relevant and finally we&rsquo;ll put the page&rsquo;s name in the <code>title</code>.</p> 
+
+``` /app/views/pages/show.html.erb
+<% content_for :title, @page.name %>
+
+<ul id="menu">
+  <% Page.roots.each do |page| %>
+    <li><%= link_to page.name, page, class: ("active" if @page.root == page) %></li>
+  <% end %>
+</ul>
+
+<div id="submenu">
+  <%= render 'submenu_pages', pages: @page.root.descendants.arrange %>
+</div>
+
+<div id="breadcrumbs">
+  <% @page.ancestors.each do |page| %>
+    <%= link_to page.name, page %> &gt;
+  <% end %>
+</div>
+
+<p id="notice"><%= notice %></p>
+
+<h1><%= @page.name %></h1>
+
+<%= simple_format @page.content %>
+
+<%= link_to 'Edit', edit_page_path(@page) %> |
+<%= link_to 'Back', pages_path %>
+```
+
+<p>To display the title we&rsquo;ll need to make a change to the layout file.</p>
+
+``` /app/views/layouts/application.html.erb
+<!DOCTYPE html>
+<html>
+<head>
+  <title><%= content_for?(:title) ? yield(:title) : "CMS" %></title>
+  <%= stylesheet_link_tag    "application", :media => "all" %>
+  <%= javascript_include_tag "application" %>
+  <%= csrf_meta_tags %>
+</head>
+<body><%= yield %>
+
+</body>
+</html>
+```
+
+<p>When we reload the page now it looks much better.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1419/original/E162RI06.png" width="800" height="450" alt="Our navigation is now complete."/>
+</div>
+
+<p>That&rsquo;s it for this episode. The techniques we&rsquo;ve show here can be used in any application even if it&rsquo;s not a CMS-style app. We could rename the <code>Page</code> model to 
+<code>MenuItem</code> and give it a <code>url</code> attribute to link to instead of going to the page&rsquo;s controller. This way the menu items can still be dynamically generated from the database. If we do this we should think about caching the menu&rsquo;s data as it won&rsquo;t change very often. <a href="http://railscasts.com/episodes/90-fragment-caching-revised">Episode 90</a> covers this in more detail.</p>

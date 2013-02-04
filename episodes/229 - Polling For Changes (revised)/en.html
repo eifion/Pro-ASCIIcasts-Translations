@@ -1,0 +1,173 @@
+<p>Below is a screenshot from a blogging application showing an article that has many comments. While the article is short, it might take a user several minutes to read a longer one and its comments before deciding to add their own. Other users may have added their own comments in the meantime that the user may want to respond to, or which duplicate what they were about to say so it would be good if we could show these in some way without requiring them to reload the page. </p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1438/original/E229RI01.png" width="800" height="500" alt="An article in our application and its comments."/>
+</div>
+
+
+<p>One way to do this is to use polling and that&rsquo;s how we&rsquo;ll do it in this episode. Some consider this a dated technique and would use something like WebSockets instead. That way we could keep a socket connection open so that we can push the changes to the client instead of having to poll for them. One way to do this is to use Faye which was covered in <a href="http://railscasts.com/episodes/260-messaging-with-faye">episode 260</a>. Polling still has it&rsquo;s uses, though, especially if we don&rsquo;t need instant feedback from the server. A 30-second poll delay won&rsquo;t take too much away from this feature, even though it means that the user won&rsquo;t see new comments displayed immediately. Using polling also means that we don&rsquo;t need to worry about keeping a socket open all the time.</p>
+
+<h3>Getting Started With Polling</h3>
+
+<p>Polling is frequently done with the JavaScript <code>setTimeout</code> function. This accepts two arguments: the function that we want to trigger and the delay before the function should be triggered in milliseconds. If we wanted to show an alert after, say, three seconds we&rsquo;d write this:</p>
+
+``` /app/assets/javascripts/comments.js.coffee
+setTimeout(alert, 3000)
+```
+
+<p>If we reload the page now we&rsquo;ll see an alert around three seconds after the page loads. This will only happen once though as <code>setTimeout</code> doesn&rsquo;t fire recurrently, unlike the <code>setInterval</code> function which does. We&rsquo;ll stick with <code>setTimeout</code> so that if our application takes a while to respond we won&rsquo;t be continuously hammering the server. Using <code>setTimeout</code> also gives us more control over the timeout interval, too. We&rsquo;ll use it now to poll for new comments.</p>
+
+``` /app/assets/javascripts/comments.js.coffee
+CommentPoller ->
+  poll: ->
+    setTimeout @request, 5000
+
+  request: ->
+    $.get($('#comments').data('url'))
+
+jQuery ->
+  if $('#comments').length > 0
+    CommentPoller.poll()
+```
+
+<p>This code runs when the page&rsquo;s DOM has loaded an checks so see if there&rsquo;s an element with an <code>id</code> of comments on the page. Note that this code isn&rsquo;t compatible with Turbolinks so if you&rsquo;re using that you&rsquo;ll need to check for the <code>page:change</code> event as well. We keep all of the polling behaviour inside an object namespace called <code>CommentPoller</code>. This has a <code>poll</code> function which is called if the comments <code>div</code> is found. This function calls <code>setTimeout</code> and is passed a <code>request</code> function which we trigger this every five seconds for now while we&rsquo;re testing. The <code>request</code> function triggers an AJAX request to get the new comments and so it needs to know the URL to make the request to. It&rsquo;s generally best to avoid hard-coding URLs in JavaScript so we fetch it from a <code>data</code> attribute on the comments <code>div</code> instead.</p>
+
+<p>Now we just have to modify the comments <code>div</code> and give it a <code>data-url</code> attribute. To avoid putting erb into the attribute we&rsquo;ll use <code>content_tag</code>. The <code>data-url</code> attribute needs to hold the path to the comments for the current article so we use <code>article_comments_url</code> and pass in the current article.</p>
+
+``` app/views/articles/show.html.erb
+<%= content_tag :div, id: "comments", data: {url: article_comments_url(@article) } do %>
+  <%= render @article.comments %>
+<% end %>
+```
+
+<p>Our JavaScript timeout will now make a GET request to the <code>index</code> action in the <code>CommentsController</code>&rsquo;s so we&rsquo;ll need to define this.</p>
+
+``` /app/controllers/comments_controller.rb
+def index
+  @comments = @article.comments
+end
+```
+
+<p>We have a before filter in this controller that fetches the current article and assigns it to an instance variable so we can use this to fetch the comments. We&rsquo;ll fetch all the comments for now. We&rsquo;ll need a template to go along with this to respond to JavaScript requests. Any JavaScript we put in this template will be executed when the timeout expires. We could instead use JSON but this would mean that we&rsquo;d have to render out the comments on the client. Whatever we do here we&rsquo;ll need to call <code>CommentPoller.poll()</code> again so that the polling timeout is triggered again.</p>
+
+``` app/views/comments/index.js.erb
+alert("it works!");
+CommentPoller.poll();
+```
+
+<p>We just have an <code>alert</code> in the template for now and when we reload the page we&rsquo;ll see it pop up after five seconds. There&rsquo;s a problem, however. If we dismiss the alert then wait another one won&rsquo;t show after another five seconds. This is a common problem and it can be tricky to track down. The issue is that the code in the template doesn&rsquo;t have access to our <code>CommentPoller</code> object and this is because the CoffeeScript scopes each of the files separately. We need to make this object and we do that by using an <code>@</code> where we define it.</p>
+
+``` /app/assets/javascripts/comments.js.coffee
+@CommentPoller ->
+  poll: ->
+    setTimeout @request, 5000
+
+  request: ->
+    $.get($('#comments').data('url'))
+
+jQuery ->
+  if $('#comments').length > 0
+    CommentPoller.poll()
+```
+
+<p>Now the <code>CommentPoller</code> will be accessible wherever we call it from.</p> 
+
+<h3>Rendering New Comments</h3>
+
+<p>Now that we have this working we&rsquo;ll replace the <code>alert</code> with code to load in the new comments. To do this we&rsquo;ll replace the comments <code>div</code>&rsquo;s content entirely with the article&rsquo;s current comments. We already have a partial that renders out a single comment so this will render out each one. Note that use of the <code>j</code> function to escape the output.</p>
+
+``` app/views/comments/index.js.erb
+$('#comments').html('<%= j render(@comments) %>');
+CommentPoller.poll();
+```
+
+<p>We can try this out now. If we open two browser windows on the same article then add a comment in one window the comment should appear in the other after a few seconds and when we do that it does.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1439/original/E229RI02.png" width="760" height="406" alt="Comments made by other users now appear automatically."/>
+</div>
+
+<h3>A More Efficient Approach</h3>
+
+<p>This works but it isn&rsquo;t very efficient as all the comments for the article are reloaded every time the timer elapses. Instead of replacing all the comments it would be better if we appended any new comments that have been added since the page was loaded. We&rsquo;ll need to modify the controller&rsquo;s <code>index</code> action so that it only fetches the comments with an <code>id</code> greater than the biggest <code>id</code> of the comments that are currently displayed. If we don&rsquo;t want to rely on sequential <code>id</code>s we could use a <code>created_at</code> timestamp field but this can get messy when we try to shuffle this value to the client and back.</p> 
+
+``` /app/controllers/comments_controller.rb
+def index
+  @comments = @article.comments.where('id > ?', params[:after].to_i)
+end
+```
+
+<p>Now we have to pass in an <code>after</code> parameter through our AJAX request so we&rsquo;ll modify our GET request so that it does. We&rsquo;ll need to get the <code>id</code> of the last comment that shows so we&rsquo;ll modify the comment partial so that it adds a <code>data-</code> attribute to each comment that holds this.</p>
+
+``` /app/views/comments/_comment.html.erb
+<%= div_for comment, data: {id: comment.id} do %>
+  <p><strong><%= comment.name %> says</strong></p>
+  <%= simple_format comment.content %>
+<% end %>
+```
+
+<p>We can now modify our comments CoffeeScript file to read this <code>id</code> and send it as the <code>after</code> parameter. Our comments will be displayed in order of their <code>id</code> so we can simply read the <code>data-id</code> attribute from the last one.</p>
+
+``` /app/assets/javascripts/comments.js.coffee
+request: ->
+  $.get($('#comments').data('url'), after:$('.comment').last().data('id'))
+```
+
+<p>Finally we&rsquo;ll change our comments JavaScript template so that it appends the comments that are returned to the existing list instead of replacing them all.</p>
+
+``` /app/views/comments/index.js.erb
+$('#comments').append('<%= j render(@comments) %>');
+CommentPoller.poll();
+```
+
+<p>Now when our application polls for comments it will only append any new comments that have been added which is much more efficient.</p>
+
+<h3>Showing a Link For New Comments</h3>
+
+<p>Our article page works well now but what if, instead of automatically adding new comments as they appear, we want to show a link that tells the user that new comments have been added so they can click it to view them? This will make it more obvious to them that new comments have been added. We&rsquo;ll start by adding a link below the existing comments.</p>
+
+``` app/views/articles/show.html.erb
+<p id="show_comments" style="display:none;">
+  More comments have recently been added. <a href="#">Show Comments</a>
+</p>
+```
+
+<p>This is invisible by default but and we&rsquo;ll show it when new comments are added. We could do this in the <code>index</code> JavaScript template, but to keep this file small we&rsquo;ll instead modify this to call a new <code>addComments</code> function and do all the heavy work in our <code>CommentPoller</code> object.</p>
+
+``` /app/views/comments/index.js.erb
+CommentPoller.addComments('<%= j render(@comments) %>');
+```
+
+<p>We can now define this function in our CoffeeScript file.</p> 
+
+``` /app/assets/javascripts/comments.js.coffee
+addComments: (comments) ->
+  if comments.length > 0
+    $('#comments').append($(comments).hide())
+    $('#show_comments').show()
+  @poll()
+```
+
+<p>Here we check that there are new comments to add and, if so, we add and hide them so that they&rsquo;re not shown straight away. We then show the link so that the user knows that there are new comments to view. Next we&rsquo;ll need to add a <code>click</code> event to the link so that the comments are shown when the link is clicked.</p> 
+
+``` /app/assets/javascripts/comments.js.coffee
+showComments: (e) ->
+  e.preventDefault()
+  $('.comment').show()
+  $('#show_comments').hide()
+
+jQuery ->
+  if $('#comments').length > 0
+    CommentPoller.poll()
+    $('#show_comments a').click CommentPoller.showComments
+```
+
+<p>When the link is clicked now it will trigger a <code>showComments</code> function. This function first calls <code>preventDefault</code> to stop the link&rsquo;s default behaviour from triggering then shows all the comments and hides the link itself.</p>
+
+<p>We can try this out now by opening two browser windows again and entering a comment in one of them. When we do the link appears in the other window a few seconds later.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1440/original/E229RI03.png" width="760" height="406" alt="A link now appears when new comments are added to the article."/>
+</div>
+
+<p>Clicking this shows the new comments just like we expect so our polling functionality is now complete. This means that we can increase the time interval so that the polling isn&rsquo;t happening so much. One option would be to make this dynamic depending on the rate that the article is gaining new comments. If we decide to replace the polling with WebSockets at a later date our solution makes this easy to do. We&rsquo;d just need to trigger the addComments function whenever a comment is added instead of polling at a set time.</p>

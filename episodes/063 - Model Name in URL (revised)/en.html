@@ -1,0 +1,180 @@
+<p>In the last revised episode, <a href="http://railscasts.com/episodes/162-tree-based-navigation">number 162</a>, we showed how to implement tree-based navigation. In it we used an application with a Page model that can have multiple nested pages underneath it.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1427/original/E063RI01.png" width="800" height="450" alt="Our CMS application with tree-based navigation."/>
+</div>
+
+<p>In this episode we&rsquo;ll be building on this application but focussing on a different topic: how a model is represented in a URL. Rails&rsquo; default approach is to use the <code>id</code> of the record from the database but this isn&rsquo;t very helpful to the user as it doesn&rsquo;t tell them what page is represented by the URL. Changing the URL to include the page&rsquo;s name would be better and can help with Search Engine Optimization.</p>
+
+<p>In <a href="http://railscasts.com/episodes/314-pretty-urls-with-friendlyid">episode 314</a> we used the Friendly Id gem to achieve this. While this is a good approach it can be a little heavy if we&rsquo;re not using all its features. In general it&rsquo;s better to write something from scratch rather than using a gem if the functionality is easy to add and that&rsquo;s what we&rsquo;ll do in this episode.</p> 
+
+<p>Let&rsquo;s take a look at a few different approaches to how we can get the name of the model in the URL. By far the easiest was is to modify a model by overriding the <code>to_param</code> method. This is the method that Rails triggers when it needs to represent a model in a URL and by default it returns the record&rsquo;s <code>id</code>. We can modify this to return anything we want so for our <code>Page</code> model we&rsquo;ll have it return the <code>id</code> followed by the page&rsquo;s <code>name</code>. We&rsquo;ll call <code>parameterize</code> this so that it&rsquo;s URL-friendly.</p>
+
+``` /app/models/page.rb
+class Page < ActiveRecord::Base
+  attr_accessible :parent_id, :content, :name
+  
+  has_ancestry
+
+  def to_param
+    "#{id}-#{name}".parameterize
+  end
+end
+```
+
+<p>When we visit another page in our application now it&rsquo;s name is included in the URL, for example <code>/pages/9-shipping-info</code>. The page&rsquo;s <code>id</code> is still included in the URL and this is necessary unless we want to change the way that the record is found. The way this works in Rails is a bit of a trick. When we pass a string to ActiveRecord&rsquo;s <code>find</code> method it calls <code>to_i</code> on it to convert it to an integer. Ruby will strip off any non-numeric characters at the end of the string and so it will convert &ldquo;10-international-shipping&rdquo; to 10 and then find the record with that <code>id</code>. This is why it&rsquo;s necessary to have the <code>id</code> at the start of the last part of the URL.</p>
+
+<h3>Using Slugs</h3>
+
+<p>There are times though when we might not want this, maybe for aesthetic reasons or for something more practical like security so that the <code>id</code>s aren&rsquo;t exposed to the end users. How can use use just the name to find a record? To do this we&rsquo;ll need to add another column to the database that will store a string value that we can use to identify each record and in that record&rsquo;s URL. A common convention is to call this <code>slug</code> and it&rsquo;s a good idea to index this field as we&rsquo;ll be searching by it every time we load a page in our application. We&rsquo;ll generate a migration to add this new column.</p>
+
+``` terminal
+$ rails g migration add_slug_to_pages slug:index
+$ rake db:migrate
+```
+
+<p>We can now return this <code>slug</code> attribute when we call <code>to_param</code> in our <code>Page</code> model but before we can do that we&rsquo;ll need to set it. We could do this in a <code>before_save</code> filter but we&rsquo;ll need to validate the slug as it&rsquo;s important that it&rsquo;s unique and that it exists so instead we&rsquo;ll use a <code>before_validation</code> filter instead. This will call a method that we&rsquo;ll call <code>generate_slug</code> that will either return or create a slug.</p>
+
+``` /app/models/page.rb
+class Page < ActiveRecord::Base
+  attr_accessible :parent_id, :content, :name
+
+  validates :slug, uniqueness: true, presence: true
+  before_validation :generate_slug
+  
+  has_ancestry
+
+  def to_param
+    slug
+  end
+
+  def generate_slug
+    self.slug ||= name.parameterize
+  end
+end
+```
+
+<p>In some cases we might want to present the <code>slug</code> field to the user in a form so that they can set it but we won&rsquo;t do that here. We already have <code>Page</code> records so we&rsquo;ll need to generate a slug for each of these. We can do that in the console by loading and saving all the existing records.</p>
+
+``` console
+>> Page.find_each(&:save)
+```
+
+<p>We&rsquo;re not quite done yet though: we still need to change the way that pages are found in the controller. Instead of finding a <code>Page</code> by its <code>id</code> in the <code>show</code>, <code>edit</code>, <code>update</code> and <code>destroy</code> actions we need to use <code>find_by_slug!</code> (with the exclamation mark so that a <code>404</code> error is thrown if a page with a given slug isn&rsquo;t found).</p> 
+
+``` /app/controllers/pages_controller.rb
+def show
+  @page = Page.find_by_slug(params[:id])
+end
+```
+
+<p>Instead of duplicating this behaviour in the other actions a common practice is to find the model in a before filter. We&rsquo;ll do this and write a <code>find_page</code> method that will find a page by its slug. We can then remove the line of code that finds a page from each of the relevant actions.</p>
+
+``` /app/controllers/pages_controller.rb
+class PagesController < ApplicationController
+  before_filter :find_page, only: [:show, :edit, :update, :destroy]
+
+  # Some actions omitted.
+
+  def show
+  end
+
+  def update
+    if @page.update_attributes(params[:page])
+      redirect_to @page, notice: "Page was successfully updated."
+    else
+      render :edit
+    end
+  end
+
+  def destroy
+    @page.destroy
+    redirect_to pages_url
+  end
+
+  private
+  def find_page
+    @page = Page.find_by_slug(params[:id])
+  end
+end
+```
+
+<p>There are different approaches that we could take here instead of using a before filter. One is to rename the <code>find_page</code> method to <code>page</code> and to cache its output so that it only performs the find once. If we then make this method a helper method we can always use it instead of accessing the instance variable directly in both the view and the controller.</p>
+
+``` /app/controllers/pages_controller.rb
+private
+  def find_page
+    @page ||= Page.find_by_slug(params[:id])
+  end
+  helper_method :page
+```
+
+<p>This is a good approach as it&rsquo;s lazily loaded so the database won&rsquo;t be hit unless we call this. That means that if we add some caching we might be able to avoid the database find entirely. If you like this kind of thing it&rsquo;s worth taking a look at the Decent Exposure gem which was covered in <a href="http://railscasts.com/episodes/259-decent-exposure">episode 259</a>. We&rsquo;ll stick with the before filter in our application to keep things simple. When we try to find a page by using its slug in the URL now it works and the links to the other pages work as well.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1428/original/E063RI02.png" width="800" height="450" alt="We can now visit a page by using its slug in the URL."/>
+</div>
+
+<h3>Removing The Controller From The URL</h3>
+
+<p>What if we want the page&rsquo;s slug to be at the root of the URL path instead of having of having to specify <code>pages</code>? In our resources file we have a <code>pages</code> resource. We can pass this a <code>path</code> option where we can specify the prefix we want the URL to have and if we set this to an empty string there will be no prefix. We might not want this to apply to all the actions. For example we might want to keep the pages prefix for the index, new and create actions and in this case we can make two resources entries for pages, one with the path prefix and one without.</p>
+
+``` /config/routes.rb
+Cms::Application.routes.draw do
+  root to: 'pages#index'
+  resources :pages, only: [:index, :new, :create]
+  resources :pages, path: "", except: [:index, :new, :create]
+end
+```
+
+<p>Now if we visit any page in our application its URL won&rsquo;t have <code>/pages</code> in it. If we go to the page to create a new page, the path will still be <code>/pages/new</code> with the prefix. We have to watch out when we take this approach as we now have the type of catch-all route that needs to be placed at the bottom of the routes file. For example if we had the route <code>get &quot;foo&quot;</code> in the routes file below the two pages routes this route would never be triggered as the pages#show action will be triggered instead. Also we need to keep in mind that path we visit without a slash in it will also trigger <code>pages#show</code> and will raise a <code>RecordNotFound</code> exception and will display a <code>404</code> error to the user. This is what we want to happen but a database query will always be made so there may be performance issues related to this. If we use this approach is also a good idea to add a validation to the slug to ensure it doesn&rsquo;t conflict with existing URLs, such as the URLs for signing-up and logging-in.</p>
+
+``` /app/models/page.rb
+validates :slug, uniqueness: true, presence: true,
+           exclusion: {in: %w[signup login]}
+```
+
+<h3>Nested Page Names</h3>
+
+<p>We&rsquo;ll cover one more technique in this episode: nesting page names in routes. Our pricing page is nested under products so we want its URL to be <code>/products/pricing</code> instead of just <code>/pricing</code>. This won&rsquo;t currently work and the reason for this is that Rails uses the colon operator when it grabs the <code>id</code> for the resource&rsquo;s route and this doesn&rsquo;t accept slashes. We can instead uses an asterisk instead of a colon and this will grab the entire path including any slashes. We can use this to create a route that points to <code>pages#show</code>.</p>
+
+``` /config/routes.rb
+Cms::Application.routes.draw do
+  root to: 'pages#index'
+  resources :pages, only: [:index, :new, :create]
+  resources :pages, path: "", except: [:index, :new, :create]
+  get '*id', to: 'pages#show'
+end
+```
+
+<p>Now when we visit <code>/products/pricing</code> the show action is triggered with an <code>id</code> of <code>/products/pricing</code>. In a real application we should check the entire path to make sure the parents are correct but in our example app we&rsquo;ll just split the <code>id</code> parameter on the slash character and search for a slug based on the last element.</p>
+
+``` /app/models/page.rb
+def find_page
+  @page = Page.find_by_slug(params[:id].split('/').last)
+end
+```
+
+<p>When we visit <code>/products/pricing</code> now we see the correct page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1429/original/E063RI03.png" width="800" height="450" alt="We can now use URLs based on the page&rsquo;s nesting."/>
+</div>
+
+<p>The links to nested pages still don&rsquo;t have the correct path, however. To fix this we can use a helper method whenever we need to link to a page. We&rsquo;ll write a <code>nested_page_path</code> in the <code>PagesHelper</code> to do this. As we&rsquo;re using the Ancestry gem it&rsquo;s easy to get the page&rsquo;s ancestors. We can then map all the <code>to_param</code> calls to convert each one to a URL format then join them with a slash.</p>
+
+``` /app/helpers/pages_helper.rb
+module PagesHelper
+  def nested_page_path(page)
+    '/' + (page.ancestors + [page]).map(&:to_param).join('/')
+  end
+end
+```
+
+<p>We can now use this wherever we need to add a link to a page, such as in our sidebar.</p>
+
+``` /app/views/pages/_submenu_pages.html.erb
+<%= link_to_unless_current page.name, nested_page_path(page) %>
+```
+
+<p>Now when we click on the links in the sidebar we&rsquo;re redirected to the full nested path.</p>

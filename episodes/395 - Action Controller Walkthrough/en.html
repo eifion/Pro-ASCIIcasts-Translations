@@ -1,0 +1,224 @@
+<p>Whenever we use a Ruby gem in one of our applications it&rsquo;s a good idea to take a look at its source code so that we can get an understanding of how it works. Doing this can really help when we&rsquo;re debugging problems in our applications. Reading other people&rsquo;s source code is also a good way of improving your own Ruby code and the chances are that you&rsquo;ll pick up some interesting tricks along the way. In this episode we&rsquo;ll be diving into the Rails source code to get a better understanding of how controllers work and how they handle requests. We&rsquo;ll be using a blogging application to help us with this and focussing on its <code>ArticlesController</code> which is a fairly standard RESTful controller with the standard seven actions.</p>
+
+<h3>Looking at ActionController</h3>
+
+<p>To start we&rsquo;ll find the find the relevant source code. As with most controllers ours inherits from <code>ApplicationController</code> which in turn inherits from <code>ActionController::Base</code> and this base class is defined in the Rails source code. To get this we can clone its Git repository by running this command:</p>
+
+``` terminal
+$ git clone https://github.com/rails/rails.git
+```
+
+<p>Once this command has finished we can move into the <code>rails</code> directory. This will be the <code>master</code> branch which is currently the upcoming Rails 4 release. We want to browse the version of Rails that we&rsquo;re using in our application so we&rsquo;ll use <code>git checkout</code> to get the right branch. We can then open the <code>actionpack/lib</code> directory which is where the controller-related code is.</p>
+
+``` terminal
+$ cd rails
+$ git checkout v3.2.9
+$ cd actionpack/lib/
+```
+
+<p>In the <code>action_controller/base.rb</code> file we&rsquo;ll find the source code for the class that our app&rsquo;s <code>ApplicationController</code> inherits from. This class inherits from another class called <code>Metal</code>, defined in a <code>metal.rb</code> file, and <code>Metal</code> inherits from <code>AbstractController::Base</code>. It&rsquo;s these three classes that we&rsquo;ll be focussing on in this episode.</p> 
+
+<p>These three files don&rsquo;t contain all the methods that we have available to us in the <code>ArticlesController</code>. If we call <code>ancestors</code> on it we&rsquo;ll see that there are a large number of modules that are included in to our controller and these have many methods defined in them. If we subtract the included modules we&rsquo;ll see the inheritance chain.</p>
+
+``` console
+>> puts ArticlesController.ancestors - ArticlesController.included_modules
+ArticlesController
+ApplicationController
+ActionController::Base
+ActionController::Metal
+AbstractController::Base
+Object
+BasicObject
+=> nil
+```
+
+<h3>How ActionController Handles Requests</h3>
+
+<p>Now that we&rsquo;ve located the relevant source code we can start to walk through what happens when our Rails application receives a request. Before it reaches a controller the request goes through a number of pieces of Rack Middleware. (We walked through how a request is handled by Middleware in <a href="http://railscasts.com/episodes/319-rails-middleware-walkthrough">episode 319</a>.) After this it&rsquo;s handed off to our application&rsquo;s routes and this was covered in more detail in <a href="http://railscasts.com/episodes/231-routing-walkthrough">episodes 231</a> and <a href="http://railscasts.com/episodes/232-routing-walkthrough-part-2">232</a>. Rails&rsquo; routing behaviour is handled by <code>ActionDispatch</code>. If we look at the <code>RouteSet</code> class we&rsquo;ll see its <code>dispatch</code> method and it&rsquo;s here that the request is handed off to the appropriate controller.</p>
+
+``` action_dispatch/routing/route_set.rb
+def dispatch(controller, action, env)
+  controller.action(action).call(env)
+end
+```
+
+<p>This is done by calling the controller&rsquo;s <code>action</code> method, passing in the action&rsquo;s name and calling <code>call</code> on that. Back in our example application&rsquo;s console we can demonstrate this. If we call <code>action</code> on our <code>ArticlesController</code> and pass in the name of an action we&rsquo;ll get a <code>proc</code> object returned. This object acts as a Rack application and we can process the request through it.</p> 
+
+``` console
+>> ArticlesController.action(:index)
+=> #<Proc:0x007fbf63bd5400@/Users/eifion/.rbenv/versions/1.9.3-p194/lib/ruby/gems/1.9.1/gems/actionpack-3.2.9/lib/action_controller/metal.rb:245>
+```
+
+<p>We can find our where this method is defined by running this command:</p>
+
+``` console
+>> ArticlesController.method(:action).source_location
+=> ["/Users/eifion/.rbenv/versions/1.9.3-p194/lib/ruby/gems/1.9.1/gems/actionpack-3.2.9/lib/action_controller/metal.rb", 244]
+```
+
+<p>The action method looks like this:</p>
+
+``` action_controller/metal.rb
+def self.action(name, klass = ActionDispatch::Request)
+  middleware_stack.build(name.to_s) do |env|
+    new.dispatch(name, klass.new(env))
+  end
+end
+```
+
+<p>This method takes a second argument so that we can customize the class that&rsquo;s used to represent the request. The first thing it does is call <code>middleware_stack.build</code>, passing in the action&rsquo;s name and a block. The <code>build</code> method loops through all the middleware defined on the controller, checks if they apply to the action being requested then builds our Rack app through it.</p>
+
+``` action_controller/metal.rb
+def build(action, app=nil, &block)
+  app  ||= block
+  action = action.to_s
+  raise "MiddlewareStack#build requires an app" unless app
+
+  middlewares.reverse.inject(app) do |a, middleware|
+  middleware.valid?(action) ?
+    middleware.build(a) : a
+  end
+end
+```
+
+<p>This means that each controller has its own mini middleware stack that we can apply to a given action and which is completely separate from the middleware stack that applies to our entire application. This stack is empty by default but we can easily add to it by calling use in a controller and passing in a middleware class. We can also restrict the actions that this is applied to.</p>
+
+``` /app/controllers/articles_controller.rb
+class ArticlesController < ApplicationController
+  use Rack::ShowExceptions, only: :show
+
+  # actions omitted
+end
+```
+
+<p>If we try to visit a record that doesn&rsquo;t exist now the error that&rsquo;s raised will be handled by <code>Rack::ShowExceptions</code> middleware instead of the Rails one.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1420/original/E395I01.png" width="800" height="500" alt="A RecordNotFound error handles by Rack::ShowExceptions."/>
+</div>
+
+<p>If we visit the <code>edit</code> action for the same non-existent article we&rsquo;ll see the standard Rails error page as the middleware only applies to show. This is really useful: we could use it with <code>Rack::SSL</code> or some authentication or authorization middleware when we need to add that middleware to a specific set of actions.</p>
+
+<p>After our request has passed through this middleware it makes a new instance of our controller and calls <code>dispatch</code> on it, passing in the action&rsquo;s <code>name</code> and an instance of the request which is generated by passing in the Rack environment. The <code>dispatch</code> method is defined in the same file and it stores some details in instance variables, processes the action then calls <code>to_a</code> on it which returns the response.</p>
+
+``` action_controller/metal.rb
+def dispatch(name, request) #:nodoc:
+  @_request = request
+  @_env = request.env
+  @_env['action_controller.instance'] = self
+  process(name)
+  to_a
+end
+
+def to_a #:nodoc:
+  response ? response.to_a : [status, headers, response_body]
+end
+```
+
+<p>If there&rsquo;s a <code>response</code> object this is turned into an array and returned; if not then a response is build up from the <code>status</code>, <code>headers</code> and <code>response_body</code> variables.</p>
+
+<p>The process method is defined in <code>AbstractController::Base</code>. This remembers the name in an instance variable then checks to see if the action exists. If it doesn&rsquo;t it raises an <code>ActionNotFound</code> exception.</p>
+
+``` abstract_controller/base.rb
+def process(action, *args)
+  @_action_name = action_name = action.to_s
+
+  unless action_name = method_for_action(action_name)
+    raise ActionNotFound, "The action '#{action}' could not be found for #{self.class.name}"
+  end
+
+  @_response_body = nil
+
+  process_action(action_name, *args)
+end
+```
+
+<p>The <code>method_for_action</code> method checks to see if an action exists or if a method called <code>action_missing</code> exists. For the latter case a <code>_handle_action_missing</code> method is called which calls <code>action_missing</code> passing in the action name. This means that if we define <code>action_missing</code> in our controller we can use it like <code>method_missing</code> so that a controller can handle any action.</p>
+
+<p>Back in the <code>process</code> method if we have a valid action <code>process_action</code> will be called. This in turn calls <code>send_action</code> which is an alias to the <code>send</code> method. This means that the action will be called on the controller.</p> 
+
+<h3>The Included Modules</h3>
+
+<p>We now know how an action in our controller is called but this isn&rsquo;t the full story. There&rsquo;s a lot of additional behaviour that Rails is mixing in through modules. Let&rsquo;s take another look at <code>ActionController::Base</code>. This file includes a large number of modules which means that our app&rsquo;s controllers will inherit all the modules&rsquo; behaviour. Some of these are in <code>AbstractController</code>, but most of them are in <code>action_controller/metal</code>. We&rsquo;ll take a look at some of these modules, starting with <code>RackDelegation</code>. This is a small module but it&rsquo;s an important one. It overrides the dispatch method that we saw earlier in the <code>ActionController::Metal</code> class and adds a third argument that accepts a <code>response</code> object.</p>
+
+``` action_controller/metal/rack_delegation.rb
+delegate :headers, :status=, :location=, :content_type=,
+         :status, :location, :content_type, :to => "@_response"
+
+def dispatch(action, request, response = ActionDispatch::Response.new)
+  @_response ||= response
+  @_response.request ||= request
+  super(action, request)
+end
+```
+
+<p>The response is set to an instance variable so that it&rsquo;s remembered and whenever we set the response body in our controller this response object is set. If we look back in the <code>Metal</code> class at the <code>to_a</code> method this checks for that response object. If it wasn&rsquo;t for the <code>RackDelegation</code> module this response would be <code>nil</code>. <code>RackDelegation</code> delegates several methods to <code>@_response</code>. This ties in nicely to the <code>Redirect</code> module which we&rsquo;ll look at next.</p>
+
+<p>The <code>Redirect</code> module defines the <code>redirect_to</code> method and when we call <code>redirect_to</code> in a controller action this is the code that&rsquo;s called.</p> 
+
+``` action_controller/metal/redirecting.rb
+def redirect_to(options = {}, response_status = {}) #:doc:
+  raise ActionControllerError.new("Cannot redirect to nil!") unless options
+  raise AbstractController::DoubleRenderError if response_body
+
+  self.status        = _extract_redirect_to_status(options, response_status)
+  self.location      = _compute_redirect_to_location(options)
+  self.response_body = "<html><body>You are being <a href=\"#{ERB::Util.h(location)}\">redirected</a>.</body></html>"
+end
+```
+
+<p>This method sets the <code>status</code>, <code>location</code> and <code>response_body</code> which will all be delegated to the response object thanks to <code>RackDelegation</code>. One method that&rsquo;s often used alongside <code>redirect_to</code> in a controller action is <code>render</code>. This is defined in the <code>Rendering</code> module.</p>
+
+``` action_controller/metal/rendering.rb
+def render(*args) #:nodoc:
+  raise ::AbstractController::DoubleRenderError if response_body
+  super
+  self.content_type ||= Mime[lookup_context.rendered_format].to_s
+  response_body
+end
+```
+
+<p>There isn&rsquo;t much in this method. Most of the logic is done in the call to <code>super</code> which calls the same method in the <code>AbstractController</code> class. This has its own <code>Rendering</code> module with a render method that look like this:</p>
+
+``` abstract_controller/rendering.rb
+def render(*args, &block)
+  options = _normalize_render(*args, &block)
+  self.response_body = render_to_body(options)
+end
+```
+
+<p>This method sets the <code>response_body</code> to the output of a <code>render_to_body</code> method. In turn <code>render_to_body</code> calls a <code>_render_template</code> method and this delegates to a view renderer. This is defined in the same class an it instantiates a new instance of <code>ActionView::Renderer</code>. This will delegate all the rendering behaviour to <code>ActionView</code> which we won&rsquo;t cover in this episode but which will be covered in a future one.</p>
+
+<p>We now know that calling <code>redirect_to</code> or <code>render</code> simply sets some details on the response object that&rsquo;s returned from a Rack application at the end of a controller action. What about actions that don&rsquo;t call either of these methods, such as this <code>new</code> action?</p>
+
+``` /app/controllers/articles_controller.rb
+def new
+  @article = Article.new
+end
+```
+
+<p>Actions like these that don&rsquo;t explicitly render a view are handled by the <code>ImplicitRender</code> module. This overrides the <code>send_action</code> method in the <code>AbstractController::Base</code> class and this calls <code>default_render</code> unless we already have a <code>response_body</code>. This causes the view matching the action to be rendered. This module also handles the behaviour for rendering an action when no method is defined and only a template exists.</p>
+
+``` action_controller/lib/metal/implicit_render.rb
+module ActionController
+  module ImplicitRender
+    def send_action(method, *args)
+      ret = super
+      default_render unless response_body
+      ret
+    end
+
+    def default_render(*args)
+      render(*args)
+    end
+
+    def method_for_action(action_name)
+      super || if template_exists?(action_name.to_s, _prefixes)
+        "default_render"
+      end
+    end
+  end
+end
+```
+
+<p>That&rsquo;s it for the modules that we&rsquo;ll cover in this episode but there are a lot more that you&rsquo;re encouraged to explore on your own. Most of them are self-explanatory based on their names and they handle things such as cookies, flash messages, caching, HTTP authentication. There are other modules in the <code>abstract_controller</code> directory. For example <code>callbacks.rb</code> here is used to for before and after filters.</p>

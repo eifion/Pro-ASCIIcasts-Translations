@@ -1,0 +1,226 @@
+<p>In the example application below we have a list of products, each one of which has a name, a price and a category. We also have a way to search these products by either their name or category. What we&rsquo;d like to do is add some auto-completion to the search field so that when a user starts typing a list of  suggestions is shown containing products that match the search term. Doing this presents some interesting problems, especially in regards to performance. Let&rsquo;s get started.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1430/original/E399I01.png" width="800" height="500" alt="The products page of our application has a search box."/>
+</div>
+
+<p>There are a variety of ways that we can we can handle this on the client-side but we&rsquo;ll keep it simple and use jQueryUI which makes it easy to add an auto-completion dropdown to a text field. We&rsquo;ll step through this part fairly quickly as it was covered in more detail back in <a href="http://railscasts.com/episodes/102-auto-complete-association-revised">episode 102</a>. To include jQueryUI in our application we just need to modify our application&rsquo;s JavaScript manifest file and add a line there to include it.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery-ui
+//= require jquery_ujs
+//= require_tree .
+```
+
+<p>We can add auto-complete behaviour to the search text field in the products CoffeeScript file. We&rsquo;ll do this when the DOM loads, although you might want to change this behaviour if you&rsquo;re using TurboLinks. All we need to do is call <code>autocomplete</code> to the text field. This takes several options and we&rsquo;ll use <code>source</code> to specify where the auto-complete data comes from. This will be a URL in our application as there&rsquo;s too much data to include and load them all on the client at once. We&rsquo;ll use a <code>search_suggestions</code> path.</p>
+
+``` /app/assets/javascripts/products.js.coffee
+jQuery ->
+  $('#search').autocomplete
+    source: "/search_suggestions"
+```
+
+<p>Our application will need to be able to respond to this path. It doesn&rsquo;t currently so we&rsquo;ll need a new controller. We&rsquo;ll actually create a whole new resource with a model and a controller so that we have a convenient location to store our search suggestions and look them up quickly. There are some performance concerns with storing this kind of data in a SQL database but we&rsquo;ll look at this later. We&rsquo;ll give our new resource a <code>term</code> field, which will contain the search suggestion term that&rsquo;s returned to the user, and a <code>popularity</code> field which will determine how the results are sorted.</p>
+
+``` terminal
+$ rails g resource search_suggestion term popularity:integer
+$ rake db:migrate
+```
+
+<p>The <code>/search_suggestions</code> path now routes to the <code>index</code> action of our new <code>SearchSuggestionsController</code>. jQueryUI expects some JSON to be returned from this action and an array of data returned here will display the results to the user. To test that this is working we&rsquo;ll add some test data here.</p>
+
+``` /app/controllers/search_suggestions_controller.rb
+class SearchSuggestionsController < ApplicationController
+  def index
+    render json: %w[foo bar]
+  end
+end
+```
+
+<p>We&rsquo;ve already added some CSS to make the auto-complete list look good so we can test our auto-complete behaviour.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1431/original/E399I02.png" width="800" height="500" alt="Entering text into the search box now shows our test autocomplete data."/>
+</div>
+
+<p>Instead of displaying dummy data the list should show common keywords from the products that match the text that has been entered. We&rsquo;ll write this behaviour in the <code>SearchSuggestions</code> model and have the controller call a method on the model.</p>
+
+``` /app/controllers/search_suggestions_controller.rb
+class SearchSuggestionsController < ApplicationController
+  def index
+    render json: SearchSuggestion.terms_for(params[:term])
+  end
+end
+```
+
+<p>This method should return an array of the terms that we want to suggest to the user but how should it do that? We need to look up a list of suggestions that start with the text that has been entered into the text box. Ideally these would already be in the database and we could look them up with a query, ordered by their popularity, and return up to, say, 10 results. The code to do that would look something like this:</p>
+
+``` /app/models/search_suggestions.rb
+def self.terms_for(prefix)
+  suggestions = where("term like ?", "#{prefix}_%")
+  suggestions.order("popularity desc").limit(10).pluck(:term)
+end
+```
+
+<p>To get this to work we&rsquo;d just need to fill up our table by indexing the products data. We&rsquo;ll create a Rake task called <code>search_suggestions:index</code> to do this.</p>
+
+``` /lib/tasks/search_suggestions.rake
+namespace :search_suggestions do
+  desc "Generate search suggestions from products"
+  task :index => :environment do
+    SearchSuggestion.index_products
+  end
+end
+```
+
+<p>This Rake task calls an <code>index_products</code> method on the <code>SearchSuggestion</code> model which we&rsquo;ll need to write.</p>
+
+``` /app/models/search_suggestion.rb
+def self.index_products
+  Product.find_each do |product|
+    index_term(product.name)
+    product.name.split.each { |t| index_term(t) }
+    index_term(product.category)
+  end
+end
+
+def self.index_term(term)
+  where(term: term.downcase).first_or_initialize.tap do |suggestion|
+    suggestion.increment! :popularity
+  end
+end
+```
+
+<p>Here we loop through all the products, using <code>find_each</code> so that a batch find is used and all the products aren&rsquo;t loaded into memory at once. We then call an <code>index_term</code> method on each name and also split each product&rsquo;s name at the spaces and index each separate word in the name too. We also index each product&rsquo;s category. There&rsquo;s probably a more efficient way to do this but what we&rsquo;ve got will work well here. In the <code>index_term</code> method we look for a <code>SearchSuggestion</code> with the term that&rsquo;s passed in and use <code>first_or_initialize</code> to find or create a term if a matching one isn&rsquo;t found. We then increment its popularity so that terms that are found more often appear nearer the top of the list. Instead of using this as a metric for popularity we could measure the popularity of products and have more popular products show up at the top of the list or keep track of the search terms that are used most often and order the list based on this. We&rsquo;ll run this Rake task now to index our products.</p>
+
+``` terminal
+$ rake search_suggestions:index
+```
+
+<p>Now it&rsquo;s the moment of truth. When we start typing in the search box we should see the matching suggestions and we do.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1432/original/E399I03.png" width="800" height="500" alt="Matching search terms are now returned."/>
+</div>
+
+<p>This has worked. We can see a list of search suggestions with the most popular terms at the top of the list.</p>
+
+<h3>Increasing Performance</h3>
+
+<p>Our search box now works but how well does it perform? The request to fetch matching search terms will be triggered frequently as users type search terms and we might be getting hundreds of searches made per second if our site gets busy. How can we measure this and how can we ensure that the results are returned as quickly as possible? One way is to use the Rack Mini-Profiler gem which we covered in <a href="http://railscasts.com/episodes/368-miniprofiler">episode 368</a>. This is installed by adding it to the gemfile and running bundle.</p>
+
+``` /Gemfile
+gem 'rack-mini-profiler'
+```
+
+<p>When we restart the server now each request will report the time it took to process and this even works for AJAX requests. As we type into the search field each request&rsquo;s time will be added to the list on that&rsquo;s shown on the page.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1433/original/E399I04.png" width="800" height="500" alt="Mini-Profiler now shows us how long each request takes to complete."/>
+</div>
+
+<p>Each request only takes a few milliseconds, which isn&rsquo;t bad, but lets see if we can improve it. If we want to shave milliseconds off a request a good place to look is in the Rack middleware. Each request that comes in to our application goes through an entire middleware stack which can add overhead. To get around this we can apply the technique we demonstrated in <a href="http://railscasts.com/episodes/150-rails-metal-revised">episode 150</a>. Instead of responding with a traditional Rails controller we can add some middleware near the top of the stack which will intercept requests for search suggestions. This way the request won&rsquo;t go through the entire stack, although we will lose some functionality such as logging and cookies. We&rsquo;ll put our custom middleware in an <code>app/middleware</code> directory.</p>
+
+``` /app/middleware/search_suggestions.rb
+class SearchSuggestions
+  def initialize(app)
+    @app = app
+  end
+
+  def call(env)
+    if env["PATH_INFO"] == "/search_suggestions"
+      request = Rack::Request.new(env)
+      terms = SearchSuggestion.terms_for(request.params["term"])
+      [200, {"Content-Type" => "application/json"}, [terms.to_json]]
+    else
+      @app.call(env)
+    end
+  end
+end
+```
+
+<p>Middleware can just be a plain Ruby class with an <code>initialize</code> method that takes a Rack application, which is what we&rsquo;ve done here. In <code>initialize</code> we store the app in an instance method here for later use. We also have a <code>call</code> method which accepts a Rack environment and in here we intercept requests that match the <code>search_suggestions</code> path. Requests that don&rsquo;t match are passed on to the application which makes our middleware act as a kind of endpoint as it can handle certain types of request directly. For those requests that do match we return a <code>200 OK</code> response, setting the content type to <code>application/json</code> and setting the body to the output from <code>SearchSuggestion.terms_for</code> for the terms passed in. We don&rsquo;t have access to the request params in the usual way so we grab the <code>request</code> object and use that to get the <code>term</code> param. Now we just need to add this middleware to our app in its configuration file. By using <code>insert_before</code> and passing in <code>0</code> as the first argument and the name of our middleware class as the second our middleware will be added at the top of the stack.</p>
+
+``` /config/application.rb
+config.middleware.insert_before 0, "SearchSuggestions"
+```
+
+<p>After we restart the server again and try entering a search term now the suggestions should come back more quickly.</p> 
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1434/original/E399I05.png" width="800" height="500" alt="Search requests now complete around twice as quickly now that we&rsquo;re using our middleware."/>
+</div>
+
+<p>The search suggestions are now taking less than 2ms to return so we&rsquo;ve decreased the response time quite substantially with our middleware. Keep in mind that we&rsquo;re profiling our application in the development environment so these numbers may well be different in production. To get more accurate figures we could set up a staging environment with similar hardware to that we&rsquo;ll be using in production. That said, a decrease in response time in development will generally be reflected in production, too.</p>
+
+<p>The next performance concern that we&rsquo;ll take a look at is the call to the database that returns the suggestions. This is where most of the time will be spent for these requests and while these queries are currently fairly quick as the dataset is small as it grows this might become an issue. One way to solve this issue is through caching. We could set up a Memcached store like we did in <a href="http://railscasts.com/episodes/380-memcached-dalli">episode 380</a> and cache the results of the <code>terms_for</code> method, like this:</p>
+
+``` /app/models/search_suggestion.rb
+def self.terms_for(prefix)
+  Rails.cache.fetch(["search-terms", prefix]) do 
+    suggestions = where("term like ?", "#{prefix}_%")
+    suggestions.order("popularity desc").limit(10).pluck(:term)
+  end
+end
+```
+
+<p>We use a combination of the string &ldquo;search-terms&rdquo; and the entered search phrase to create a unique key for each search term. The results are then cached using whatever store we specify. If we try this out now by searching for the same term more than once we now see response times of under a millisecond.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1435/original/E399I06.png" width="800" height="500" alt="Redis makes our searches complete even more quickly."/>
+</div>
+
+
+<h3>Using Redis To Improve Performance</h3>
+
+<p>This caching technique can be effective but if the user&rsquo;s searching for a term that isn&rsquo;t cached the response will take longer as not only does the database query need to be made, the results also need to be written to the cache store. At this point we might start looking for a different storage engine for the autocompletion to replace the SQL database. One such option is <a href="http://redis.io/">Redis</a> which is an advanced in-memory key-value store which is very fast and which has some features that will suit our needs  perfectly, such as sorted sets. With it we can add records to a sorted set and assign a value to each one so that it&rsquo;s sorted. We can then use <code>ZRANGE</code> to fetch the set in the right order later. Let&rsquo;s say that we want to index the term &ldquo;food&rdquo;. We could make a separate set for each partial match of that word (&ldquo;f&rdquo;, &ldquo;fo&rdquo; and &ldquo;foo&rdquo;) and when a user starts typing the word &ldquo;food&rdquo; we can look up a set with that name. If we index multiple terms that start with &ldquo;foo&rdquo; these would also be returned, sorted by their score. We can use <code>ZREVRANGE</code> to do this to return them in reverse order of score so that the most popular are returned first. To add an item to a set we use ZADD but we can also use <code>ZINCRBY</code> to increment the score for an item that already exists. This will be useful to us as a way to increase the popularity of a given term.</p>
+
+<p>To try this out we&rsquo;ll need to install Redis. If you&rsquo;re running OS X the easiest way to do this is to use Homebrew. Redis can then be installed by running <code>brew install redis</code>. We can then start it up by running this command.</p>
+
+``` terminal
+$ redis-server /usr/local/etc/redis.conf
+```
+
+<p>We can now set up our application to work with Redis. First we&rsquo;ll add the redis gem to our gemfile then run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'redis'
+```
+
+<p>Next we&rsquo;ll create an initializer file where we&rsquo;ll set up our Redis connection. We&rsquo;ll store this in a global variable so that we can access it easily in the rest of our app.</p>
+
+``` /config/initializers/redis.rb
+$redis = Redis.new
+```
+
+<p>Now we just need to configure our <code>SearchSuggestion</code> model so that it no longer uses ActiveRecord but Redis instead.</p> 
+
+``` /app/models/search_suggestion.rb
+class SearchSuggestion
+  def self.terms_for(prefix)
+    $redis.zrevrange "search-suggestions:#{prefix.downcase}", 0, 9
+  end 
+
+  def self.index_products
+    Product.find_each do |product|
+      index_term(product.name)
+      product.name.split.each { |t| index_term(t) }
+      index_term(product.category)
+    end
+  end
+
+  def self.index_term(term)
+    1.upto(term.length - 1) do |n|
+      prefix = term[0, n]
+      $redis.zincrby "search-suggestions:#{prefix.downcase}", 1, term.downcase
+    end
+  end
+end
+```
+
+<p>We fetch matching terms by calling <code>$redis.zrevrange</code>, passing in the name of a set and asking for the first ten items. The set&rsquo;s name is made up from the string &ldquo;search-suggestions&rdquo; and the search term. In a production application we&rsquo;d do some escaping here to make sure that the key is sanitized, but we won&rsquo;t do that here. To do the indexing we make a separate set for each portion of the search term, starting with the first letter then adding a letter each time. We call <code>$redis.zincrby</code> to increment the score for each term, using the same set name we used to read the terms before.</p> 
+
+<p>We&rsquo;ll need to run rake <code>search_suggestions:index</code> again to index our records in Redis and after we&rsquo;ve restarted our server again we can test out our auto-completion again. When we enter a search term now we get similar results as before and the speed is similar to what we were getting when we were using caching before.</p> 
+
+<p>To learn more about auto-completion with Redis take a look at the <a href="https://github.com/seatgeek/soulmate">Soulmate gem</a>. The source code was a big help in building the Redis solution for this episode. You might even consider using this gem in your applications if it suits your needs.</p>

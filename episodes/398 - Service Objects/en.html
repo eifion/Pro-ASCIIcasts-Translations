@@ -1,0 +1,257 @@
+<p>Over time the models in our Rails applications may become rather large and filled with methods that may not necessarily relate to one another. For example the User model below deals with authentication with passwords or OmniAuth, has search functionality, handles converting records to CSV, sends out invitation emails and manages password resets. (The method bodies have been omitted to save space).</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  attr_accessible :email, :username, :password, :password_confirmation
+
+  validates_presence_of :username, :email
+  validates_uniqueness_of :username
+  validates_confirmation_of :password
+
+  has_secure_password
+
+  def self.authenticate(username, password)
+  end
+
+  def self.from_omniauth(auth)
+  end
+
+  def self.search(query)
+  end
+
+  def self.to_csv(options = {})
+  end
+
+  def send_invitation(email)
+  end
+
+  def reached_invitation_limit?
+  end
+
+  def send_password_reset
+  end
+
+  def generate_password_reset_token
+  end
+
+  def password_reset_expired?
+  end
+end
+```
+
+<p>We have behaviour here which isn&rsquo;t related so why is it all in the same model? This is a common result of always pushing behaviour from the controllers down to the model layer. In this episode we&rsquo;ll look at a couple of ways to refactor this model so that it&rsquo;s not one giant ball of unrelated methods. Before we get into refactoring it&rsquo;s important that we have a good test suite to ensure that we don&rsquo;t break any behaviour. We have a set of features for testing at a high level (these were formerly known as request specs) and we also have a model spec for testing at a lower level.</p>
+
+<p>If we don&rsquo;t have a test suite then it&rsquo;s a good idea to add one before doing any major refactoring as we can then add tests around the code that we&rsquo;re going to change. If you&rsquo;re unfamiliar with writing tests for Rails applications take a look at <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a> which covers writing these kinds of tests. By the way, refactoring the <code>User</code> model will help us improve the lower-level tests well as right now we&rsquo;re currently testing all its behaviour in one file. Refactoring the model will help us to refactor the tests out into separate files too.</p> 
+
+<h3>Refactoring Into Modules</h3>
+
+<p>Before we start our refactoring we should check that all our tests pass; if they do then we&rsquo;re ready to begin. One common way to break up large models is to use concerns, which are explained in this blog post2. These involve moving behaviour into models which can then be included in a model and will be supported by default in Rails 4, but we can take the same approach in Rails 3. The convention is to create a <code>concerns</code> directory under <code>app/models</code> but the files in this directory won&rsquo;t be loaded by default. To do this in Rails 3 we have to change the autoload paths in the application&rsquo;s configuration file to include this directory, although in Rails 4 this directory will be automatically included so we won&rsquo;t need to do this.</p>
+
+``` /config/application.rb
+config.autoload_paths += %W(#{config.root}/app/models/concerns)
+```
+
+<p>Now we can start to extract code from our <code>User</code> model into a concern. We&rsquo;ll start by moving the authentication behaviour into a new module. We can&rsquo;t just paste the code into the new module as we can&rsquo;t call <code>has_secure_password</code> directly here, we need to call it when it&rsquo;s included in the model. We can do this in a couple of ways, a common approach is to use the <code>ActiveSupport::Concern</code> module and an included block so that the code is scoped to the context of the class when it&rsquo;s included. This module also gives us a nested <code>ClassMethods</code> module and methods placed here are added to the class as class methods instead of instance methods.</p>
+
+``` /app/models/concerns/authentication.rb
+module Authentication
+  extend ActiveSupport::Concern
+
+  included do
+    has_secure_password
+  end
+
+  module ClassMethods   
+    def authenticate(username, password)
+      user = find_by_username(username)
+      user if user && user.authenticate(password)
+    end
+
+    def from_omniauth(auth)
+      where(auth.slice(:provider, :uid)).first_or_initialize.tap do |user|
+        user.provider = auth[:provider]
+        user.uid = auth[:uid]
+        user.username = auth[:info][:nickname]
+        user.save!
+      end
+    end
+  end
+end
+```
+
+<p>Back in our <code>User</code> model we can now include the module.</p>
+
+``` /app/models/user.rb
+include Authentication
+```
+
+<p>When we run our tests again now they still all pass. While this has worked it may not have been the best way for a number of reasons. One issue with modules is that it&rsquo;s sometimes difficult to tell what context we&rsquo;re currently in in a method and what other methods we can currently call. For example if we call <code>self</code> in a method it&rsquo;s fairly obvious here that it refers to the <code>User</code> class in our module, but this isn&rsquo;t always the case. If we have a module that we plan to use just in one class we can namespace it with that class so it&rsquo;s clear which class we intend to use it in. We can then move it into a <code>user</code> directory.</p>
+
+``` /app/models/concerns/users/authentication.rb
+class User
+  module Authentication
+    extend ActiveSupport::Concern
+
+    included do
+     has_secure_password
+    end
+
+    module ClassMethods   
+      # Methods omitted.
+    end
+  end
+end
+```
+
+<p>We can now try applying this pattern to the rest of the <code>User</code> model. When we&rsquo;ve finished it will look like this:</p>
+
+``` /app/models/user.rb
+ class User < ActiveRecord::Base
+  attr_accessible :email, :username, :password, :password_confirmation
+
+  validates_presence_of :username, :email
+  validates_uniqueness_of :username
+  validates_confirmation_of :password
+
+  include Authentication
+  include Searchable
+  include CsvConversion
+  include Inviter
+  include PasswordResettable
+end
+```
+
+<p>The class is now much cleaner but we might have problems with this approach, especially when it comes to debugging. It&rsquo;s now difficult to see the full behaviour of  this model in one location. The modules could be adding anything from validations to associations or callbacks but it&rsquo;s not easy to see if that&rsquo;s the case. Also if we&rsquo;re wondering what behaviour a given method has when it&rsquo;s called on <code>User</code> it can be a bit of a guessing game to work out which module the method&rsquo;s defined in. We might also find that some modules define the same method, overwriting some of its behaviour. This is a common practice in Rails&rsquo; source code but it can make the source code difficult to read. We could use <code>grep</code> or a project-wide search to help with some of these issues but it&rsquo;s better if we can read our code without having to rely on these. Steven Harman described this situation <a href="http://stevenharman.net/bag-of-methods-module-and-grep-driven-development">in his blog</a> as a &ldquo;Bag of Methods Module&rdquo; and &ldquo;Grep-driven Development&rdquo; and Ryan Bates wrote an article called <a href="https://gist.github.com/4172391">&ldquo;My Issues With Modules&rdquo;</a></p> 
+
+<h3>Refactoring With Service Objects</h3>
+
+<p>While there are good use cases for modules it&rsquo;s too easy to abuse them when using concerns. Let&rsquo;s take a look at another approach to refactoring our <code>User</code> model. When we&rsquo;re looking for a way to refactor code it&rsquo;s sometimes a good idea to do a reverse refactoring and make the code uglier before we make it prettier again. This usually involves moving code up the stack or moving methods inline into their caller. We&rsquo;ll focus first on these two authentication-related methods in <code>User</code>.</p>
+
+``` /app/models/user.rb
+def self.authenticate(username, password)
+  user = find_by_username(username)
+  user if user && user.authenticate(password)
+end
+
+def self.from_omniauth(auth)
+  where(auth.slice(:provider, :uid)).first_or_initialize.tap do |user|
+    user.provider = auth[:provider]
+    user.uid = auth[:uid]
+    user.username = auth[:info][:nickname]
+    user.save!
+  end
+end
+```
+
+<p>Both these methods are called in <code>SessionsController</code> and deal with authentication. The <code>create</code> action checks to see if OmniAuth credentials were passed in and, if so, calls <code>from_omniauth</code> to build a user. If not it will authenticate them with their username and password from the form. If either of these methods is successful we sign the user in.</p> 
+
+``` /app/controllers/sessions_controller.rb
+def create
+  if env["omniauth.auth"]
+    @user = User.from_omniauth(env["omniauth.auth"])
+  else
+    @user = User.authenticate(params[:username], params[:password])
+  end
+  if @user
+    session[:user_id] = @user.id
+    redirect_to root_url, notice: "Logged in!"
+  else
+    flash.now.alert = "Username or password is invalid"
+    render "new"
+  end
+end
+```
+
+<p>We&rsquo;ll move this behaviour inline from the model to the controller so that the first part of <code>create</code> looks like this:</p>
+
+``` /app/controllers/sessions_controller.rb
+if auth = env["omniauth.auth"]
+  @user = User.where(auth.slice(:provider, :uid)).first_or_initialize.tap do |user|
+    user.provider = auth[:provider]
+    user.uid = auth[:uid]
+    user.username = auth[:info][:nickname]
+    user.save!
+  end
+else
+  user = User.find_by_username(params[:username])
+  @user = user if user && user.authenticate(params[:username], params[:password])
+end
+```
+
+<p>We can now delete the <code>authenticate</code> and <code>from_omniauth</code> methods from <code>User</code>. If we run our tests now the high-level feature specs will still pass but some of the lower level specs will fail as they rely on the methods we&rsquo;ve removed from <code>User</code>.</p>
+
+<p>Our controller&rsquo;s <code>create</code> action is quite messy now but before we start refactoring it it&rsquo;s worth pointing out that this code is very nicely isolated so if we&rsquo;re trying to work out exactly what this action does all its behaviour is in one place. When trying to improve code it&rsquo;s worth asking ourselves how many places we need to look in to understand what a given piece of code does and also how much noise there is in code that doesn&rsquo;t relate to the code we&rsquo;re trying to read. Thinking about these questions can make us more sensitive about moving behaviour from the controller into the model layer. What we&rsquo;d doing in our <code>SessionsController</code> if we started refactoring it the wrong way is taking a nicely isolated piece of code what is fired when a user triggers a specific action and dispersing it through our model layer and mixing it with the the rest of our application&rsquo;s behaviour.</p>
+
+<p>This suggests that we should keep this behaviour in the controller, but controllers are difficult to test directly and they have enough responsibility handling requests and responses. It seems that we need another kind of object that&rsquo;s designed to refactor complex controller actions into and that&rsquo;s exactly what we&rsquo;ll do. Objects like this are often called service objects so we&rsquo;ll create a new <code>services</code> directory under app and place these classes there. To start we&rsquo;ll create an <code>Authentication</code> class which will give us a place to refactor our <code>create</code> action&rsquo;s behaviour. We can then refactor our create action using methods that we&rsquo;ll write shortly. We&rsquo;ll instantiate an <code>Authentication</code> instance and pass in what it needs to do the authentication: the params for the username and password authentication and the OmniAuth hash. We can then create methods on it, such as <code>authenticated?</code> to check that the current user is authenticated and <code>user</code> to get the current user.</p>
+
+``` /app/controllers/sessions_controller.rb
+def create
+  auth = Authentication.new(params, env["omniauth.auth"])
+  if auth.authenticated?
+    session[:user_id] = auth.user.id
+    redirect_to root_url, notice: "Logged in!"
+  else
+    flash.now.alert = "Username or password is invalid"
+    render "new"
+  end
+end
+```
+
+<p>We can now write the code for the <code>Authentication</code> class.</p>
+
+``` /app/services/authentication.rb
+class Authentication
+  def initialize(params, omniauth = nil)
+    @params = params
+    @omniauth = omniauth
+  end
+
+  def user
+    @user ||= @omniauth ? user_from_omniauth : user_with_password
+  end
+
+  def authenticated?
+    user.present?
+  end
+
+private
+
+  def user_from_omniauth
+    User.where(@omniauth.slice(:provider, :uid)).first_or_initialize.tap do |user|
+      user.provider = @omniauth[:provider]
+      user.uid = @omniauth[:uid]
+      user.username = @omniauth[:info][:nickname]
+      user.save!
+    end
+  end
+
+  def user_with_password
+    user = User.find_by_username(@params[:username])
+    user && user.authenticate(@params[:password])
+  end
+end
+```
+
+<p>It might be tempting to further refactor some of this behaviour out into the model, especially if you&rsquo;re following principles such as Tell, Don&rsquo;t Ask or the Law of Demeter but we&rsquo;ll resist that refactoring as we want all this action-related behaviour to be all in one place. We can now look at the <code>create</code> action, see that it uses the <code>Authentication</code> class then see all the related code there. If we start refactoring code into the model we&rsquo;re in danger of heading back where we were before where the model was a grab-bag of miscellaneous methods which aren&rsquo;t necessarily related.</p>
+
+<p>Our feature specs still all pass, but what about the lower-level tests? For these we can create a <code>spec/services</code> directory and write code there to test the authentication functionality directly in a similar way to how we test models.</p>
+
+<p>Now that we have our authentication code extracted what about the other behaviour in the <code>User</code> model? What would it look like if we extracted this?</p>
+
+``` /app/models/user.rb
+class User < ActiveRecord::Base
+  attr_accessible :email, :username, :password, :password_confirmation
+
+  validates_presence_of :username, :email
+  validates_uniqueness_of :username
+  validates_confirmation_of :password
+
+  has_secure_password
+end
+```
+
+<p>Now we&rsquo;ve extracted nearly all the model&rsquo;s behaviour out into various service classes. Does this mean that our model layer is now just a basic data object? Not really; it still has a lot of behaviour related to validations, associations and callbacks. Keeping the model focussed like this feels good and another good thing about extracting code like this is that doing things such as sending emails, adding messages to a message queue or communicating with an external API can all be handled in a service object and we no longer need to have to interact with these directly from the model.</p> 
+
+<p>It&rsquo;s worth pointing out that there&rsquo;s no limit to how we can use service objects in the controllers. We can use multiple service objects in an action if we want to or we can use the same service object in multiple actions. It&rsquo;s up to us how we organise which actions use various service objects but we shouldn&rsquo;t go overboard. We don&rsquo;r have to use a service for every action, especially those that have simple CRUD behaviour.  Service Objects work best for complex controller actions that need to interact with a complex model and where there&rsquo;s no other good place for that behaviour.</p> 
+
+<p>If a service object doesn&rsquo;t seem like a good fit for a given scenario we shouldn&rsquo;t try to force it. There are plenty of other ways that we can refactor large models. This posting on the <a href="http://blog.codeclimate.com/blog/2012/10/17/7-ways-to-decompose-fat-activerecord-models/">Code Climate Blog</a> shows a number of alternative approaches, some of which we may cover in future episodes.</p>
