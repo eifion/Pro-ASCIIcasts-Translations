@@ -1,0 +1,138 @@
+<p>Lately there has been a lot of talk about the default Rails stack. David Heinemeier Hansson recently wrote <a href="http://david.heinemeierhansson.com/2012/rails-is-omakase.html">a blog post</a> about some of his ideas on providing defaults in Rails. If you prefer something outside the default stack that&rsquo;s perfectly fine, for example it&rsquo;s easy to use RSpec instead of Test::Unit, factories instead of fixtures or HAML as a template language and making these changes takes only a few minutes. If you create a lot of Rails applications, though, doing this every time can become tedious so in this episode we&rsquo;ll show some ways to customize the default Rails generator to create applications the way you prefer.</p>
+
+<h3>Creating a Custom Template</h3>
+
+<p>There are many different options that we can pass in to the <code>rails new</code> command to customize it. For example we can use <code>-d</code> to specify a different database, using <code>--skip-test-unit</code> to skip testing-related files  or <code>--skip-sprockets</code> if we don&rsquo;t want to use the asset pipeline. If we want to use some of these options by default we can put them into a <code>.railsrc</code> file in our home directory.</p>
+
+``` ~/.railsrc
+-d postgresql --skip-test-unit --skip-sprockets
+```
+
+<p>Now when we create a new Rails application these options will be applied automatically. This is a new feature that was introduced in Rails 3.2 and we can see a list of the options that we can use by running <code>rails new --help</code>.</p>
+
+<p>If these options aren&rsquo;t enough we can pass in a app template or builder to further customize the generator. We&rsquo;ll take a look at these next, starting with a template. A template is just a Ruby script which is run in the context of the app generator. This means that any call to <code>self</code> in the script is a reference to the generator and that we have all the Rails generator actions at our disposal, including Thor actions. We can call methods like <code>remove_file</code> to remove any generated files that we don&rsquo;t want or <code>create_file</code> to create one. We can also set up gems in this file. Calling <code>gem</code> will add a gem to the application&rsquo;s gemfile and we can even specify which group it should appear in. We can even run Bundler from this file or trigger generators.</p>
+
+``` app_template.rb
+remove_file "README.doc"
+create_file "README.md", "TODO"
+
+gem "rspec-rails", group: [:test, :development]
+run "bundle install"
+generate "rspec:install"
+```
+
+<p>This is great. We can now store in this file the tedious commands we usually use to set up our Rails app. If there are commands that we only want to trigger sometimes we can use conditions. For example the <code>yes?</code> method asks the user if they want certain behaviour or we can use <code>ask</code> to request input from the user. We&rsquo;ll use these &#xa0;to ask the user if they want to generate a root controller and what they want it to be called. If they do we&rsquo;ll create a controller based on the name they enter and add a route to make that controller&rsquo;s index action the root. We&rsquo;ll also remove the static <code>index.html</code> file that&rsquo;s generated, although from Rails 4.0 this won&rsquo;t be necessary.</p>
+
+``` app_template.rb
+if yes? "Do you want to generate a root controller?"
+  name = ask("What should it be called?").underscore 
+  generate :controller, "#{name} index"
+  route "root to: '#{name}\#index'"
+  remove_file "public/index.html"
+end
+```
+
+<p>We can also trigger Git commands in this file so if we want to initialize a new Git repository and make an initial commit we can do so with the <code>git</code> method.</p>
+
+``` app_template.rb
+git :init
+append_file ".gitignore", "config/database.yml"
+run "cp config/database.yml config/example_database.yml"
+git add: ".", commit: "-m 'initial commit'"
+```
+
+<p>Here we initialize a new git repository, add the database configuration file to <code>.gitignore</code> then copy it so that we have an example config file and finally add all the file and make an initial commit.</p>
+
+<p>Our script is now looking quite good so let&rsquo;s try it out. To do so we create a Rails application and use the <code>-m</code> option, passing in the path to the template.</p>
+
+``` terminal
+$ rails new blog -m app_template.rb
+```
+
+<p>This will create our Rails application as normal and, after it has finished installing the app&rsquo;s gems, it will install RSpec and set it up then ask us if we want to generate a root controller. We&rsquo;ll say yes to this and ask it to generate a <code>welcome</code> controller.</p>
+
+<p>If we move into our new application&rsquo;s directory and run <code>git log</code> we&rsquo;ll see that the directory is a Git repository and that the initial commit has been made. When we start the server and visit the root page for our application we&rsquo;ll see that the <code>WelcomeController</code> is set up as the root controller.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1458/original/E148RI01.png" width="800" height="400" alt="The WelcomeController has been defined as the root controller by our template."/>
+</div>
+
+<p>If you&rsquo;re wondering what methods you can call in an application template take a look at the <a href="http://guides.rubyonrails.org/generators.html#generator-methods">RailsGuide on generators</a> which has a useful reference.</p> 
+
+<h3>Custom Builders</h3>
+
+<p>We know now that a template is a great way to add additional behaviour to a newly-generated Rails application but what if we want to replace some of the behaviour while Rails is generating the initial application structure? This can be done by using a builder. Like a template a builder is just a Ruby file, but it needs to define an <code>AppBuilder</code> class and we&rsquo;ll generally want this to inherit from <code>Rails::AppBuilder</code>. This is the class that the app generator delegates to handle the creation of the application&rsquo;s structure and the best way to see how it works is to <a href="https://github.com/rails/rails/blob/master/railties/lib/rails/generators/rails/app/app_generator.rb">browse its source code on Github</a>. This is where the class that we inherit from is defined and it contains a number of methods that generate different parts of a new Rails application. We can override these builder methods to customize the way that the Rails app is generated.</p> 
+
+<p>For example we could override the <code>readme</code> method to generate a different README file. Doing this means that we don&rsquo;t have to remove the Rdoc version of the README like we did in our template. Overriding the <code>test</code> method will replace the default test behaviour so we can add code here to use RSpec instead and our application won&rsquo;t have a <code>/test</code> directory.</p>
+
+``` app_builder.rb
+class AppBuilder < Rails::AppBuilder
+  def readme
+    create_file "README.md", "TODO"
+  end
+
+  def test
+    @generator.gem 'rspec-rails', group: [:test, :development]
+    run 'bundle install'
+    generate 'rspec:install'
+  end
+end
+```
+
+<p>Note that we can&rsquo;t call the gem method directly as for some reason it doesn&rsquo;t delegate properly to the generator. We need to use <code>@generator.gem</code> here instead.</p> 
+
+<p>We call <code>bundle install</code> in the <code>test</code> method but it&rsquo;s better to call this later on in the application&rsquo;s generation process. It would be best to wait until the app generator calls it, but running <code>generate &#039;rspec:install&#039;</code> requires that we have the RSpec gem installed. It would be good if there was a callback hook that we could use to trigger this after running the <code>bundle</code> command but it seems that there isn&rsquo;t a good way to do this.</p> 
+
+<p>There are a few more things we want to do in this file but they don&rsquo;t override the application&rsquo;s generator methods. In this case we can use a <code>leftovers</code> method which the generator will run at the end of the build. We&rsquo;ll use this to ask the user if they want to generate a root controller and to create our Git repository.</p>
+
+``` app_builder.rb
+def leftovers
+  if yes? "Do you want to generate a root controller?"
+    name = ask("What should it be called?").underscore 
+    generate :controller, "#{name} index"
+    route "root to: '#{name}\#index'"
+    remove_file "public/index.html"
+  end
+
+  git :init
+  append_file ".gitignore", "config/database.yml"
+  run "cp config/database.yml config/example_database.yml"
+  git add: ".", commit: "-m 'initial commit'"
+end
+```
+
+<p>Our builder is now complete and it has the same functionality as our template. The builder seems to be the better approach here as it allows is to override the default generation behaviour such as the generation of the <code>/test</code> directory and the default README file. To use it we generate a new Rails application with the <code>-b</code> option.</p>
+
+``` terminal
+$ rails new blog -b app_builder.rb
+```
+
+<p>Just like our template did this will ask us if we want to generate a root controller and we&rsquo;ll end up with a new Rails application customized the way we want it.</p>
+
+<h3>Template Generators</h3>
+
+<p>If you&rsquo;d rather not create a template or builder from scratch there are some tools available that can make this a lot easier. <a href="http://railswizard.org/">RailsWizard</a> is one option. It&rsquo;s a little out of date but it&rsquo;s a great example of what can be done with app templates. We can select from a number of options from various categories and when we click &ldquo;Finish&rdquo; we&rsquo;ll be given the Rails command that will generate the custom app for us.</p>
+
+<div class="imageWrapper">
+	<img src="http://asciicasts.com/system/photos/1459/original/E148RI02.png" width="800" height="500" alt="Building a template with RailsWizard."/>
+</div>
+
+<p>The command that&rsquo;s generated uses a URL for the template and we can use a URL for a template or a builder instead of a local file path.</p>
+
+``` terminal
+$ rails new APP_NAME -m http://railswizard.org/92a77c755837ff78383a.rb -T
+```
+
+<p><a href="http://appscrolls.org/">App Scrolls</a> is a more recent tool. It takes the idea of RailsWizard and turns it into a command that can be run locally. To use it we first need to install its gem.</p>
+
+``` terminal
+$ gem install appscrolls
+```
+
+<p>If you&rsquo;re using rbenv you&rsquo;ll need to run <code>rbenv rehash</code> before you can use it. Once it&rsquo;s installed we&rsquo;ll have access to a <code>scrolls</code> command and if we run <code>scrolls list</code> we should see a list of the available scrolls. These include RSpec, Guard, Capybara and many more. We can create a new application by running <code>scrolls new</code> and passing in the options we want to use.</p>
+
+``` terminal
+$ scrolls new blog -s rspec guard
+```
+
+<p>This uses Rails templates in a similar way to how RailsWizards works but it&rsquo;s more up to date with current versions of Rails.</p>

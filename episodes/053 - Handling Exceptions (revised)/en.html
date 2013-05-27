@@ -1,0 +1,221 @@
+<p>Exceptions are bound to happen in a Rails application, either because of an error in our application&rsquo;s code or on the user&rsquo;s side. Rails treats both of these in a similar fashion: in development it shows the familiar debug page to help use to resolve what we&rsquo;ve done wrong while in production it renders a static error page. We can simulate the production environment while in development by modifying the development config file and changing one of the settings.</p>
+
+``` /config/development.rb
+config.consider_all_requests_local = false
+```
+
+<p>Alternatively we can set up a staging environment to do this, like we showed in <a href="http://railscasts.com/episodes/72-adding-an-environment">episode 72</a>. After we restart our Rails application and trigger an exception we&rsquo;ll see the static error message page as if our application was in production.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1506/original/E053RI01.png" width="800" height="400" alt="The standard Rails error page."/>
+</div>
+
+<p>By the way, before we deploy an application we should update the static error pages  to better fit its design as this can be easily forgotten. We&rsquo;ll find these pages under the <code>/public</code> directory. Three different status codes are handled by default but we can easily add more to handle other cases. Let&rsquo;s say that we want to handle <code>403 Forbidden</code> errors we can create a <code>403.html</code> page.</p>
+
+``` /public/403.html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Forbidden (403)</title>
+  <style type="text/css">
+    body { background-color: #fff; color: #666; text-align: center; font-family: arial, sans-serif; }
+    div.dialog {
+      width: 25em;
+      padding: 0 4em;
+      margin: 4em auto 0 auto;
+      border: 1px solid #ccc;
+      border-right-color: #999;
+      border-bottom-color: #999;
+    }
+    h1 { font-size: 100%; color: #f00; line-height: 1.5em; }
+  </style>
+</head>
+
+<body>
+  <!-- This file lives in public/403.html -->
+  <div class="dialog">
+    <h1>Forbidden.</h1>
+    <p>You are not authorized to perform that action.</p>
+  </div>
+</body>
+</html>
+```
+
+<p>Rails will render this HTML whenever it encounters an exception that is linked to the 403 status. Let&rsquo;s say that we have a specific type of exception that we want to display this error for. In our <code>ProductsController</code> we have an custom <code>Forbidden</code> class defined which inherits from <code>StandardError</code> and this is raised whenever someone visits the show action. Visiting this page currently triggers a <code>500</code> error as Rails doesn&rsquo;t know how to associate this type of error with the <code>403</code> status. To change this behaviour we need to modify the application&rsquo;s config file.</p>
+
+``` /config/application.rb
+config.action_dispatch.rescue_responses["ProductsController::Forbidden"] = :forbidden
+```
+
+<p>Here we set <code>config.action_dispatch.rescue_responses</code> which is a hash where the key represents the name of the exception that we want to handle and the value is the status code, in this case <code>:forbidden</code> (we can use the status codes that Rack uses instead of a numeric HTTP status). To learn more about how Rack handles status codes take a look at the documentation for <a href="http://rubydoc.info/github/rack/rack/master/Rack/Utils"><code>Rack::Utils</code></a> where we&rsquo;ll find the names for each status code and how it&rsquo;s converted to a symbol. If we visit the a product&rsquo;s page now after restarting our app we&rsquo;ll see a <code>403.html</code> error page.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1507/original/E053RI02.png" width="800" height="400" alt="The page for a product now shows a 403 error."/>
+</div>
+
+<p>Next we&rsquo;ll show you some of the exceptions that Rails maps by default. For example if we trigger a route that doesn&rsquo;t exist we&rsquo;ll see a <code>404</code> error instead of a <code>500</code>. Most of these are defined in the Rails source code in the <a href="https://github.com/rails/rails/blob/master/actionpack/lib/action_dispatch/middleware/exception_wrapper.rb"><code>ExceptionWrapper</code> class</a>. This class sets the default <code>rescue_responses</code> hash that we configured earlier and one of the values set is <code>ActionController::RoutingError</code> which is set to <code>:not_found</code>. This is what we see in the application with the <code>404</code> status.</p>
+
+<h3>Dynamic Error Pages</h3>
+
+<p>This is all well and good but what if we want something more dynamic in our error pages. We&rsquo;re currently displaying static content but what if we want to change the message to something more specific to the user&rsquo;s situation. One way to do this is through the controller. We can call the <code>rescue_from</code> method to override the behaviour of certain exceptions.</p> 
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  rescue_from "ProductsController::Forbidden", with: :forbidden
+
+private
+  def forbidden(exception)
+    render text: exception.message
+  end
+end
+```
+
+<p>Here we call a <code>forbidden</code> method when our <code>ProductsController::Forbidden</code> exception is raised. To keep things simple we just render the text of the exception that&rsquo;s raised so that we can see the dynamic behaviour. When we reload the page that raises that exception now we&rsquo;ll see our custom error.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1508/original/E053RI03.png" width="800" height="x00" alt="The error page now shows the exception&rsquo;s error."/>
+</div>
+
+<p>We could instead render a template here or perform a redirect with a flash message  and this is a good use case for using <code>rescue_from</code> when we have a custom defined exception that we&rsquo;re handling. If we want to turn any kind of exception into a dynamic error page through this, however, <code>rescue_from</code> has limitations. To demonstrate this we&rsquo;ll try handling every kind of exception this way.</p>
+
+``` /app/controllers/application_controller.rb
+class ApplicationController < ActionController::Base
+  protect_from_forgery
+  rescue_from "Exception", with: :forbidden
+
+private
+  def forbidden(exception)
+    render text: exception.message
+  end
+end
+```
+
+<p>When we reload the page it works like it did before and if we try to visit the page for a product that doesn&rsquo;t exist we&rsquo;ll see the text for a <code>RecordNotFound</code> exception. If we visit a page which doesn&rsquo;t have a route an exception is raised and this isn&rsquo;t handled by the controller as it&rsquo;s raised outside the controller layer. There are several other reasons why we might not want to use <code>rescue_from</code>: it completely overrides the exception behaviours so we need to check whether we&rsquo;re in development or production and if we try to map these back to HTTP status codes it&rsquo;s difficult to do from here as it&rsquo;s so early on. Also this doesn&rsquo;t trigger any kind of exception notification emails or alerts we may have set up. In general if we&rsquo;re trying to make error pages dynamic this isn&rsquo;t the best approach.</p>
+
+<h3>Handling Exceptions With Middleware</h3>
+
+<p>Instead it&rsquo;s better to handle this through Rack middleware. Among the middleware for our application is one called <code>ActionDispatch::ShowExceptions</code> which handles rescuing from exceptions and rendering out the error. If we look at the source code for this we&rsquo;ll see that its initializer accepts something called <code>exceptions_app</code> which is a Rack app that the exception handling is delegated to and by default it delegates to something called <code>PublicExceptions</code> which is a Rack app built into Rails and which handles rendering the static HTML error pages. If we want to do something dynamic here instead we can define our own Rack app and supply this as the exceptions app instead. To do this we just have to modify our application&rsquo;s configuration file and set the <code>exceptions_app</code> configuration option. Instead of defining a custom Rack app to handle this we can use our Rails app itself. We can do this by defining <code>self.routes</code> as the <code>exceptions_app</code>.</p>
+
+``` /config/application.rb
+config.exceptions_app = self.routes
+```
+
+<p>To get this work to work we need to configure our routes to handle the different error status codes. The code will be passed in as a path so we can match them to anything we want. For example we could redirect any 404 errors to the home page.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  resources :products
+  root to: 'products#index'
+  match '404', to: redirect('/')
+end
+```
+
+<p>Now when we try to visit a page which doesn&rsquo;t exist we&rsquo;re redirected back to the home page. This is really powerful as instead of redirecting we can trigger any controller action. We&rsquo;ll generate a new controller for this that we&rsquo;ll call <code>Errors</code>.</p>
+
+``` terminal
+$ rails g controller errors
+```
+
+<p>We could use this to redirect <code>404</code> errors to a <code>not_found</code> action but instead we&rsquo;ll make the route more generic and have any status code route to the controller&rsquo;s show action. We&rsquo;ll use constraints to ensure that only paths that are made up of three digits are matched. Note that in Rails 4 this call to <code>match</code> will cause a problem and we&rsquo;ll need to add a <code>:via</code> option and set it to <code>:all</code>.</p>
+
+``` /config/routes.rb
+match ':status', to: 'errors#show', constraints: {status: /\d{3}/ }
+```
+
+<p>We can now define the <code>ErrorsController</code>&rsquo;s <code>show</code> action. For now we&rsquo;ll just display the HTTP status and while we might expect to be able to do this by rendering <code>params[:status]</code> the params actually carry over from the controller action that caused the error so instead we need to use the <code>request.path</code>.</p>
+
+``` /app/controllers/errors_controller.rb
+class ErrorsController < ApplicationController
+  def show
+    render text: request.path
+  end
+end
+```
+
+<p>Now when an exception is raised is is handled through the <code>ErrorsController</code> and the status is displayed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1509/original/E053RI04.png" width="800" height="400" alt="The exception page now shows the path containing the HTTP status."/>
+</div>
+
+<p>We can now render out a dynamic template for any given error. If we create four view templates under <code>/app/views/errors</code> we can use these to display a message relevant to the status.</p>
+
+``` /app/views/errors/503.html
+<h1>Forbidden.</h1>
+<% if @exception %>
+  <p><%= @exception.message %></p>
+<% else %>
+  <p>You are not authorized to perform that action.</p>
+<% end %>
+```
+
+<p>We&rsquo;ll call these from the controller, stripping off the initial slash from the path so that the template based on the status number is called.</p>
+
+``` /app/controllers/errors_controller.rb
+def show
+  render action: request.path[1..-1]
+end
+```
+
+<p>When we visit a non-existent page now we&rsquo;ll see the <code>404</code> template.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1510/original/E053RI05.png" width="800" height="400" alt="Visiting a non-existent page now shows a custom page."/>
+</div>
+
+<p>We can make pages more dynamic based on the exception that was raised. We can get the exception from an environment variable which is set by the middleware.</p> 
+
+``` /app/controllers/errors_controller.rb
+def show
+  @exception = env["action_dispatch.exception"]
+  render action: request.path[1..-1]
+end
+```
+
+<p>We can then use this to display the exception&rsquo;s message, if it exists.</p>
+
+``` /app/views/errors/403.html.erb
+<h1>Forbidden.</h1>
+<% if @exception %>
+  <p><%= @exception.message %></p>
+<% else %>
+  <p>You are not authorized to perform that action.</p>
+<% end %>
+```
+
+<p>Now when an exception is triggered the specific error message is shown.</p>
+
+<p>Another thing we can do in the <code>ErrorsController</code> is support different formats. For example if we receive a JSON request we should present the error in a format that can be accepted. We can do that like this:</p>
+
+``` /app/controllers/errors_controller.rb
+def show
+  @exception = env["action_dispatch.exception"]
+  respond_to do |format|
+    format.html { render action: request.path[1..-1] }
+    format.json { render json: {status: request.path[1..-1], error: @exception.message}}
+  end
+end
+```
+
+<p>Here we use respond_to and respond to HTML requests like we did before and respond to JSON requests with a hash containing the status and exception message.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1511/original/E053RI06.png" width="800" height="400" alt="Our error page now handles JSON requests."/>
+</div>
+
+<p>This is great. We can now handle exception error messages dynamically and this gives us a lot of options. That said it&rsquo;s best not to go overboard here and especially to make sure that we don&rsquo;t cause an exception to be raised in the page that handles what to do when an exception is raised.</p> 
+
+<p>Even if we do have dynamic pages like this it&rsquo;s a good idea to keep the static versions in the <code>/public</code> directory up to date and fitting our application&rsquo;s design in case these are used by the web server itself. We can do this by generating these from our dynamic pages. If we do this we should modify the route that handles the error pages so that it supports an optional <code>errors</code> path as otherwise it will try to use the public page.</p>
+
+``` /config/routes.rb
+match '(errors)/:status', to: 'errors#show', constraints: {status: /\d{3}/}
+```
+
+<p>With this in place we can regenerate the static error pages at any time by making a request to the dynamic error page and passing the output to a static error page.</p>
+
+``` terminal
+$ curl localhost:3000/errors/404 > public/404.html
+```
+
+<p>We can do this whenever we need to or set up a script to do it automatically.</p>

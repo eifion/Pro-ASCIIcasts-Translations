@@ -1,0 +1,225 @@
+<p>In the <a href="http://railscasts.com/episodes/406-public-activity">previous episode</a> we created a user activity feed like the one found on Github, using the Public Activity gem. Like any gem this one is great if it fits our needs exactly, but if not we can always consider creating the functionality from scratch. In this episode we&rsquo;ll build an activity feed this way. This isn&rsquo;t too difficult, although it does present some interesting problems. We&rsquo;ll work with the same cookbook application that we used last time. With this application users can create and update recipes and also comment on them. We want to track this activity and display it on a separate page. </p>
+
+<p>We want to store the activities in the database so we&rsquo;ll start by generating an <code>activity</code> resource. With it we&rsquo;ll track the user who generated the activity, the action that&rsquo;s performed (e.g. create, update or destroy) and the object that the action is performed on, which we&rsquo;ll call <code>trackable</code>. This is a polymorphic association so that it can belong to either a <code>Comment</code> or a <code>Recipe</code>. In Rails 4 we can use <code>belongs_to{polymorphic}</code> to do this, but for our Rails 3.2 application we&rsquo;ll add a <code>trackable_type</code> column instead. We&rsquo;ll also migrate the database to add the new table.</p>
+
+``` terminal
+$ rails g resource activity user:belongs_to action trackable:belongs_to trackable_type
+$ rake db:migrate
+```
+
+<p>Next we&rsquo;ll make some changes to the generated Activity model. We need to make the trackable association polymorphic and change the <code>attr_accessible</code> list so that we can set the <code>trackable</code> object when we create an activity.</p>
+
+``` /app/models/activity.rb
+class Activity < ActiveRecord::Base
+  belongs_to :user
+  belongs_to :trackable, polymorphic: true
+  attr_accessible :action, :trackable
+end
+```
+
+<p>We also need to set up the other side of the association with <code>User</code>.</p>
+
+``` /app/models/user.rb
+has_many :activities
+```
+
+<h3>Recording Activities</h3>
+
+<p>This is all fairly standard so far. Next we need to decide how we&rsquo;ll create an activity record whenever a user performs an action on our site. If, for example, someone creates a recipe we want to record this. One option is to use callbacks: we could add an <code>after_create</code> callback that creates the activity, giving it an action of &ldquo;create&rdquo; and passing in the recipe as the trackable object.</p>
+
+``` /app/models/recipe.rb
+class Recipe < ActiveRecord::Base
+  attr_accessible :description, :image_url, :name
+
+  belongs_to :user
+  has_many :comments, dependent: :destroy
+
+  after_create { |recipe| Activity.create! action: "create", trackable: recipe }
+end
+```
+
+<p>ActiveRecord callbacks have their uses but it&rsquo;s important to be aware of the potential issues. One disadvantage is that they make it less obvious as to what is happening in an action. In this case our <code>RecipesController</code>&rsquo;s <code>create</code> action triggers this callback but we can&rsquo;t tell that by looking at its code as it only looks like it saves the new recipe. The controller actions should be more obvious as this makes it easier to read and debug the code.</p> 
+
+<p>Another issue with callbacks is that they often have unexpected side effects. There are times where we might create a record outside of a user request, such as in a Rake task, in the console, while seeding the database or while running tests. Do we want this callback to be triggered every time one of these events takes place? It&rsquo;s also worth asking when deciding to use a callback or not is what happens when a callback is triggered twice in a single request. This might have some unwanted effects and in this case it would create two <code>Activity</code> records for a single activity. This question is more relevant to an <code>update</code> callback but it&rsquo;s a good question to ask for any type.</p> 
+
+<p>Another sign that this code doesn&rsquo;t belong in a callback is that we can&rsquo;t easily get the current user and this is something we want to track for each activity. It seems that we have enough reasons to avoid using callbacks so we&rsquo;ll take a different approach and track the activity in the controller. We can use the current user&rsquo;s <code>activities</code> association to do this.</p>
+
+``` /app/controllers/recipes_controller.rb
+def create
+  @recipe = current_user.recipes.build(params[:recipe])
+  if @recipe.save
+    current_user.activities.create! action: "create", trackable: recipe
+    redirect_to @recipe, notice: "Recipe was created."
+  else
+    render :new
+  end
+end
+```
+
+<p>We&rsquo;ll be doing this a lot throughout our application so we&rsquo;ll move this code into a method that we&rsquo;ll call <code>track_activity</code>.</p>
+
+``` /app/controllers/recipes_controller.rb
+if @recipe.save
+  track_activity @recipe
+  redirect_to @recipe, notice: "Recipe was created."
+else
+  render :new
+end
+```
+
+<p>We&rsquo;ll write this new method in the <code>ApplicationController</code>. If we run into any cases where we don&rsquo;t want this behaviour we can move the action into a second optional argument.</p>
+
+
+``` /app/controllers/application_controller.rb
+def track_activity(trackable, action = params[:action])
+  current_user.activities.create! action: action, trackable: trackable
+end
+```
+
+<p>This works because Ruby evaluates argument defaults in the context of the method. If you find this approach unclear you can replace <code>params[:action]</code> with <code>nil</code> and set the default within the method, but either way works. With this method in place we can easily add activity tracking to any controller action and it isn&rsquo;t much work to add it to a controller&rsquo;s <code>create</code>, <code>update</code> and <code>destroy</code> actions or wherever else we might want it and we can do the same thing in our <code>CommentsController</code>. If we find that adding this makes our actions too complex we can consider refactoring this into a service object, like we did in <a href="http://railscasts.com/episodes/398-service-objects">episode 398</a>.</p>
+
+<h3>The Activities Page</h3>
+
+<p>Whenever a user performs an action now, such as adding a comment, that activity will be recorded. Next we&rsquo;ll create a page to display these activities. We already have an <code>ActivitiesController</code> from our generated resource so we&rsquo;ll add an <code>index</code> action to it. In it we&rsquo;ll fetch all the activities in the reverse order that they were created.</p>
+
+``` /app/controllers/activities_controller.rb
+class ActivitiesController < ApplicationController
+  def index
+    @activities = Activity.order("created_at desc")
+  end
+end
+```
+
+<p>We&rsquo;ll need a view template to go with this action to render each activity.</p>
+
+``` /app/views/activities/index.html.erb
+<h1>Activities</h1>
+
+<% @activities.each do |activity| %>
+  <%= div_for activity do %>
+    <%= link_to activity.user.name, activity.user %>
+    <%= render "activities/#{activity.trackable_type.underscore}/#{activity.action}", activity: activity %>
+  <% end %>
+<% end %>
+```
+
+<p>Here we loop through each activity, wrapping each one in a <code>div</code> so that we can add some styling later. We then display a link to the user who created it followed by a description of the activity. This description needs to be different for each activity so we&rsquo;ve taken a similar approach to how the Public Activity gem works and rendered a partial for each different type of activity. Each partial needs to be in a directory based on it&rsquo;s trackable type and action, e.g. the partial for creating a comment will be at <code>activities/comments/_create.html.erb</code>.</p> 
+
+``` /app/views/activities/comment/_create.html.erb
+commented on <%= link_to activity.trackable.recipe.name, activity.trackable.recipe %>
+```
+
+<p>Here we describe the activity and link to the recipe that the comment was added to. As the activity was recorded for a comment we fetch its recipe by calling <code>activity.trackable.recipe</code>. Finally we&rsquo;ll add some styling to our list.</p>
+
+``` /app/assets/stylesheets/activities.css.scss
+.activity {
+  border-bottom: solid 1px #CCC;
+  padding: 16px 0;
+}
+```
+
+<p>If we add a comment to a recipe now then visit the activities page we should see the activity listed.</p> 
+
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1474/original/E407I01.png" width="800" height="400" alt="The first activity showing on our activities page."/>
+</div>
+
+<p>It would be better if we didn&rsquo;t have to go through <code>activity.trackable</code> in our partials but could instead use the <code>comment</code> object directly, like this:</p>
+
+``` /app/views/activities/comment/_create.html.erb
+commented on <%= link_to comment.recipe.name, comment.recipe %>
+```
+
+<p>To do this we&rsquo;ll need to make the way we render the partials in the <code>index</code> template more complicated but this template is already quite complex. When a template gets like this it&rsquo;s generally a sign that we should refactor some of its code out into a presenter. (If you&rsquo;re unfamiliar with presenters they were covered in <a href="http://railscasts.com/episodes/287-presenters-from-scratch">episode 287</a>.) We&rsquo;ll create a new <code>presenters</code> directory under <code>app</code> and put our new presenter in there. First we&rsquo;ll modify the view to call the presenter, passing in the activity and <code>self</code> to pass in the view. We could just instantiate this object and erb will render its string representation by calling <code>to_s</code> on it. We could then override <code>to_s</code> in the presenter and put the code that generates the output into it. This doesn&rsquo;t really make explicit how our presenter generates its output and so we&rsquo;ll define a <code>render_activity</code> method and call that in the view.</p>
+
+``` /app/views/activities/index.html.erb
+<% @activities.each do |activity| %>
+  <%= ActivityPresenter.new(activity, self).render_activity %>
+<% end %>
+```
+
+<p>This <code>render_activity</code> method should do that same thing that we did in the view, rendering a <code>div</code> that contains the name of the user who performed that activity, its description and a link to the recipe that it relates to.</p>
+
+``` /app/presenters/activity_presenter.rb
+class ActivityPresenter < SimpleDelegator
+  attr_reader :activity
+
+  def initialize(activity, view)
+    super(view)
+    @activity = activity
+  end
+
+  def render_activity
+    div_for activity do
+     link_to(activity.user.name, activity.user) + " " + render_partial     
+    end
+  end
+
+  def render_partial
+    locals = {activity: activity, presenter: self}
+    locals[activity.trackable_type.underscore.to_sym] = activity.trackable
+    render partial_path, locals
+  end
+
+  def partial_path
+    "activities/#{activity.trackable_type.underscore}/#{activity.action}"
+  end
+end
+```
+
+<p>In order to keep the <code>render_activity</code> method simple we&rsquo;ve moved the code that renders the partial off into a <code>render_partial</code> method. In it we create a hash of the things we want to pass to the partial, including the activity, the presenter and the trackable object. The way we add the trackable object to the hash means that we can refer to it by its name in the partial, e.g. by calling <code>comment.recipe</code> to get the comment&rsquo;s recipe instead of having to go through <code>activity.trackable</code>. Finally we have a <code>partial_path</code> method to create the path to the correct partial.</p>
+
+<h3>Fallback Partials</h3>
+
+<p>We can now create the extra partials for the various other activities but what if we find that there&rsquo;s a lot of duplication between them? One way to reduce this is to create a fallback partial so that instead of having a separate partial for each action for a recipe we have a one that can handle all the activities.</p>
+
+``` /app/views/activities/_recipe.html.erb
+<%= activity.action.sub(/e?$/, "ed") %> recipe
+<%= link_to recipe.name, recipe %>
+```
+
+<p>Here we convert the action into the past tense by taking any &ldquo;e&rdquo; at the end off and adding &ldquo;ed&rdquo; then add the word &ldquo;recipe&rdquo; and a link to the recipe. This won&rsquo;t work yet because we&rsquo;re hard-coding the partial path to include the activity&rsquo;s action in the <code>partial_path</code> method in our presenter. We need to supply a second partial path that it can fall back to that doesn&rsquo;t include the action portion. We&rsquo;ll do this by creating another method in the presenter called <code>partial_paths</code> that returns an array of the partial paths that should be searched.</p>
+
+``` /app/presenters/activity_presenter.rb
+def partial_path
+  partial_paths.detect do |path|
+    lookup_context.template_exists? path, nil, true
+  end || raise("No partial found for activity in #{partial_paths}")
+end
+
+def partial_paths
+  [
+    "activities/#{activity.trackable_type.underscore}/#{activity.action}",
+    "activities/#{activity.trackable_type.underscore}",
+    "activities/activity"
+  ]
+end
+```
+
+<p>We have the same partial path that we had before in the first position in the array, followed by two fallback paths, including a global one. In <code>partial_path</code> we can loop through this array and detect the first one where the path has a template that exists. To do this we can go through the <code>lookup_context</code> on the view and call <code>template_exists?</code>. This takes three arguments, a path, an array of prefixes (we just pass in <code>nil</code>), and whether the template is a partial. If none of the paths find a match we raise an exception so that it&rsquo;s easier to debug these cases.</p> 
+
+<p>If we add some more activities now then visit the activities page we&rsquo;ll see them all listed and rendered by the same partial.</p> 
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1475/original/E407I02.png" width="800" height="500" alt="The activities page can now show different types of activities."/>
+</div>
+
+<p>We&rsquo;re almost done now but we&rsquo;ll make a couple of small final changes. We need to handle the case where the trackable object might not exist so we&rsquo;ll make sure that it does before linking to it.</p>
+
+``` /app/views/activities/_recipe.html.erb
+<%= activity.action.sub(/e?$/, "ed") %> recipe
+<%= link_to recipe.name, recipe if recipe %>
+```
+
+<p>We&rsquo;ll do something similar for the comments.</p>
+
+``` /app/views/activities/comment/_create.html.erb
+<% if comment %>
+  commented on <%= link_to comment.recipe.name, comment.recipe %>
+<% else %>
+  added a comment which has since been removed
+<% end %>
+```
+
+<p>Our page can now display a whole range of activities.</p>

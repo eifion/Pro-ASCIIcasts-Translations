@@ -1,0 +1,387 @@
+<p>A slow test suite can be really discouraging when trying to do test-driven development. Each time we make a change we run the specs and slowly watch the green dots appear across the screen to see if we&rsquo;ve broken anything and as our application grows, along with its test suite, this takes longer and longer to complete/This can lead to us running the tests less often which brings the risk of committing something that breaks our application. In this episode we&rsquo;ll show some tips on how we can improve the speed of a test suite and selectively choose what we want to test so that this doesn&rsquo;t happen.</p>
+
+<h3>First Steps</h3>
+
+<p>We have an application with a test suite that currently takes around 18 seconds to run in addition to the start-up time. This is too long to have to wait for feedback each time we make a change to our application. Before we start improving it let&rsquo;s take a look at the app to see what we&rsquo;re working with. It is very simple, with just a single controller and model. The <code>EpisodesController</code> is written in the RESTful style with the standard seven actions while the model has several methods in it to convert a time code to a number of seconds along with some validations and a scope. The app is tested in a similar way to that that demonstrated in <a href="http://railscasts.com/episodes/275-how-i-test">episode 275</a> using RSpec and Factory Girl and all the testing is done in two spec files. We have a features spec file containing specs to simulate user behaviour at a high level and a model spec file which tests the logic at a lower level. The reason these specs take so long to run is that for each spec file we also have twenty symbolic links in a subdirectory that point to it to simulate a larger test suite.  Let&rsquo;s get started and see what we can do to improve the tests&rsquo; performance.</p> 
+
+<p>The way we run our tests can have a large effect on how quickly they run. Using <code>rake</code> isn&rsquo;t generally a good idea as it adds some overhead. We can see this by using the time command.</p>
+
+``` terminal
+$ time bundle exec rake spec:models
+
+Finished in 0.77065 seconds
+129 examples, 0 failures
+
+Randomized with seed 2083
+
+
+real  0m11.832s
+user  0m8.772s
+sys 0m1.665s
+```
+
+<p>The time that RSpec displays is the time that the green dots took to march across the screen. Below that we can see the total amount of time, including the boot-up time, which is around four seconds longer. If we run the tests through RSpec we&rsquo;ll see a difference in the time taken. Running the tests this way gives a total time of 7.7 seconds, about four seconds quicker.</p>
+
+``` terminal
+$ time bundle exec rspec spec/models
+Run options: include {:focus=>true}
+
+All examples were filtered out; ignoring {:focus=>true}
+.................................................................................................................................
+
+Finished in 0.85975 seconds
+129 examples, 0 failures
+
+Randomized with seed 54380
+
+
+real  0m7.701s
+user  0m6.382s
+sys 0m1.069s 
+```
+
+<p>We can shave off more time by avoiding <code>bundle exec</code> as this also adds some overhead. We&rsquo;ll run <code>bundle binstubs</code> to create a binstub for the <code>rspec-core</code>. This will make a file that we can run and we&rsquo;ll use it to run the model specs again.</p>
+
+``` terminal
+$ bundle binstubs rspec-core
+$ time bin/rspec spec/models
+Run options: include {:focus=>true}
+
+All examples were filtered out; ignoring {:focus=>true}
+.................................................................................................................................
+
+Finished in 0.80396 seconds
+129 examples, 0 failures
+
+Randomized with seed 51207
+
+
+real  0m6.987s
+user  0m5.677s
+sys 0m0.993s
+```
+
+<p>This time it takes just under 7 seconds to run, about 10 percent faster than before.</p>
+
+<h3>Boot-up Time</h3>
+
+<p>We&rsquo;ve improved the speed that our tests run at quite a lot but we&rsquo;ve still got the biggest overhead, which is the time it takes to boot up our Rails application. This is the reason why there&rsquo;s such a difference between the total run time and the time taken to run the specs. One solution is to preload our Rails app with a tool like Zeus, which we covered in <a href="http://railscasts.com/episodes/412-fast-rails-commands">episode 412</a>. If we use <code>zeus start</code> to start up our Rails application we can use it in a new terminal tab to run the tests.</p>
+
+``` terminal
+$ time zeus test spec/models
+Run options: include {:focus=>true}
+
+All examples were filtered out; ignoring {:focus=>true}
+.................................................................................................................................
+
+Finished in 0.81326 seconds
+129 examples, 0 failures
+
+Randomized with seed 0
+
+
+real  0m2.308s
+user  0m0.577s
+sys 0m0.177s
+```
+
+<h3>Selective Testing</h3>
+
+<p>Running all of the tests still takes quite a while and we don&rsquo;t want to have to do this every time we make a change to our application. To get around this we can use selective testing which is one of the best things we can do to improve to improve our testing workflow. No matter how long an app&rsquo;s test suite takes to process we ideally want results back within a couple of seconds each time we make a change. With selective testing we can quickly see the results of the tests that we&rsquo;re working on. One option is to map a key command in our text editor to run the currently selected test through Zeus or something else. How to do this was explained in more detail in <a href="http://railscasts.com/episodes/412-fast-rails-commands">episode 412</a>. In this episode we&rsquo;ll show you some alternatives to selective testing, one of these is to use tagging in RSpec. For example if we want to focus on the spec below for a while we can add a <code>:focus</code> tag to it.</p>
+
+``` /spec/models/episode_spec.rb
+it "scopes published episodes", :focus do
+  published = create(:episode, published_on: 2.days.ago)
+  unpublished = create(:episode, published_on: 2.days.from_now)
+  Episode.published.should eq([published])
+end
+```
+
+<p>This is a tag that we&rsquo;ve configured in our <code>spec_helper</code> file with the lines below.</p>
+
+``` /spec/spec_helper.rb
+config.treat_symbols_as_metadata_keys_with_true_values = true
+config.filter_run focus: true
+config.run_all_when_everything_filtered = true
+```
+
+<p>These lines are useful in any Rails app that uses RSpec for testing as they enable us to selectively run certain tests or to run everything when no test is selected. If we run our specs now only the ones we&rsquo;ve focussed on will be run.</p>
+
+<p>Tagging is also useful as a way of skipping slow tests. We can mark a slow spec with a <code>:slow</code> tag in the same way that we added the <code>:focus</code> one then add a configuration option to exclude the specs marked with this tag. It&rsquo;s a good idea to have a way to disable this in some way so we&rsquo;ve make this configuration item dependent on an environment variable.</p> 
+
+``` /spec/spec_helper.rb
+config.filter_run_excluding :slow unless ENV["SLOW_SPECS"]
+```
+
+<p>When we run our specs now the slow ones are excluded by default unless we set that environment variable. Note that if we&rsquo;re using Zeus we&rsquo;ll need to set this environment variable before we start the Zeus server.</p>
+
+``` terminal
+$ rspec spec/models
+Run options:
+  include {:focus=>true}
+  exclude {:slow=>true}
+
+All examples were filtered out; ignoring {:focus=>true}
+
+Finished in 0.84062 seconds
+128 examples, 0 failures
+
+$ SLOW_SPECS=true rspec spec/models
+Run options: include {:focus=>true}
+
+All examples were filtered out; ignoring {:focus=>true}
+
+Finished in 0.90219 seconds
+129 examples, 0 failures
+```
+
+<p>This is particularly useful if we have some integration specs that use JavaScript as we can use this approach to skip them. We can find out which specs are the slowest by running RSpec with the <code>-p</code> option. This shows the ten slowest specs in our suite.</p>
+
+``` terminal
+Top 10 slowest examples (1.39 seconds, 7.1% of total time):
+  Episodes destroy action removes the record
+    0.21934 seconds ./spec/features/filler/episodes_06_spec.rb:121
+  Episodes update action with valid episode has updated title
+    0.14467 seconds ./spec/features/filler/episodes_05_spec.rb:104
+  Episodes update action with valid episode says the record was updated
+    0.13629 seconds ./spec/features/filler/episodes_02_spec.rb:100
+  Episodes create action with valid episode has minutes
+    0.12972 seconds ./spec/features/filler/episodes_12_spec.rb:71
+(other specs omitted)
+```
+
+<p>We could add the <code>:slow</code> tag to some of these and run them less frequently, maybe when we deploy our application or when we&rsquo;re working on that part of it. If we run this command multiple times we may find that the results are a little inconsistent. This is partly due to Ruby&rsquo;s garbage collection as this can happen at any point during the test run and takes a substantial proportion of the test&rsquo;s time. This brings us to another great way to improve the speed of our tests. We can defer garbage collection so that it only happens between the specs. We do this by adding the following lines to the spec helper.</p>
+
+``` /spec/spec_helper.rb
+config.before(:each) { GC.disable }
+config.after(:each) { GC.enable }
+```
+
+<p>This simple change shaves off a couple of seconds from our full test run in this case but we can do better by further customizing the garbage collection. A solution, originally presented on the Signal vs Noise blog, is explained <a href="http://ariejan.net/2011/09/24/rspec-speed-up-by-tweaking-ruby-garbage-collection/">in this blog post</a>. To use it we need to create a support file containing the class that&rsquo;s shown there.</p>
+
+``` spec/support/deferred_garbage_collection.rb
+class DeferredGarbageCollection
+
+  DEFERRED_GC_THRESHOLD = (ENV['DEFER_GC'] || 15.0).to_f
+
+  @@last_gc_run = Time.now
+
+  def self.start
+    GC.disable if DEFERRED_GC_THRESHOLD > 0
+  end
+
+  def self.reconsider
+    if DEFERRED_GC_THRESHOLD > 0 && Time.now - @@last_gc_run >= DEFERRED_GC_THRESHOLD
+      GC.enable
+      GC.start
+      GC.disable
+      @@last_gc_run = Time.now
+    end
+  end
+end
+```
+
+<p>We also need to add a few lines to the <code>spec_helper</code> file.</p>
+
+``` /spec/spec_helper.rb
+config.before(:all) do
+  DeferredGarbageCollection.start
+end
+
+config.after(:all) do
+  DeferredGarbageCollection.reconsider
+end
+```
+
+<p>In our application this shaves another second or two off the time that our test suite takes to run.</p>
+
+<h3>Parallelization</h3>
+
+<p>Next we&rsquo;ll look at another way to improve our test speed. This involves using the <a href="https://github.com/grosser/parallel_tests">ParallelTests gem</a> which takes advantage of all the cores of our machine&rsquo;s processor to run tests in parallel. To use it we need to add it to our gemfile in the <code>development</code> and <code>test</code> groups. For Zeus support we can also add the <code>zeus-parallel_tests</code> gem. As ever we&rsquo;ll also need to run <code>bundle</code> to install the gems.</p>
+
+``` /Gemfile
+group :test, :development do
+  gem "rspec-rails"
+  gem "parallel_tests"
+  gem "zeus-parallel_tests"
+end
+```
+
+<p>We&rsquo;ll also need to make a change to our database YAML file. ParallelTests will use a different database for each core so we&rsquo;ll need to add this to the name of the test database. It seems to be necessary for this number to be at the end of the file name so we&rsquo;ve removed the <code>.sqlite3</code> extension.</p>
+
+``` /config/database.yml
+test:
+  adapter: sqlite3
+  database: db/test<%= ENV['TEST_ENV_NUMBER'] %>
+  pool: 5
+  timeout: 5000
+```
+
+<p>To finish setting this up we&rsquo;ll need run a few commands that the gems provide.</p> 
+
+``` terminal
+$ rake parallel:create
+$ rake parallel:prepare
+$ zeus-parallel_tests init
+```
+
+<p>The first of these commands creates the databases while the second imports the schema and we&rsquo;ll need to run this every time we run the migrations. The final command gives us Zeus support. When we start up Zeus again now it is configured to support parallel tests and we can run them by running this command:</p>
+
+``` terminal
+$ zeus parallel_rspec spec
+```
+
+<p>This will split up the specs into different processes, depending on the number of cores our machine has. This means that our tests will complete much sooner, running about twice as quickly as they did before.</p>
+
+<h3>Using Guard</h3>
+
+<p>What&rsquo;s really useful is that this is all compatible with Guard. We already have this set up in our application and we showed how to do it in <a href="http://railscasts.com/episodes/264-guard">episode 264</a>. To use Zeus with Guard it seems to be necessary to add the <code>zeus</code> gem to the <code>test</code> environment in the gemfile. Next we&rsquo;ll need to configure the guardfile. We already use a couple of options here which it&rsquo;s worth considering using in your own apps if you have a long test suite.  We set both <code>all_on_start</code> and <code>all_after_pass</code> to <code>false</code> so that Guard doesn&rsquo;t automatically run the entire test suite unless we want it to. We&rsquo;ll add to these options so that Guard also uses Zeus and parallel testing.</p>  
+
+
+``` /Guardfile
+guard 'rspec', all_on_start: false, all_after_pass: false, zeus: true, parallel: true, bundler: false do
+```
+
+<p>Now we can run the <code>guard</code> command and it will detect any file changes and run the tests through Zeus and in parallel.</p> 
+
+<p>Running the tests in parallel does add some overheads so it may not be worth using it with Guard if we&rsquo;re just running one small spec file. If we&rsquo;re running all the specs then it&rsquo;s generally worth running them in parallel.</p>
+
+<h3>Improving The Tests</h3>
+
+<p>Let&rsquo;s change gear a little. Until now we&rsquo;ve focussed on general tools and techniques to improve the performance of any test suite but we can often find the biggest saving by changing the tests themselves. We&rsquo;ll start this by taking a look at our features spec. This is usually the slowest part of a test suite as it tests the entire app at a high level. One of the biggest things we need to look out for here is over-testing. If we have any complex logic or branching paths we don&rsquo;t want to test them all at this level. For example, validations: in this spec we test the validations for the <code>Episode</code> model but these tests don&rsquo;t really belong here. It&rsquo;s better to do a general validation check to ensure that the page displays an error message when it should.</p> 
+
+``` /spec/features/episodes_spec.rb
+it "displays validation errors" do
+  click_on "Create"
+  page.should have_content("error prohibited this")
+end
+```
+
+<p>We can already have similar validation tests in the model layer specs so by removing them from the feature specs we&rsquo;re removing duplication in our tests.</p>
+
+``` /spec/models/episode_spec.rb
+it "validates presence of name" do
+  build(:episode, name: "").should have(1).errors_on(:name)
+end
+
+it "validates presence of description" do
+  build(:episode, description: "").should have(1).errors_on(:description)
+end
+```
+
+<p>Another thing to watch out for in high-level feature specs is before blocks. The code in these is run multiple times and we can often move these into one spec. Even though this will leave our specs less well organized it helps with performance as the code in the before block can be expensive to run. We have before blocks scattered throughout our feature specs so we&rsquo;ll merge them into one spec.</p>
+
+``` /spec/features/episodes_spec.rb
+require 'spec_helper'
+
+describe "Episodes" do
+  it "lists published episodes" do
+    create(:episode, name: "Blast from the Past", published_on: 2.days.ago)
+    create(:episode, name: "Back to the Future", published_on: 2.days.from_now)
+    visit episodes_path
+    page.should have_content("Blast from the Past")
+    page.should_not have_content("Back to the Future")
+  end
+
+  it "shows episode details" do
+    episode = create(:episode, name: "Hello World", description: "Lorem ipsum", published_on: "2013-04-06")
+    visit episode_path(episode)
+    page.should have_content("Lorem ipsum")
+    page.should have_content("April 6, 2013")
+  end
+
+  # etc
+end
+```
+
+<p>We could probably merge these further so that they&rsquo;d run even quicker but we&rsquo;ll keep them separate based on the different user operations that are performed. With these changes made our test suite completes more quickly.</p>
+
+<p>Let&rsquo;s move on to the model layer specs. One of thing to watch out for here is creating database records unnecessarily. In some specs we want to create database records, for example if we&rsquo;re testing scopes we&rsquo;ll need to query the database, but many other specs we can get by by manually creating an instance of a record instead of creating one from a database record. As we&rsquo;re using Factory Girl we can use <code>build</code> instead of <code>create</code> to achieve this when ever we just want to test the behaviour of a model instead of dealing with the persistence of it.</p>
+
+``` /spec/models/episode_spec.rb
+it "parses timecode into seconds" do
+  build(:episode, timecode: '10:03').seconds.should eq(603)
+  build(:episode, timecode: '').seconds.should be_nil
+end
+```
+
+<p>If we have associations set up in Factory Girl we should consider using the <code>build_stubbed</code> method instead which will make a record look like it&rsquo;s persisted but if an attempt is made to access the database an exception will be raised. This also sets up associations so it can often be a better approach if we have more complex scenarios.</p>
+
+<h3>Decoupling Code From Rails</h3>
+
+<p>Another thing to look out for while we&rsquo;re building our app is behaviour that we can decouple from Rails so that it can be tested in isolation without loading our Rails app. This is a technique popularized by Corey Haines and it can work well in our application. We have a lot of logic for handling timecode conversions that we can execute and test outside Rails. There are three methods in our <code>Episode</code> model that aren&rsquo;t really dependent on Rails at all. We&rsquo;ll extract them out into a <code>TimeDuration</code> class in the <code>/lib</code> directory which our <code>Episode</code> model can then delegate to.</p>
+
+``` /app/models/episode.rb
+class Episode < ActiveRecord::Base
+  attr_accessible :description, :name, :seconds, :published_on, :timecode
+  validates_presence_of :name, :description
+  scope :published, lambda { where('published_on <= ?', Time.now.to_date) }
+  delegate :timecode, :minutes, to: :duration
+
+  def duration
+    @duration ||= TimeDuration.new(seconds)
+  end
+
+  def timecode=(timecode)
+    duration.timecode = timecode
+    self.seconds = duration.seconds
+  end
+end
+```
+
+<p>The <code>TimeDuration</code> class is a plain Ruby object that handles the logic so that we don&rsquo;t have to have it in the model layer.</p>
+
+
+``` /lib/time_duration.rb
+class TimeDuration
+  attr_accessor :seconds
+
+  def initialize(seconds)
+    @seconds = seconds
+  end
+
+  def timecode
+    if @seconds
+      min, sec = *seconds.divmod(60)
+      [min, sec.to_s.rjust(2, '0')].join(':')
+    end
+  end
+
+  def timecode=(timecode)
+    if timecode && !timecode.present?
+      min, sec = *timecode.split(':').map(&:to_i)
+      @seconds = min*60 + sec
+    end
+  end
+
+  def minutes
+    (seconds/60.0).round if seconds
+  end
+end
+```
+
+<p>To test this class we create a file under the <code>/spec/lib</code> directory which tests the class just like we would any other Ruby object.</p>
+
+``` /spec/lib/time_duration_spec.rb
+require "time_duration"
+
+describe TimeDuration do
+  it "translates single digit seconds into timecode with minutes" do
+    TimeDuration.new(60*8+3).timecode.should eq('8:03')
+  end
+
+  # Other specs omitted.
+end
+```
+
+<p>Note that we only require one file here, not <code>spec_helper</code> which would load in the entire Rails application and we don&rsquo;t want to do that here. To test this we&rsquo;ll go through a binstub, like this:</p>
+
+``` terminal
+$ ./bin/rspec spec/lib
+```
+
+<p>This completes really quickly, although there&rsquo;s a little overhead from Bundler. Almost all the tests pass but there&rsquo;s one that doesn&rsquo;t because there&rsquo;s no <code>present?</code> method available to call on a string. This is because our class doesn&rsquo;t have <code>ActiveSupport</code> loaded in. We could load it in, but doing so adds some overhead to the test, so instead we&rsquo;ll change the code so it doesn&rsquo;t rely on any ActiveSupport method and use <code>empty?</code> instead. When we run our tests now they all pass.</p>
+
+<p>We could argue that this technique isn&rsquo;t as necessary now that we can use tools like Zeus to preload the Rails app and get results nearly as quickly but there are benefits aside from the speed increase. In particular this can help with design because we&rsquo;re modelling the domain outside the Rails application and this, in theory, can lead to a more maintainable application, although not everyone subscribes to this view.</p>
+
+<p>Finally we&rsquo;ll mention <a href="https://github.com/vcr/vcr">the VCR gem</a>. If we need to test an application that communicates with an external API we can use this to record the response then play it back through our test suite so that we don&rsquo;t have to constantly make the same request each time we run the tests. This was covered in <a href="http://railscasts.com/episodes/291-testing-with-vcr">episode 291</a>.</p>

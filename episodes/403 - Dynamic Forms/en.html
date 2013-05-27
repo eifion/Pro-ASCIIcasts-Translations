@@ -1,0 +1,257 @@
+<p>Below is a screenshot from a store application which doesn&rsquo;t currently have any products. The form for creating a product only lets us give it a name and a price but we have several different types of products that we want to add, each with different attributes. For example for a book we want to store the author and number of pages while for an item of clothing we&rsquo;ll store the sizes that are available and so on.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1451/original/E403I01.png" width="800" height="400" alt="The page for adding a new product."/>
+</div>
+
+<p>What we really want is for the form to have different fields depending on the type of product. We want to be able to manage these fields through a web browser so that they&rsquo;re not hard-coded in the Rails application. How would we make a form that&rsquo;s this dynamic? That&rsquo;s what we&rsquo;ll cover in this episode.</p>
+
+<h3>Adding Dynamic Fields</h3>
+
+<p>We need a way to select the type of product so that the form can show the correct fields. We&rsquo;ll add a menu on the products page that contains a list of each type of product so that we can choose one. We need somewhere to store this list so we&rsquo;ll create a <code>ProductType</code> scaffold so that we can easily manage the different types of product. We&rsquo;ll skip the stylesheets so that they don&rsquo;t interfere with our existing ones.</p>
+
+``` terminal
+$ rails g scaffold ProductType name --skip-stylesheets
+$ rake db:migrate
+```
+
+<p>We&rsquo;ll use our scaffold now to create a new product type called &ldquo;Book&rdquo;.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1452/original/E403I02.png" width="800" height="400" alt="The page for adding a new product type."/>
+</div>
+
+<p>We need a page where we can define the different types of field that each product type will have. For our &ldquo;book&rdquo; type this means that we can add author and page number fields. As we want a product type to have many different product fields it sounds like we need another model so we&rsquo;ll generate a <code>ProductField</code> model to store them. This will have a name attribute and a <code>field_type</code> attribute to store the type, such as text field, a checkbox field and so on. We&rsquo;ll cover validations later but we&rsquo;ll add a boolean attribute now in order to store whether a field is required. We need to associate this field with a product type so we&rsquo;ll add an attribute for that too.</p>
+
+``` terminal
+$ rails g model ProductField name field_type required:boolean product_type:belongs_to
+$ rake db:migrate
+```
+
+<p>Next we&rsquo;ll define the association between <code>ProductType</code> and <code>ProductField</code> in the model files. A <code>ProductType</code> will have many product fields but as we want to avoid repeating the same prefix in the association we&rsquo;ll call it <code>fields</code>.</p>
+
+``` /app/models/product_type.rb
+class ProductType < ActiveRecord::Base
+  attr_accessible :name
+  has_many :fields, class_name: "ProductField"
+end
+```
+
+<p>We&rsquo;d like to manage these product fields in the same form as the product type and as we covered how to do this in <a href="http://railscasts.com/episodes/196-nested-model-form-revised">episode 196</a> so we&rsquo;ll go through this quite quickly. The <code>ProductType</code> model needs to accept nested attributes for the fields. We do this with a call to <code>accepts_nested_attributes_for</code> and by adding <code>fields_attributes</code> to the list of accessible attributes.</p> 
+
+``` /app/models/product_type.rb
+class ProductType < ActiveRecord::Base
+  attr_accessible :name, :fields_attributes
+  has_many :fields, class_name: "ProductField"
+  accepts_nested_attributes_for :fields, allow_destroy: true
+end
+```
+
+<p>In the form where we edit the product type we want to display a list of the fields for that type so that we can manage them. We&rsquo;ll do this by adding the following code before the submit button.</p>
+
+``` /app/views/product_types/_form.html.erb
+<%= f.fields_for :fields do |builder| %>
+  <%= render 'field_fields', f: builder %>
+<% end %>
+<%= link_to_add_fields "Add Field", f, :fields %>
+```
+
+<p>This will render a partial, which need to write, for each field for the product type. We also have a link for adding a field which calls a <code>link_to_add_fields</code> helper method which we&rsquo;ll also need to write. We&rsquo;ll do the partial first.</p>
+
+``` /app/views/product_types/_field_fields.html.erb
+<fieldset>
+  <%= f.select :field_type, %w{text_field check_box} %>
+  <%= f.text_field :name, placeholder: 'field_name' %>
+  <%= f.check_box :required %><%= f.label :required %>
+  <%= f.hidden_field :_destroy %>
+  <%= link_to '[remove]', '#', class: 'remove_fields' %>
+</fieldset>
+```
+
+<p>Here we have a dropdown menu containing the different field types which we&rsquo;ve hard-coded, although we could move them into a constant on the <code>ProductField</code> model so that we could perform validations on it to make sure that the type is correct. We also have a text field for the name, a checkbox for specifying whether the field is required and a link for removing each field. To make this functional we need to do two more things. First we need to write the <code>link_to_add_fields</code> helper method. There&rsquo;s more information about what this does in episode 196.</p>
+
+``` /app/helpers/application_helper.rb
+module ApplicationHelper
+  def link_to_add_fields(name, f, association)
+    new_object = f.object.send(association).klass.new
+    id = new_object.object_id
+    fields = f.fields_for(association, new_object, child_index: id) do |builder|
+      render(association.to_s.singularize + "_fields", f: builder)
+    end
+    link_to(name, '#', class: "add_fields", data: {id: id, fields: fields.gsub("\n", "")})
+  end
+end
+```
+
+<p>We also need to get the JavaScript working which we do by adding this code to the product types CoffeeScript file. This comes again from episode 169 but has been modified slightly to make it compatible with Turbolinks.</p>
+
+``` /app/assets/javascripts/product_types.js.coffee
+$(document).on 'click', 'form .remove_fields', (event) ->
+  $(this).prev('input[type=hidden]').val('1')
+  $(this).closest('fieldset').hide()
+  event.preventDefault()
+
+$(document).on 'click', 'form .add_fields', (event) ->
+  time = new Date().getTime()
+  regexp = new RegExp($(this).data('id'), 'g')
+  $(this).before($(this).data('fields').replace(regexp, time))
+  event.preventDefault()
+```
+
+<p>We can try this out now. If we reload the page we see an &ldquo;Add Field&rdquo; link. We&rsquo;ll click it a few times so that we can create a new &ldquo;Book&rdquo; product type with <code>author</code>, <code>page_count</code> and <code>paperback</code> fields.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1453/original/E403I03.png" width="800" height="550" alt="Adding fields to our &ldquo;Book&rdquo; product type."/>
+</div>
+
+<p>If we create this new product type now then try to edit it the correct fields are shown so it looks like they&rsquo;re being persisted correctly.</p> 
+
+<h3>Adding Custom Fields to the Product Form</h3>
+
+<p>Now that we have a way of defining product types we&rsquo;ll replace the &ldquo;New Product&rdquo; link with a form that so that we can select a product type to create a new product from.</p>
+
+``` /app/views/products/index.html.erb
+<%= form_tag new_product_path, method: :get do %>
+  <%= select_tag :product_type_id, options_from_collection_for_select(ProductType.all, :id, :name) %>
+  <%= submit_tag "New Product", name: nil %>
+<% end %>
+```
+
+<p>The form is submitted to the <code>new_product_path</code> and it makes a GET request so that the new action is triggered. The select menu gets its options from all the <code>ProductTypes</code> using <code>options_from_collection_for_select</code>. When we reload the page now we can choose a product type to create a product from (although we only have one type so far) and when we click the button we&rsquo;ll be taken to the new product page with the product type&rsquo;s <code>id</code> in the query string. We need to display the relevant fields for that product type on this form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1454/original/E403I04.png" width="800" height="400" alt="The &ldquo;New Product&rdquo; form now has the id for the type in the query string."/>
+</div>
+
+<p>In the <code>ProductsController</code>&rsquo;s <code>new</code> action we&rsquo;ll pass in the <code>product_type_id</code> to the product we create.</p> 
+
+``` /app/controllers/products_controller.rb
+def new
+  @product = Product.new(product_type_id: params[:product_type_id])
+end
+```
+
+<p>The <code>Product</code> model doesn&rsquo;t currently have a <code>product_type_id</code> but this is easy to fix by generating a migration to add it. We also want to set up a place to store the values that are entered into the form but this is tricky as these attributes are dynamic and will change depending on the type of the product so we don&rsquo;t want concrete fields in our database for each one. We could use a separate table for these fields or store them in a serialized hash and this second option works quite well. That said, if we were using Postgresql as our database we could look at using hstore, which was covered in <a href="http://railscasts.com/episodes/345-hstore">episode 345</a>. To store the serialized hash we&rsquo;ll also add a <code>properties</code> field to the <code>Product</code> model.</p>
+
+``` terminal
+$ rails g migration add_type_to_products product_type_id:integer properties:text
+$ rake db:migrate
+```
+
+<p>We can now modify the <code>Product</code> model and set up the association with <code>product_type</code>. We&rsquo;ll also serialize the <code>properties</code> attribute as a hash.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :price, :product_type_id, :properties
+  belongs_to :product_type
+  serialize :properties, Hash
+end
+```
+
+<p>Now that we have access to a product&rsquo;s type we can loop through the custom fields and display them in the form. First we&rsquo;ll add hidden field that contains the <code>product_type_id</code> and then we&rsquo;ll add the dynamic fields under the <code>price</code> field.</p>
+
+``` /app/views/products/_form.html.erb
+<%= f.hidden_field :product_type_id %>
+
+<%= f.fields_for :properties do |builder| %>
+  <% @product.product_type.fields.each do |field| %>
+    <%= render "products/fields/#{field.field_type}", field: field, f: builder %>
+  <% end %>
+<% end %>
+```
+
+<p>The new fields are wrapped in a call to <code>fields_for</code>. This is usually used with associations but we can also use it to namespace fields. We&rsquo;ve called it <code>properties</code> so that each field inside it is added to the properties hash and is automatically serialized into the database as a hash when the form is submitted. Inside this we display all the custom fields for the product type. We want each different type of field to be rendered differently and we manage this through partials, rendering out a partial based on the product type&rsquo;s <code>field_type</code>. Now we&rsquo;ll create each partial starting with one for text fields.</p>
+
+``` /app/views/products/fields/_text_field.html.erb
+<div class="field">
+  <%= f.label field.name %><br/>
+  <%= f.text_field field.name %>
+</div>
+```
+
+<p>Then a similar one for checkboxes.</p>
+
+``` /app/views/products/fields/_check_box.html.erb
+<div class="field">
+  <%= f.check_box field.name %>
+  <%= f.label field.name %>
+</div>
+```
+
+<p>When we reload the page now we&rsquo;ll see the new book-related fields.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1455/original/E403I05.png" width="800" height="550" alt="The form for a product now shows the dynamic fields."/>
+</div>
+
+<p>If we add a book through this form it&rsquo;s created successfully. If we then go back to edit it, however, the dynamic fields aren&rsquo;t populated. The fields are saved to the database but they aren&rsquo;t shown on the form. The problem is that the call to <code>fields_for :properties</code> doesn&rsquo;t detect the serialized hash and display the values from it. To get around this we can pass in an object representing the hash that allows getter methods to be called on it for the different keys.</p> 
+
+``` /app/views/products/_form.html.erb
+<%= f.fields_for :properties, OpenStruct.new(@product.properties) do |builder| %>
+```
+
+<p>Now if we have a text field so, say, the author, the form builder will call <code>.author</code> on the object that&rsquo;s passed in through the second argument. If we reload the page now the values in the dynamic fields are shown.</p>
+
+<h3>Validations</h3>
+
+<p>Next we&rsquo;ll get validations working. We can currently submit a book with the author field empty even though we marked this field as required when we set up the &ldquo;book&rdquo; type. We can do this by adding a custom validation method in Product that we&rsquo;ll call validate_properties.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  attr_accessible :name, :price, :product_type_id, :properties
+  belongs_to :product_type
+  serialize :properties, Hash
+
+  validate :validate_properties
+
+  def validate_properties
+    product_type.fields.each do |field|
+      if field.required? && properties[field.name].blank?
+        errors.add field.name, "must not be blank"
+      end
+    end
+  end
+end
+```
+
+<p>This method loops through each field and for each one that&rsquo;s required and which has a blank value it adds a validation error. We then call this method in a validation callback. Now if we try adding or updating a product without an author we&rsquo;ll get a validation error.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1456/original/E403I06.png" width="800" height="500" alt="The dynamic fields now have validations."/>
+</div>
+
+<h3>Handling More Complex Field Types</h3>
+
+<p>Next we&rsquo;ll show how to handle more complex field types. Our current solution can only handle text fields and checkboxes but what if we want to handle a multi-select menu to say, select multiple sizes from a clothing product type. Creating a field type is easy: we just need to add a new option to our <code>field_type</code> select menu.</p> 
+
+``` /app/views/product_types/_field_fields.html.erb
+<%= f.select :field_type, %w{text_field check_box shirt_sizes} %>
+```
+
+<p>We&rsquo;ll also need a new partial to render out this new field type.</p>
+
+``` /app/views/products/fields/_check_box.html.erb
+<div class="field">
+  <%= f.label field.name %><br/>
+  <%= f.select field.name, %w[S M L XL], {}, {multiple: true} %>
+</div>
+```
+
+<p>We could make this field type as complex as we want to, say, by using checkboxes instead of having a select menu, or anything else we like. When we create a new product type now we have a <code>shirt_sizes</code> field type to choose from. We&rsquo;ll create a new &ldquo;Shirt&rdquo; product type with one of these fields then try creating a new shirt.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1457/original/E403I07.png" width="800" height="550" alt="The values entered in the size field are persisted correctly."/>
+</div>
+
+<p>We can choose multiple sizes for this product and when we go back to edit it the sizes we chose will be selected. This field is serialized as an array in the <code>properties</code> hash so if you&rsquo;re using hstore you&rsquo;ll need to handle the serialization manually as this can&rsquo;t store arrays. To finish off this episode we&rsquo;ll modify the page that displays a product so that it displays these dynamic properties.</p> 
+
+``` /app/products/show.html.erb
+<% @product.properties.each do |name, value| %>
+<p>
+  <b><%= name.humanize %>:</b>
+  <%= value %>
+</p>
+<% end %>
+```
+
+<p>This won&rsquo;t look good for every type of field. For example checkboxes will just show either 0 or 1 so we might be better off creating a partial for displaying each product type that we can customize how it&rsquo;s displayed.</p>

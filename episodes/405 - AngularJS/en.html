@@ -1,0 +1,373 @@
+<p><a href="http://angularjs.org/">AngularJS</a> is a framework for creating rich client-side applications. In this episode we&rsquo;ll demonstrate some of what it can do and how to integrate it into a Rails application. The application we&rsquo;ll build will be a simple raffling app where we can enter names and draw random winners. We used a similar app for demonstrating Backbone and Meteor in previous episodes so this will provide a good comparison. We&rsquo;ll start by creating a Rails application with a <code>RaffleController</code> with an <code>index</code> action. We&rsquo;ll also remove the default static index page.</p>
+
+``` terminal
+$ rails new raffler
+$ cd raffler
+$ rails g controller raffle index
+$ rm public/index.html
+```
+
+<p>Next we&rsquo;ll set this action up as the root action.</p>
+
+``` /config/routes.rb
+Raffler::Application.routes.draw do
+  root to: "raffle#index"
+end
+```
+
+<p>We already have some CSS written for this application so we&rsquo;ll add that to the <code>raffle.css.scss</code> file. We&rsquo;ll also wrap the call to <code>yield</code> in the layout file in a <code>div</code> so that we can reference it from our stylesheets.</p>
+
+``` /app/views/layouts/application.html.erb
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Raffler</title>
+  <%= stylesheet_link_tag    "application", :media => "all" %>
+  <%= javascript_include_tag "application" %>
+  <%= csrf_meta_tags %>
+</head>
+<body>
+
+<div id="container">
+  <%= yield %>
+</div>
+
+</body>
+</html>
+```
+
+<p>We now have a single-page application, although it doesn&rsquo;t do anything. Let&rsquo;s add AngularJS to it. There are several ways that we can do this: one is to download the relevant files from the AngularJS website and add them to our application&rsquo;s <code>/vendor</code> directory. Alternatively we can use a gem and we&rsquo;ll add one called <code>angularjs-rails</code> to the assets group of our gemfile. As ever we need to run <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+group :assets do
+  gem 'sass-rails',   '~> 3.2.3'
+  gem 'coffee-rails', '~> 3.2.1'
+
+  # See https://github.com/sstephenson/execjs#readme for more supported runtimes
+  # gem 'therubyracer', :platforms => :ruby
+
+  gem 'uglifier', '>= 1.0.3'
+  gem 'angularjs-rails'
+end
+```
+
+<p>We&rsquo;ll use the assets that this gem provides in the JavaScript manifest file.</p>
+
+``` /app/assets/javascripts/application.js
+//= require angular
+//= require_tree .
+```
+
+<p>AngularJS is compatible with jQuery but it isn&rsquo;t required. We&rsquo;ve removed it from the manifest file so that we&rsquo;re not tempted to fall back on to jQuery code while we&rsquo;re learning Angular. To finish the setup process we need to enable Angular in our application and we do this by adding an attribute to the opening html tag. This will be picked up by the JavaScript.</p>
+
+``` /app/views/layouts/application.html.erb
+<html ng-app>
+```
+
+<p>We can now start to use Angular in our <code>index</code> template. At the top of this page we want a form where the user can add a name to go into the raffle so we&rsquo;ll give it a text field. One of the cool features of Angular that we can use here is its two-way binding. We can bind a form field to some model data by adding an <code>ng-model</code> attribute whose value is a name.</p> 
+
+``` /app/views/raffle/index.html.erb
+<h1>Raffler</h1>
+
+<form>
+  <input type="text" ng-model="newEntry.name">
+</form> 
+
+{{newEntry.name}}
+```
+
+<p>We&rsquo;ve used <code>newEntry.name</code> here. One way to think of this is that <code>newEntry</code> is the object we&rsquo;re working with in this form and <code>name</code> is the attribute that we&rsquo;re managing through this text field. To see this binding in effect we display its value which we do by using double curly brackets. We&rsquo;ll start up our application and load its home page now to try it out. As we start typing in the text box the value is instantly bound and what we&rsquo;ve typed is repeated where we display the value.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1460/original/E405I01.png" width="800" height="400" alt="Any text we type into the textbox is immediately reflected below."/>
+</div>
+
+<p>Next we want to add a list of the existing entries below the text box. When we submit the form the new entry should be appended to this list. We can only get so far with simple bindings and to add custom behaviour we can add some JavaScript using a controller. Adding a controller is commonly done by using a <code>div</code> tag with an <code>ng-controller</code> attribute a nd a name ending in <code>Ctrl</code>.</p>
+
+``` /app/views/raffle/index.html.erb
+<h1>Raffler</h1>
+
+<div ng-controller="RaffleCtrl">
+<form>
+  <input type="text" ng-model="newEntry.name">
+</form> 
+
+{{newEntry.name}}
+</div>
+```
+
+<p>We&rsquo;ll write this controller in the <code>raffle</code> CoffeeScript file. This can be a simple function but in order for it be accessible we&rsquo;ll use the <code>@</code> symbol so that AngularJS can see it.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+@RaffleCtrl = ($scope) ->
+  $scope.entries = [
+    {name: "Larry"}
+    {name: "Curly"}
+    {name: "Moe"}
+  ]
+```
+
+<p>This function takes a scope, which is an object that allows us to interact with a view.  We can get and set variables and functions on this scope and we&rsquo;ve set an <code>entries</code> variable and set it to an array of entries for the raffle. In our view template we want to render this data as a list which we do like this:</p>
+
+``` /app/views/raffle/index.html.erb
+<ul>
+  <li ng-repeat="entry in entries">
+    {{entry.name}}
+  </li>
+</ul>
+```
+
+<p>We now have an unordered list and we want to display each item in the collection in it. We&rsquo;ve done this by adding an <code>ng-repeat</code> attribute to its <code>li</code> element and giving it a value of <code>entry in entries</code>. This loops through our <code>entries</code> array and repeats the element for each one and display its <code>name</code>. When we reload the page we&rsquo;ll see the list of entries that we entered.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1461/original/E405I02.png" width="800" height="400" alt="Our entries are now shown in a list."/>
+</div>
+
+<p>Next we&rsquo;ll make changes so that when a new entry is entered in the text box and the form is submitted it&rsquo;s added to the list. We&rsquo;ll add a button to the form and hook into the submit event by adding an <code>ng-submit</code> attribute to the form. This will trigger a function on the scope that we&rsquo;ll call <code>addEntry</code>.</p>
+
+``` /app/views/raffle/index.html.erb
+<form ng-submit="addEntry()">
+  <input type="text" ng-model="newEntry.name">
+  <input type="submit" value="Add">
+</form>
+```
+
+<p>We&rsquo;ll write this function in our CoffeeScript file. In it we just need to push the new entry to the array using <code>$scope.newEntry</code> which is the object that the form creates. We then set this to an empty object to clear the text box.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+$scope.addEntry = ->
+  $scope.entries.push($scope.newEntry)
+  $scope.newEntry = {}
+```
+
+<p>When we reload the page now the button is there and when we type an entry and submit the form it&rsquo;s added to the list without a page reload.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1462/original/E405I03.png" width="800" height="450" alt="Adding an entry now appends it to the list."/>
+</div>
+
+<p>This shows how powerful Angular&rsquo;s bindings are. With them we can change the data in the JavaScript and see that change instantly reflected in the view.</p>
+
+<h3>Drawing Winners</h3>
+
+<p>Next we&rsquo;ll add a &ldquo;Draw Winner&rdquo; button below the list which will select a random entry and mark it as a winner. First we&rsquo;ll add the button in the view below the list. To listen to its <code>click</code> event we use an <code>ng-click</code> attribute with a function.</p>
+
+``` /app/views/raffle/index.html.erb
+<button ng-click="drawWinner()">Draw Winner</button>
+```
+
+<p>We&rsquo;ll write that function now. In it we pick a random entry and set its <code>winner</code> property to <code>true</code>.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+$scope.drawWinner = ->
+  entry = $scope.entries[Math.floor(Math.random() * $scope.entries.length)]
+  entry.winner = true
+```
+
+<p>In the view we&rsquo;ll add some code to show winning users as winners.</p>
+
+``` /app/views/raffle/index.html.erb
+<li ng-repeat="entry in entries">
+  {{entry.name}}
+  <span ng-show="entry.winner" class="winner">WINNER</span>
+</li>
+```
+
+<p>Here we use the <code>ng-show</code> attribute which only displays the element it&rsquo;s attached to if its value returns <code>true</code>. If we reload the page now then click &ldquo;Draw Winner&rdquo; a random entrant should be marked as a winner.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1463/original/E405I04.png" width="800" height="500" alt="We can now draw winners from the entrants."/>
+</div>
+
+<p>We can select multiple winners and we&rsquo;d like the most recently-selected winner to be displayed in red. To do this we&rsquo;ll need to keep track of the most-recent winner so we&rsquo;ll create a <code>lastWinner</code> variable in our scope.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+ $scope.drawWinner = ->
+  entry = $scope.entries[Math.floor(Math.random() * $scope.entries.length)]
+  entry.winner = true
+  $scope.lastWinner = entry
+```
+
+<p>Now we&rsquo;ll add a class to the <code>span</code> tag for the last winner. We use the <code>ng-class</code> attribute for this and give it an expression with single curly braces so that the <code>highlight</code> class is added if the entry is the last winner.</p>
+
+``` /app/views/raffle/index.html.erb
+<li ng-repeat="entry in entries">
+  {{entry.name}}
+  <span ng-show="entry.winner" ng-class="{highlight: entry == lastWinner}" class="winner">WINNER</span>
+</li>
+```
+
+<p>When we reload the page now and click the &ldquo;Draw Winner&rdquo; button a couple of times we&rsquo;ll see that the most recent winner is shown red just like we want.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1464/original/E405I05.png" width="800" height="500" alt="The most recent winner is now shown in red."/>
+</div>
+
+<p>The next thing we want to do is change the behaviour of the &ldquo;Draw Winner&rdquo; button so that it doesn&rsquo;t re-select a current winner, which it currently does. We want to choose only from the entrants who have yet to win so we&rsquo;ll create a pool of the entrants who haven&rsquo;t yet won and choose a winner from those.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+$scope.drawWinner = ->
+  pool = []
+  angular.forEach $scope.entries, (entry) ->
+    pool.push(entry) if !entry.winner
+  if pool.length > 0
+    entry = pool[Math.floor(Math.random() * pool.length)]
+    entry.winner = true
+    $scope.lastWinner = entry
+```
+
+<p>We do this by using Angular&rsquo;s <code>forEach</code> to loop through the entries and adding the ones what haven&rsquo;t won to the pool. We then select our winners from this pool.</p>
+
+<h3>Persisting Changes to The Database</h3>
+
+<p>We&rsquo;re pretty much done with the client-side behaviour of our application but any entrants we add or winners we pick are reset when we reload the page and aren&rsquo;t persisted to the database. We&rsquo;ll modify our app so that it communicates with the Rails back end and persists the changes we make to the database. We&rsquo;ll generate an <code>Entry</code> resource with name and winner attributes then migrate the database.</p>
+
+``` terminal
+$ rails g resource entry name winner:boolean
+$ rake db:migrate
+```
+
+<p>We want some initial data to work with so we&rsquo;ll create some entries in the seeds file. We can then run <code>rake db:seed</code> to add them to the database.</p>
+
+``` /db/seeds.rb
+Entry.create!(name: "Matz")
+Entry.create!(name: "DHH")
+Entry.create!(name: "Jose Valim")
+Entry.create!(name: "Avdi Grimm")
+Entry.create!(name: "Steve Klabnik")
+Entry.create!(name: "Aaron Patterson")
+```
+
+<p>We need to make a JSON API for this data so that we can communicate with AngularJS and we&rsquo;ll write this in the <code>EntriesController</code>.</p>
+
+``` /app/controllers/entries_controller.rb
+class EntriesController &lt; ApplicationController
+  respond_to :json
+
+  def index
+    respond_with Entry.all
+  end
+
+  def show
+    respond_with Entry.find(params[:id])
+  end
+
+  def create
+    respond_with Entry.create(params[:entry])
+  end
+
+  def update
+    respond_with Entry.update(params[:id], params[:entry])
+  end
+
+  def destroy
+    respond_with Entry.destroy(params[:id])
+  end
+end
+```
+
+<p>The code for this is fairly simple. We use <code>respond_to :json</code> and respond in each each action. You&rsquo;ll probably want to be more extensive in how you set up this API but our simple approach will work here. To communicate with the API we can use something called Angular Resource which is provided as a separate JavaScript file and which we&rsquo;ll need to include in our app&rsquo;s JavaScript manifest file.</p>
+
+``` /app/assets/javascripts/application.js
+//= require angular
+//= require angular-resource
+//= require_tree .
+```
+
+<p>To use this in our application we&rsquo;ll need to restructure the CoffeeScript code a little. We need to define the resource as a dependency and to do this we&rsquo;ll need to make a module which we do by calling <code>angular.module</code> and giving it a name. We need to define <code>ngResource</code> as a dependency for this module to allow us to take advantage of the new file that we included and we&rsquo;ll store the result of this in a variable. Now that we have our Angular Resource dependency set up we can pass the resource as an argument to our controller. This is a function that we can call to return an object that allows us to communicate over a REST API. The first argument passed to this function is the URL to the API and we use <code>/entries/:id</code> here which makes <code>:id</code> a parameter. The second argument specifies the default parameters and we&rsquo;ll set the <code>id</code> to the <code>@id</code> which will be the current object&rsquo;s <code>id</code>. If we&rsquo;re passing an Entry object in to here which has an id assigned then this will be used in the URL otherwise it&rsquo;s skipped and <code>/entries</code> is used. The third argument allows us to specify additional actions that we want to call on the API. The default values handle most of what we need except for the update action so we&rsquo;ll add this and set its method to PUT.</p>
+
+<p>If you want to learn more about how Angular Resource works <a href="http://docs.angularjs.org/api/ngResource.$resource">take a look at the documentation</a> which describes the arguments that we supplied and which shows the default actions which are <code>get</code>, <code>save</code>, <code>query</code>, <code>remove</code> and <code>delete</code>. We can trigger each of these actions as functions so we&rsquo;ll replace the static list of entries in our code with a call to <code>Entry.query()</code> which will call our API that will fetch all the entries from the database.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+app = angular.module("Raffler", ["ngResource"])
+
+@RaffleCtrl = ($scope, $resource) ->
+  Entry = $resource("/entries/:id", {id: "@id"}, {update: {method: "PUT"}})
+  $scope.entries = Entry.query()
+```
+
+<p>Since we&rsquo;ve given our application a module name we&rsquo;ll need to set this as the name in our layout file which we do by setting a value on the <code>ng-app</code> attribute.</p>
+
+/app/views/raffle/index.html.erb
+```
+<div ng-controller="RaffleCtrl">
+```
+
+When we reload the page now we should see the list of names that we added to the database from our seed data.
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1465/original/E405I06.png" width="800" height="600" alt="The list of entrants now comes from the database."/>
+</div>
+
+<p>When we create an entry we want to save it before we add it to the list. We do this by calling the <code>Entry.save</code> function which will submit a POST request and trigger the <code>create</code> action in our Rails app.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+$scope.addEntry = ->
+  entry = Entry.save($scope.newEntry)
+  $scope.entries.push(entry)
+  $scope.newEntry = {}
+```
+
+<p>When we mark an entry as a winner we need to update it in the database and we can do this by either calling <code>Entry.update</code> and passing in the entry or alternatively calling <code>entry.$update</code> as our entry is already a resource object that we can trigger actions on.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+$scope.drawWinner = ->
+  pool = []
+  angular.forEach $scope.entries, (entry) ->
+    pool.push(entry) if !entry.winner
+  if pool.length > 0
+    entry = pool[Math.floor(Math.random() * pool.length)]
+    entry.winner = true
+    entry.$update()
+    $scope.lastWinner = entry
+```
+
+<p>To see if this works we&rsquo;ll reload the page again, add a new entrant and mark some entrants as winners. When we reload the page again the changes should persist.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1466/original/E405I07.png" width="800" height="600" alt="Any data we add is now persisted back to the database. "/>
+</div>
+
+<p>This has worked. The data has persisted as it was stored in the Rails database.</p> 
+
+<h3>Services</h3>
+
+<p>We want to refactor resources out into services. A service is something that we can pass into our controller (scopes and resources are services). We want to pass the <code>Entry</code> resource into our controller instead of creating the resource there. To do this we can call <code>app.factory</code> to generate a resource that we&rsquo;ll call &ldquo;Entry&rdquo;.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+app = angular.module("Raffler", ["ngResource"])
+
+app.factory "Entry", ($resource)
+  $resource("/entries/:id", {id: "@id"}, {update: {method: "PUT"}} )
+
+@RaffleCtrl = ($scope, Entry) ->
+  $scope.entries = Entry.query()
+  
+  # rest of code omitted.
+```
+
+<p>It&rsquo;s important to understand what&rsquo;s going on here. Angular does dependency injection which means that it takes a look at the arguments that this function accepts and gives it those services depending on the name of the argument. In this case the Entry argument will be trigger the <code>Entry</code> factory function and use whatever it returns. This means that we could even swap the two arguments and our application would still work as the arguments are supplied based on the name that we pass in.</p>
+
+<p>This seems convenient but it presents a big problem when we move our application into production. Rails will automatically minify the JavaScript and convert the argument names into something smaller which means that the dependency injection will no longer work. There are a couple of ways that we can work around this. One is to move our function into an array and then specify the dependencies as strings in there, like this:</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+@RaffleCtrl = ("$scope", "Entry", $scope, Entry) ->
+```
+
+<p>This tells AngularJS what the dependencies are so that if the names do change it won&rsquo;t matter. We have to do this for every function that accepts services, for example the one we have for creating resources.</p>
+
+``` /app/assets/javascripts/raffle.js.coffee
+app.factory "Entry", ["$resource", ($resource)
+  $resource("/entries/:id", {id: "@id"}, {update: {method: "PUT"}} )
+]
+```
+
+<p>Another solution is to modify our production environment&rsquo;s configuration file and configure how the compression is done.</p>
+
+``` /config/environments/production.rb
+config.assets.js_compressor = Sprockets::LazyCompressor.new { Uglifier.new(mangle: false)}
+```
+
+<p>Doing this means that the names won&rsquo;t be changed, although the minification won&rsquo;t be as effective. Whichever approach you take it&rsquo;s a good idea to thoroughly test your Angular applications in the production environment to make sure that there are no problems when it goes live.</p>
+
+<p>Our application is now complete and AngularJS made it very easy to make a dynamic client-side app and it all syncs up nicely with our Rails back end. We&rsquo;ve only scratched the surface of what AngularJS can do in this episode. It has routers, views and much more. The learning section of the size is well worth taking a look at for more details and <a href="http://egghead.io/">the Egghead website</a> has some free screencasts covering Angular. There are also several other Ruby gems available to help to integrate Angular into your Rails applications, for example <a href="https://github.com/patcito/angularjs_scaffold">AngularJS Scaffold</a>.</p>

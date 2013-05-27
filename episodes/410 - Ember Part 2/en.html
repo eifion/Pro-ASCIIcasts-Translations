@@ -1,0 +1,257 @@
+<p>In this episode we&rsquo;ll continue our look at Ember.js. If you missed <a href="http://railscasts.com/episodes/408-ember-part-1">part 1 of this series</a> it&rsquo;s a good idea to take a look at it before reading this one. In that episode we implemented the client-side behaviour of a Raffling application which allows us to enter a number of names and then draw random winners from them.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1495/original/E410I01.png" width="800" height="550" alt="Our Raffler application."/>
+</div>
+
+
+<p>None of the server-side functionality has been implemented yet so if we reload the page after adding some names they will disappear. We need to persist the entries to the database through our Rails application to keep the data in sync.</p> 
+
+<h3>Saving Data</h3>
+
+<p>We know that we need to store the entry records in the database and to provide a JSON API so that we can interact with it. We&rsquo;ll start by creating an entry resource with name and winner attributes. When we run the generator for this resource it creates more files than we&rsquo;d expect it to. This is because ember-rails gem taps into the generator and creates more files under the <code>/app/assets/javascripts</code> directory to deal with the resource, including a handlebars template which conflicts with the one we already have. We&rsquo;ll say &ldquo;no&rdquo; when the generator asks us if we want to overwrite this file. When the generator finishes we&rsquo;ll migrate the database so that the new database table is created.</p>
+
+``` terminal
+$ rails g resource entry name winner:boolean
+$ rake db:migrate
+```
+
+<p>If we look in our application&rsquo;s <code>javascripts</code> directory we won&rsquo;t find any new files there, but in almost every one of its subdirectories we&rsquo;ll find generated files. A lot of these conflict with what we&rsquo;ve already created as the generator doesn&rsquo;t assume that we&rsquo;ve already implemented the client-side behaviour. For example we now have a <code>entries_controller.js</code> file as well as our <code>entries_controller.js.coffee</code> file. We&rsquo;ll remove most of these as we already have our client-side behaviour in place.</p>
+
+``` terminal
+$ rm app/assets/javascripts/controllers/entries_controller.js
+$ rm app/assets/javascripts/controllers/entry_controller.js 
+$ rm app/assets/javascripts/routes/entry_route.js 
+$ rm app/assets/javascripts/templates/entry.handlebars 
+$ rm app/assets/javascripts/views/entries_view.js 
+$ rm app/assets/javascripts/views/entry_view.js
+```
+
+<p>One generated file we have kept is the entry model. This contains a class which inherits from <code>DS.Model</code> and specifies the model&rsquo;s attributes.</p>
+
+``` /app/assets/javascripts/models/entry.js
+Raffler.Entry = DS.Model.extend({
+  name: DS.attr('string'),
+  winner: DS.attr('boolean')
+});
+```
+
+<p>The <code>DS.Model</code> class is defined in Ember Data. This is currently a separate project from Ember.js but is included in our Rails application through the ember-rails gem. This model handles the communication with our Rails application and sync the data over the API. Its defaults are compatible with Rails resources so we don&rsquo;t need to do any configuration here. We still need to define the JSON API in our Rails app and we&rsquo;ll do this in the newly-generated <code>EntriesController</code>. This API isn&rsquo;t really the focus of this episode, so we won&rsquo;t discuss its details.</p> 
+
+``` /app/controllers/entries_controller.rb
+class EntriesController < ApplicationController
+  respond_to :json
+
+  def index
+    respond_with Entry.all
+  end
+
+  def show
+    respond_with Entry.find(params[:id])
+  end
+
+  def create
+    respond_with Entry.create(params[:entry])
+  end
+
+  def update
+    respond_with Entry.update(params[:id], params[:entry])
+  end
+
+  def destroy
+    respond_with Entry.destroy(params[:id])
+  end
+end
+```
+
+<p>There&rsquo;s nothing unexpected here, just five of the standard seven RESTful actions, each of which responds with some JSON. There&rsquo;s more going on behind the scenes here as the ember-rails gem also includes Active Model Serializer, which we covered in <a href="http://railscasts.com/episodes/409-active-model-serializers">episode 409</a>. Our app now includes a serializers directory which contains an EntrySerializer. This defines the data that is returned from the JSON API.</p>
+
+``` /app/serializers/entry_serializer.rb
+class EntrySerializer < ActiveModel::Serializer
+  attributes :id, :name, :winner
+end
+```
+
+<p>Note that Active Model Serializers aren&rsquo;t necessary to use Ember, we could generate the JSON however we like.</p>
+
+<p>Now that we have the server-side code in place we&rsquo;ll focus back on the client side. We have an <code>Entry</code> model here but we aren&rsquo;t using it anywhere in our code. We&rsquo;ll fix this now, starting with our router, where we populate the initial entries array. This is currently set to an empty array but we should fetch the records from our Rails application and populate the list from there. We can do this by using our model and calling <code>find</code> on it.</p>
+
+``` /app/assets/javascripts/router.js.coffee
+Raffler.EntriesRoute = Ember.Route.extend
+  setupController: (controller) -> controller.set('content', Raffler.Entry.find())
+```
+
+<p>This returns an empty result object initially but it will query our Rails application and populate the data that is returned and bind it as necessary. This line of code is getting a little out of hand and there&rsquo;s a more concise way to do the same thing by setting the model property directly so we&rsquo;ll do that instead.</p>
+
+``` /app/assets/javascripts/router.js.coffee
+Raffler.EntriesRoute = Ember.Route.extend
+  model:  -> Raffler.Entry.find()
+```
+
+<p>This does the same as the other code and populates our <code>EntriesController</code> with the data. Talking of our controller there are a few more changes we need to make there. When we add an entry we currently just create an <code>Ember.Object</code> but we want this to be an Entry record. We can call <code>createRecord</code> to do this.</p>
+
+``` /app/assets/javascripts/controllers/entires_controller.js.coffee
+Raffler.EntriesController = Ember.ArrayController.extend
+  addEntry: ->
+    Raffler.Entry.createRecord(name: @get('newEntryName'))
+    @set('newEntryName', "")
+```
+
+<p>Note that we no longer need to call <code>@pushObject</code> on this as Ember Data will automatically add this to the <code>Entries</code> result. We also need to make a change to the code that runs when we draw a winner and push the changed data to our Rails app.</p>
+
+``` /app/assets/javascripts/controllers/entires_controller.js.coffee
+drawWinner: ->
+  @setEach('highlight', false)
+  pool = @rejectProperty('winner')
+  if pool.length > 0
+    entry = pool[Math.floor(Math.random()*pool.length)]
+    entry.set('winner', true)
+    entry.set('highlight', true)
+    @get('store').commit()
+```
+
+<p>We do this by using <code>@get(&#039;store&#039;)</code> which is a property on our controller for accessing the Ember Data store and call <code>commit()</code> on this to save the changes. We can test this now to see if it works. If we reload the page, add a name then click &ldquo;Draw Winner&rdquo; we expect it to persist when we reload the page again, but it seems not to work. If we look at the development log we&rsquo;ll see that Ember is trying to access a route called <code>/entrys</code> which is obviously wrong. We&rsquo;ll need to tell Ember Data how to pluralize &ldquo;entry&rdquo; and we do this in the store CoffeeScript file.</p>
+
+```/app/assets/javascripts/store.js
+Raffler.Store = DS.Store.extend
+  revision: 11
+
+DS.RESTAdapter.configure("plurals", entry: "entries")
+```
+
+<p>When we add some entries now and reload the page they persist like we&rsquo;d expect.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1496/original/E410I02.png" width="800" height="450" alt="Entries now persist when we reload the page."/>
+</div>
+
+<h3>Computed Properties</h4>
+
+<p>Now that our data is persisting we&rsquo;ll show you a couple of other things that Ember can do. The first of these is computed properties. Currently we can click the &ldquo;Draw Winner&rdquo; button even after we&rsquo;ve selected every entrant as a winner. We&rsquo;ll modify this so that it&rsquo;s disabled once every entrant has been picked. To do this we&rsquo;ll add a <code>disabled</code> attribute to the button that&rsquo;s set dynamically once there are no more entries available to pick. To make a dynamic attribute we use <code>bindAttr</code> to bind it to a property and we&rsquo;ll use one called <code>allWinners</code>. This property will be checked on the controller and if it&rsquo;s true the button will be disabled.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<button {{action drawWinner}} {{bindAttr disabled="allWinners"}}>Draw Winner</button>
+```
+
+<p>We&rsquo;ll create this property on the controller and while we could set this to a static value we want to make this a computed property that updates the view automatically whenever our entries change so we&rsquo;ll make it a function instead.</p>
+
+``` /app/assets/javascripts/controllers/entires_controller.js.coffee
+allWinners: (->
+  @everyProperty('winner')
+).property('@each.winner')
+```
+
+<p>Ember makes detecting whether every entrant is a winner easy by providing an <code>@everyProperty</code> function. If we pass this the <code>winner</code> property it will return <code>true</code> if all the entrants are winners. Calling this directly won&rsquo;t work, though, and we need to convert the function into a property. We do this by wrapping it in parentheses and calling <code>property()</code> on that. This takes an argument that tells Ember when it should recalculate the winners and which should be a property of the object. We could have used <code>newEntryName</code> here and then whenever that property changed the winners would have been recalculated. We want the winners to be recalculated whenever any of the entries that have a <code>winner</code> attribute change and we do this by using <code>@each</code> which will check each of the entries within this controller&rsquo;s array. Calling <code>.winner</code> on this means that whenever any of the <code>winner</code> attributes changes the winners will be recalculated. We can try this now and when we reload the page the button is disabled as we&rsquo;ve already selected all the entrants as winners.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1497/original/E410I03.png" width="800" height="450" alt="The &ldquo;Draw Winner&rdquo; button is now disabled once all the entrants have been picked as winners."/>
+</div>
+
+<p>If we add another entry now the button will re-enable as there is now a new entrant. If we click it all the entrants will be winners again and the button will be disabled again.</p> 
+
+<h3>View Objects</h3>
+
+<p>The last improvement we want to make to our application is to the new entry form. We currently have to press the return key to add a new entrant so we&rsquo;ll add an &ldquo;Add Entry&rdquo; button next to the text field that can be clicked. One way to do this is to wrap the text field in a form tag and then add an input element with a type of <code>submit</code> after it. We can then move the <code>addEntry</code> action into this element.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<form>
+  {{view Ember.TextField valueBinding="newEntryName"}}
+  <input type="submit" value="Add" {{action addEntry}}>
+</form>
+```
+
+<p>This approach works. If our form is submitted either way now it triggers the action although it&rsquo;s a little unclear what event Ember is listening to, it could be the <code>click</code> event on the button or the <code>submit</code> event on the form. If we want to add actions to other events such as a <code>focus</code> or <code>blur</code> event we can get more control over the events by making a view object. So far we&rsquo;ve ignored the views directory but we&rsquo;ll use it now and create a <code>new_entry_view.js.coffee</code> file here.</p>
+
+``` /app/assets/javascripts/views/new_entry_view.js.coffee
+Raffler.NewEntryView = Ember.View.extend
+  templateName: 'new_entry'
+```
+
+<p>In this file we define a class which inherits from <code>Ember.View</code>. We set the <code>templateName</code> option here which means that Ember will look for a template with that name. We&rsquo;ll move our form into this new template.</p>
+
+``` /app/assets/javascripts/templates/new_entry.handlebars
+<form>
+  {{view Ember.TextField valueBinding="newEntryName"}}
+  <input type="submit" value="Add" {{action addEntry}}>
+</form>
+```
+
+<p>In our entries template we can include this view by calling <code>view</code>.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+{{view Raffler.NewEntryView}}
+```
+
+<p>Another option we can pass into our view class is <code>tagName</code>. We&rsquo;ll set this to <code>form</code> so that we can listen to events on this tag within the view.</p>
+
+``` /app/assets/javascripts/views/new_entry_view.js.coffee
+Raffler.NewEntryView = Ember.View.extend
+  templateName: 'new_entry'
+  tagName: 'form'
+```
+
+<p>This means that we don&rsquo;t need the <code>form</code> tags in our template any more as the view will automatically wrap the template in that tag.</p>
+
+``` /app/assets/javascripts/templates/new_entry.handlebars
+{{view Ember.TextField valueBinding="newEntryName"}}
+<input type="submit" value="Add" {{action addEntry}}>
+```
+
+<p>With all this in place we can now listen to events triggered on the form by defining a function with the same name as the event we want to listen to. We&rsquo;ll write a <code>submit</code> function that will add the new entry to the form.</p>
+
+``` /app/assets/javascripts/views/new_entry_view.js.coffee
+submit: ->
+  @get('controller').send('addEntry')
+  false
+```
+
+<p>This function triggers the <code>addEntry</code> function on the controller. In it we fetch the controller by calling <code>@get(&#039;controller&#039;)</code> and use send on this to trigger a function. We then return <code>false</code> so that the form isn&rsquo;t actually submitted. With this in place we no longer need the action on the submit button and we can remove it from the template.</p>
+
+``` /app/assets/javascripts/templates/new_entry.handlebars
+{{view Ember.TextField valueBinding="newEntryName"}}
+<input type="submit" value="Add">
+```
+
+<p>Now when we add a name and submit the form by either hitting the return key or by clicking &ldquo;Add&rdquo; the new entrant is added to the list.</p>
+
+<p>With this view object in place we could move some additional behaviour from the controller into the view, such as the code that reads the new entrant&rsquo;s name from the text field and then clears it. If we pass the name in as an argument to <code>addEntry</code> then we could move this logic into the view.</p>
+
+``` /app/assets/javascripts/controllers/entires_controller.js.coffee
+addEntry: (name) ->
+  Raffler.Entry.createRecord(name: name)
+```
+<p>We can move update the <code>submit</code> function to pass the name to the controller and then clear the text field.</p>
+
+``` /app/assets/javascripts/views/new_entry_view.js.coffee
+submit: ->
+  @get('controller').send('addEntry', @get('newEntryName'))
+  @set('newEntryName', "")
+  false
+```
+
+<p>This should work just like it did before except that we&rsquo;re now using the property on our view object instead of in the controller. This means that we need to bind our template to the view object and we do this by calling the property on <code>view</code>.</p>
+
+``` /app/assets/javascripts/templates/new_entry.handlebars
+<form>
+  {{view Ember.TextField valueBinding="view.newEntryName"}}
+  <input type="submit" value="Add" {{action addEntry}}>
+</form>
+```
+
+<p>If we&rsquo;ve done everything correctly we should have the same functionality that we had before. We almost have except that we&rsquo;ve lost the last record that we added. It seems that new entries no longer persist and what&rsquo;s wrong is that we need to commit the store when we create a new record which we&rsquo;ve overlooked.</p>
+
+``` /app/assets/javascripts/controllers/entires_controller.js.coffee
+addEntry: (name) ->
+  Raffler.Entry.createRecord(name: name)
+  @get('store').commit()
+```
+
+<p>Now when we add a new entry and reload the page we see that it has persisted.</p>
+
+<p>We&rsquo;re pretty much done with our application now. We can add new entries and draw random winners with a button that is automatically disabled when all the winners are chosen. Our data also persists.</p> 
+
+<p>Ember.js is shaping up to be a interesting framework. It had issues earlier on including a lack of documentation and an unstable API but both of these are now fixed. There are still some issues with the surrounding projects, however. Ember Rails and Ember Data aren&rsquo;t as stable or as well documented.</p>
+
+<p>When you choose a client-side framework it&rsquo;s a good idea to compare it with other options such as AngularJS, which was covered in episode 4053. Both of these frameworks feature powerful two-way binding which make it easy to keep the view in sync with the data. Angular&rsquo;s approach to bindings feels like it leads to more direct and simpler code. That said you get more control over the bindings in Ember.</p> 
+
+<p>The Raffling app we&rsquo;ve used for both of these episodes seems to favour AngularJS due to its simplicity and it doesn&rsquo;t have any complex routing or state that needs to change which is one of Ember&rsquo;s strong points. Ember has a steeper learning curve but the added structure that it provides can help keep larger applications maintainable.</p>

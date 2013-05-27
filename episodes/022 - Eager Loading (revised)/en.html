@@ -1,0 +1,123 @@
+<p>Eager loading is a way to improve performance by preloading associated content from the database and we&rsquo;ll show you what that means in this episode. Below is a page that displays a list of products, each of which belongs to a category.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1512/original/E022R01.png" width="800" height="402" alt="The list of products showing each one&rsquo;s category."/>
+</div>
+
+<p>The category isn&rsquo;t just a column in the <code>products</code> table but is an associated record. A <code>Product</code> belongs to a <code>Category</code> so to display the category name in the view we need to go through the association and call <code>product.category.name</code>.</p> 
+
+<p>This works well but if performance is an issue and we want to optimize the list page a good place to start is to look at the database queries that are made. If we look in the development log we&rsquo;ll see that there are a lot of database queries being made by this request.</p> 
+
+``` development.log
+Product Load (0.4ms)  SELECT "products".* FROM "products" ORDER BY name
+Category Load (0.2ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+Category Load (0.2ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 1 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 1 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 1 LIMIT 1
+Category Load (2.6ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 5 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 1 LIMIT 1
+CACHE (0.0ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" = 2 LIMIT 1
+...
+```
+
+<p>This is known as the &ldquo;n+1 problem&rdquo; which means that we have one query to fetch the initial products and then another for each of the products to fetch its category. Thankfully, ActiveRecord has some built-in caching support and if it detects a duplicate query it will return the cached result instead of querying the database again. This can help with performance in scenarios like this and we can see that most of the queries made above have returned a result from the cache.</p>
+
+<p>There is still some unnecessary overhead in our request. In general the fewer database queries we need to make per request the better the performance is, although this isn&rsquo;t always the case. Whenever we&rsquo;re trying to improve the performance of a page it&rsquo;s always a good idea to profile the request in a setup that&rsquo;s a close to the production environment as possible as any little thing could be a factor. For example if the database server is on a separate machine from the web server it will have to communicate over the network each time a query is made and this can add overhead and make the number of queries made a bigger factor in the poor performance. Profiling was covered in episode 3681; here we&rsquo;ll focus on how eager loading can help to reduce the number of queries performed. The products page triggers the <code>index</code> action on the <code>ProductsController</code> and in here we fetch the products ordered by their name.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name")
+end
+```
+
+<p>One of the easiest ways to add eager loading to this is to call <code>includes</code> to include the relevant category data.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("name").includes(:category)
+end
+```
+
+<p>Whenever we&rsquo;re unsure as to whether we should pluralize the name in the <code>includes</code> call we should remember that it needs to match the name of the association. In this case a <code>Product</code> belongs to a <code>Category</code> and so this is the name to use. If we reload the page now it behaves like it did before but the number of database queries made is hugely reduced.</p>
+
+``` development.log
+Product Load (0.3ms)  SELECT "products".* FROM "products" ORDER BY name
+Category Load (0.3ms)  SELECT "categories".* FROM "categories" WHERE "categories"."id" IN (2, 1, 5, 4, 3)
+```
+
+<p>We now have one query to fetch the products and another to fetch the relevant categories for those products. We might think that a single query might be better here but it&rsquo;s often more efficient to make two simple queries instead of one more complex one. As we&rsquo;re using two separate queries here it&rsquo;s not a good idea to use the associated data within the same query. For example what is we want to order the products based on the category&rsquo;s name instead of the product&rsquo;s? We could write this:</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("categories.name").includes(:category)
+end
+```
+
+<p>This works but it isn&rsquo;t a good idea. If we look at the development log we&rsquo;ll see that ActiveRecord is smart enough to detect that we&rsquo;re using the <code>categories</code> information in the <code>products</code> query and uses a single query with joins.</p> 
+
+``` development.log
+SQL (44.3ms)  SELECT "products"."id" AS t0_r0, "products"."name" AS t0_r1, "products"."price" AS t0_r2, "products"."category_id" AS t0_r3, "products"."created_at" AS t0_r4, "products"."updated_at" AS t0_r5, "categories"."id" AS t1_r0, "categories"."name" AS t1_r1, "categories"."created_at" AS t1_r2, "categories"."updated_at" AS t1_r3 FROM "products" LEFT OUTER JOIN "categories" ON "categories"."id" = "products"."category_id" ORDER BY categories.name
+```
+
+<p>This approach is a little unreliable as it involves having to interpret the SQL string that&rsquo;s passed in and it will be deprecated in Rails 4. If we need to use associated data in a query we should use <code>joins</code> instead of <code>includes</code> as this way we&rsquo;re guaranteed to use a join in a single query.</p> 
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("categories.name").joins(:category)
+end
+```
+
+<p>This won&rsquo;t do quite as much for us as it won&rsquo;t try to populate the associated data in ActiveRecord. For example in our view when we loop through the products and display its category&rsquo;s name <code>joins</code> won&rsquo;t populate this information so a separate query will be triggered to get the category information for each product. We can, however, use <code>joins</code> to improve performance further as it can be used to fetch just the data we need. We&rsquo;ll often see <code>joins</code> used with <code>select</code> to limit the data that&rsquo;s fetched and we&rsquo;ll use them now to fetch all the products data but only the name column from the <code>categories</code> table, which we&rsquo;ll alias as <code>category_name</code>.</p>
+
+``` /app/controllers/products_controller.rb
+def index
+  @products = Product.order("categories.name").joins(:category).select('products.*, categories.name as category_name')
+end
+```
+
+<p>The category name will now be an attribute on our <code>Product</code> model and we can reference it directly in the view instead of having to go through the association.</p> 
+
+``` /app/views/products/index.html.erb
+<td><%= product.category_name %></td>
+```
+
+<p>If we reload the page it still works as we&rsquo;re loading each category name through the join. If we look at the log we&rsquo;ll see that there&rsquo;s only one database query made.</p>
+
+``` development.log
+Product Load (0.4ms)  SELECT products.*, categories.name as category_name FROM "products" INNER JOIN "categories" ON "categories"."id" = "products"."category_id" ORDER BY categories.name
+```
+
+<p>If we do this and change the attributes on a record dynamically it&rsquo;s a good idea to define a method with the same name as the aliased field in the model so that it&rsquo;s always there and reliable so that we don&rsquo;t have to rely on the dependency of the <code>select</code> clause always being defined in the same way. If we define a <code>category_name</code> method in our <code>Product</code> model and use <code>read_attribute</code> to fetch it through the database query if we&rsquo;re using <code>select</code> to fetch it and fall back to  fetching it through the association if we fetch the products in another way.</p>
+
+``` /app/models/product.rb
+def category_name
+  read_attribute('category_name') || category.name
+end
+```
+
+<p>We&rsquo;ll finish off this episode by demonstrating a few tips in the console. Both the <code>include</code> and <code>joins</code> methods allow us to pass in associations and we can use multiple associations too. In our application a product has many reviews so we can pass this in along with the category and it will be added as a join to the query.</p>
+
+``` console
+>> Product.joins(:category, :reviews)
+  Product Load (0.1ms) SELECT "products".* FROM "products" INNER JOIN "categories" ON "categories"."id" = "products"."category_id" INNER JOIN "reviews" ON "reviews"."product_id" = "products"."id"
+```
+
+<p>We can go deeper if we want to. A review belongs to a user and in cases like these we can use a hash to join that in.</p>
+
+``` console
+>> Product.joins(:category, :reviews => :user)
+  Product Load (0.1ms) SELECT "products".* FROM "products" INNER JOIN "categories" ON "categories"."id" = "products"."category_id" INNER JOIN "reviews" ON "reviews"."product_id" = "products"."id" INNER JOIN "users" ON "users"."id" = "reviews"."user_id"
+```
+
+<p>Finally if we need more control over our joins we can just pass in an SQL query in so that if we need, say, a left join instead of an inner join, we can use one.</p>
+
+``` console
+>> Product.joins("left outer join categories on category_id = categories.id")
+  Product Load (0.3ms) SELECT "products".* FROM "products" left outer join categories on category_id = categories.id
+```
+
+<p>We could use this if we want to select products that don&rsquo;t have an associated category. If you want to be notified on when to use Eager Loading take a look at the <a href="https://github.com/flyerhzm/bullet">Bullet gem</a> which was covered in <a href="http://railscasts.com/episodes/372-bullet">episode 372</a>.</p>

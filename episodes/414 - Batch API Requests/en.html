@@ -1,0 +1,229 @@
+<p>Below is a screenshot from a simple Todo list application. With it users can add tasks and then mark them as complete or incomplete.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1513/original/E414I01.png" width="800" height="600" alt="Our To-do List application."/>
+</div>
+
+<p>The behaviour of this app is entirely client-side JavaScript and it communicates with the Rails backend through a JSON API to persist the data. This means that if we reload the page any changes we make stick around. We can mark all the incomplete tasks as complete by clicking the &ldquo;Mark all as complete&rdquo; link but this operation isn&rsquo;t very efficient as it makes a separate JSON request to the server for each task that needs to be changed. It would be better if these were done in one go which brings us to the topic of this episode: handling a batch of actions through a single request.</p>
+
+<p>One way to do this, that would work well in our application, is to add another controller action to handle the bulk behaviour. Our <code>TasksController</code> currently has the standard seven RESTful actions and we could add, say, an <code>update_many</code> action which takes an array of <code>id</code>s and finds the relevant tasks and updates them. What, though, if we want to perform some other actions at the same time, maybe destroying some records or creating some new ones, or maybe even calling an action on a different controller? What we want is something like the feature provided by Facebook&rsquo;s Graph API called &ldquo;Batch Requests&rdquo; which allows us to trigger multiple API actions in a single request by supplying an array of JSON data including a HTTP method and a URL to trigger. These requests will respond with an array containing data about the status of each part of the request. One advantage of this approach is that is allows us to trigger any number of controller actions in a batch without having to modify the details of our Rails application once it&rsquo;s set up. This means that we don&rsquo;t need to add any new controller actions.</p>
+
+<p>To implement this feature we&rsquo;ll use Rack Middleware. This might feel a little like a hack but it will work well enough. If we run the <code>rake middleware</code> command we&rsquo;ll see a list of the middleware that each request goes through. To see this list, and for a description of what each part does, take a look at <a href="http://railscasts.com/episodes/319-rails-middleware-walkthrough">episode 319</a>. We need to decide where in the middleware stack we should add our middleware to handle batch requests. This will take a single request and simulate multiple other requests through it. If we were to after, say, <code>Rails::Rack::Logger</code> it would log the batch request but not the details of each individual request in the batch. We&rsquo;ll add our middleware early in the stack so that it&rsquo;s almost as if our Rails application is being triggered for each separate request. To add middleware to the top of our stack we need to modify our application&rsquo;s config file like this:</p>
+
+``` /config/application.rb
+config.middleware.insert_before 0, "BatchRequests"
+```
+
+<p>The first argument specifies the position of the new middleware so using <code>0</code> means that our middleware, which we&rsquo;ve called <code>BatchRequests</code>, will be placed at the top of the stack. We&rsquo;ll write it in a new <code>/app/middleware</code> directory. A piece of middleware is simply a class with an <code>initialize</code> method which accepts a Rack application and a <code>call</code> method that takes a Rack environment hash so that it can call the app through it.</p> 
+
+``` /app/middleware/batch_requests.rb
+class BatchRequests
+  def initialize(app)
+    @app = app
+  end
+
+  def call(env)
+    @app.call(env)
+  end
+end
+```
+
+<p>Here, though, we don&rsquo;t simply want to call the application once. Instead we want to parse the parameters that are passed in and trigger the app for each of the different requests, customizing the environment that we pass in to each one. We won&rsquo;t get into that quite yet, though, instead we&rsquo;ll add some code that will trigger this behaviour when the request URL matches something specific. This middleware will be triggered for every request in our application so one of the first things we want to do is make sure that the path is relevant to it. If it isn&rsquo;t we&rsquo;ll just delegate to the next middleware. If the path matches we want to trigger the request multiple times, changing the environment hash each time and then respond and we&rsquo;ll respond with a <code>200</code> response and a content type of <code>application/json</code>. The response&rsquo;s body should include all the requests that are made, but for now we&rsquo;ll just inspect the environment hash so that we can see what&rsquo;s in it.</p>
+
+``` /app/middleware/batch_requests.rb
+def call(env)
+  if env["PATH_INFO"] == "/batch"
+    [200, {"Content-Type" => "application/json"}, [env.inspect]]
+  else     
+    @app.call(env)
+  end
+end
+```
+
+<p>After restarting our application it should behave just like it did before until we call the <code>/batch</code> path. When we do this our new middleware will pick this up and display the details of the environment hash.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1514/original/E414I02.png" width="800" height="576" alt="All the environment variables showing in the response."/>
+</div>
+
+<p>This contains information specific to this request and we&rsquo;ll need to change some of it to simulate other requests, including <code>PATH_INFO</code>, <code>QUERY_STRING</code> and <code>REQUEST_METHOD</code>. There is also the <code>rack.input</code> environment option which is going to be the body of the request. There are some other settings here that look like they might need to be changed such as <code>REQUEST_PATH</code> and <code>REQUEST_URI</code> but these are set by WebRick and aren&rsquo;t really part of the Rack specs. There are more details about Rack Specs and what the options do <a href="http://rack.rubyforge.org/doc/SPEC.html">in the documentation</a>. To start we&rsquo;ll try manually setting these environment options to simulate a different request from what was actually made.</p> 
+
+``` /app/middleware/batch_requests.rb
+def call(env)
+  if env["PATH_INFO"] == "/batch"
+    env["REQUEST_METHOD"] = "GET"
+    env["PATH_INFO"] = "/tasks.json"
+    env["QUERY_STRING"] = ""
+    env["rack.input"] = StringIO.new("")
+    @app.call(env)
+  else     
+    @app.call(env)
+  end
+end
+```
+
+<p>Here we&rsquo;ve changed the path to <code>/tasks.json</code> so that the request becomes a JSON request and also some of the other options we mentioned earlier. We then call our app with these new options. We need to restart the server for the changes to be picked up but after we do so and we reload the page we see a list of tasks in JSON so any request we make to <code>/batch</code> will be converted a request to <code>/tasks</code>.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1515/original/E414I03.png" width="800" height="400" alt="A request to /batch now returns a JSON list of tasks."/>
+</div>
+
+<p>We want to report the full response to the user including the status, the headers and the body of the response. We&rsquo;ll put all this into a hash and save it so that we can report it back to in an array. This way they will see all the responses for each request that they passed in through the API. When we try this we may sometimes get a deadlock error. This is because <code>Rack::Lock</code> isn&rsquo;t properly releasing the mutex lock. To get around this we need to close the body of the response.</p>
+
+``` /app/middleware/batch_requests.rb
+def call(env)
+  if env["PATH_INFO"] == "/batch"
+    env["REQUEST_METHOD"] = "GET"
+    env["PATH_INFO"] = "/tasks.json"
+    env["QUERY_STRING"] = ""
+    env["rack.input"] = StringIO.new("")
+    status, headers, body = @app.call(env)
+    body.close if body.respond_to? :close
+    response = {status: status, headers: headers, body: body}
+    [200, {"Content-Type" => "application/json"}, [{responses: [response]}.to_json]]
+  else     
+    @app.call(env)
+  end
+end
+```
+
+<p>When we reload the page now, after another server restart, we can see the responses details wrapped in an array.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1516/original/E414I04.png" width="800" height="400" alt="The responses&rsquo; details are now returned in an array."/>
+</div>
+
+<p>The next step to finish off our middleware is to replace the static request values with dynamic ones based on the parameters submitted with the request. We don&rsquo;t have access to the params hash here so we&rsquo;ll create a request object based on the <code>Rack::Request</code>. This will allow us to access request parameters by using the hash notation. We&rsquo;ll look for a parameter called <code>requests</code> which will contain some JSON data and use <code>JSON.parse</code> to parse it. This is very strict and if there are any errors in the JSON it will raise an exception so we could add some error handling, although we won&rsquo;t do so here. Once parsed, this parameter will return an array of request options that we can use to override the environment hash. We want to create a new response for each one, depending on the request settings so we&rsquo;ll map all the responses together and return them in the JSON result. For each request passed in we&rsquo;ll override the relevant environment variables. We&rsquo;ll split the <code>url</code> variable into the path and query string and pass them in to <code>PATH_INFO</code> and <code>QUERY_STRING</code> and also set <code>rack.input</code> to the body. To keep the <code>call</code> method clean we&rsquo;ll extract the code to process a request out into a new method. There&rsquo;s a potential problem here that we&rsquo;ll need to address as we&rsquo;re using the same environment hash for each request but this might be modified during the requests so instead of passing the hash into <code>process_request</code> we&rsquo;ll pass a copy of it in, using <code>deep_dup</code> in case there are any nested hashes. We&rsquo;ll do the same when we create the <code>Rack::Request</code> from the environment as this call can modify the hash.</p>
+
+``` /app/middleware/batch_requests.rb
+def call(env)
+  if env["PATH_INFO"] == "/batch"
+    request = Rack::Request.new(env.deep_dup)
+    responses = JSON.parse(request[:requests]).map do |override|
+      process_request(env.deep_dup, override)
+    end
+    [200, {"Content-Type" => "application/json"}, [{responses: responses}.to_json]]
+  else     
+    @app.call(env)
+  end
+end
+
+def process_request(env, override)
+  path, query = override["url"].split("?")
+  env["REQUEST_METHOD"] = override["method"]
+  env["PATH_INFO"] = path
+  env["QUERY_STRING"] = query
+  env["rack.input"] = StringIO.new(override["body"].to_s)
+  status, headers, body = @app.call(env)
+  body.close if body.respond_to? :close
+  {status: status, headers: headers, body: body.join}
+end
+```
+
+<p>Our middleware should now be able to process multiple requests so once we&rsquo;ve restarted the server we can try this out through Curl, setting the <code>requests</code> parameter to some JSON that contains some request details. We&rsquo;ll pass an array of two requests, each with <code>method</code> and <code>url</code> parameters and make requests for two separate tasks.</p>
+
+``` terminal
+$ curl -d 'requests=[{"method":"GET", "url":"/tasks/1.json"},{"method":"GET", "url":"/tasks/2.json"}]' localhost:3000/batch
+{"responses":[{"status":200,"headers":{"Content-Type":"application/json; charset=utf-8","X-UA-Compatible":"IE=Edge","ETag":"\"8d36e61e9e2bec4d7a65770eea3600fb\"","Cache-Control":"max-age=0, private, must-revalidate","X-Request-Id":"a2533653452437af11db055c59d8389d","X-Runtime":"0.156114"},"body":"{\"complete\":true,\"created_at\":\"2013-05-06T18:20:30Z\",\"id\":1,\"name\":\"Learn Rails\",\"updated_at\":\"2013-05-06T18:20:30Z\"}"},{"status":200,"headers":{"Content-Type":"application/json; charset=utf-8","X-UA-Compatible":"IE=Edge","ETag":"\"348ff78475b7ea596cc9b2fc4cce40c7\"","Cache-Control":"max-age=0, private, must-revalidate","X-Request-Id":"ed0754a7121c36ef21c697380123458d","X-Runtime":"0.007084"},"body":"{\"complete\":false,\"created_at\":\"2013-05-06T18:20:31Z\",\"id\":2,\"name\":\"Paint the fence\",\"updated_at\":\"2013-05-06T18:20:31Z\"}"}]}
+```
+
+<p>When we do this we get our responses hash containing details about both the tasks.</p> 
+
+<h3>Integrating What We&rsquo;ve Done Into Our App</h3>
+
+<p>Now that we&rsquo;ve got this working let&rsquo;s try to integrate this into our JavaScript. Our goal is to have the &ldquo;mark all as complete&rdquo; link trigger a single request that will mark all of the uncompleted tasks as complete. The CoffeeScript for this client-side behaviour is rather complex, but we don&rsquo;t be going into too much detail about it as it depends on the client-side framework you&rsquo;re using in your application. All we&rsquo;re using here is Mustache to handle rendering templates. Our code includes a completeAll function  that is triggered whenever that link is clicked.</p> 
+
+``` /app/assets/javascripts/tasks.js.coffee
+completeAll: (event) =>
+  event.preventDefault()
+  $('#incomplete_tasks').find('input[type=checkbox]').click()
+```
+
+<p>This function is simple and goes through each incomplete task, clicking on each one&rsquo;s checkbox to simulate the user marking each task as complete. Clicking a checkbox triggers an <code>update</code> function which finds the task and marks it as either complete or incomplete depending on whether the checkbox was checked. It then removes the checkbox from its list, renders it in the other list then saves it to the database by making an AJAX request which makes a PUT request to the task&rsquo;s URL.</p>
+
+``` /app/assets/javascripts/tasks.js.coffee
+update: (event) =>
+    checkbox = $(event.target)
+    task = @find(checkbox.data('id'))
+    task.complete = checkbox.prop('checked')
+    checkbox.parent().remove()
+    @render(task)
+    @save(task)
+
+save: (task) ->
+  $.ajax
+    type: "PUT"
+    url: "/tasks/#{task.id}.json"
+    data: {task: {complete: task.complete}}
+```
+
+<p>This <code>save</code> function is what we&rsquo;re going to focus on changing. Instead of saving a task immediately when a checkbox changes we&rsquo;ll store all of the requests in a batch and push them all at once to the server when we need to.</p> 
+
+``` /app/assets/javascripts/tasks.js.coffee
+class ToDoList
+  constructor: ->
+    @requests = []
+    @tasks = $('#tasks').data('tasks')
+    for task in @tasks
+      @render(task)
+    $('#tasks').on('submit', '#new_task', @add)
+    $('#tasks').on('change', 'input[type=checkbox]', @update)
+    $('#tasks').on('click', '#complete_all', @completeAll)
+    $('#tasks').on('click', '#toggle_offline', @toggleOffline)
+
+  save: (task) ->
+    @requests.push
+      method: "PUT"
+      url: "/tasks/#{task.id}.json"
+      body: $.param(task: {complete: task.complete})
+```
+
+<p>First we create an array called <code>@requests</code> in the class&rsquo;s constructor and then in save we push each request into that array. Each request needs to be in the same format as our API so we push an object with <code>method</code>, <code>url</code> and <code>body</code> properties. To get the body into the correct format we use <code>$.param</code> to make it into an HTTP request body. Any changes we make are now no longer synced to the server. We&rsquo;ll write a new <code>sync</code> function that we can call when we want to do that. This will make a POST request to our <code>/batch</code> URL, passing in the <code>@requests</code> array. This needs to be formatted as JSON and we&rsquo;ll use <code>JSON.stringify</code> to do this. This works in most modern browsers although we can add the <code>json.js</code> library if backwards-compatibility is important. Finally, we clear the array of requests.</p>
+
+``` /app/assets/javascripts/tasks.js.coffee
+sync: ->
+  $.post("/batch", requests: JSON.stringify(@requests))
+  @requests = []
+```
+
+<p>We could move the requests off into a separate array temporarily until we get a response back from the server telling us that all the requests have been saved successfully. We could then either resend them or report to the user that the update failed. We won&rsquo;t be covering that in this episode, though.</p> 
+
+<p>We don&rsquo;t call <code>sync</code> anywhere yet. We could call it at the end of <code>save</code> but we might not want to sync every time we save, instead letting the changes batch up. We&rsquo;ll define a variable called <code>@offline</code> that will allow us to into offline mode whenever we don&rsquo;t want to contact the server to sync the changes. We can use this to temporarily go into offline mode when we want to batch up changes. We&rsquo;ll use this in <code>completeAll</code> so that the updated tasks are sent in one go.</p>
+
+``` /app/assets/javascripts/tasks.js.coffee
+completeAll: (event) =>
+  event.preventDefault()
+  @offline = true
+  $('#incomplete_tasks').find('input[type=checkbox]').click()
+  @offline = false
+  @sync()
+
+sync: ->
+  unless @offline
+    $.post("/batch", requests: JSON.stringify(@requests))
+    @requests = []
+```
+
+<p>Let&rsquo;s see if this works. We have a few incomplete tasks and when we click &ldquo;mark all as complete&rdquo; we&rsquo;ll see that only a single batch request is made and that all the responses are returned.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1518/original/E414I05.png" width="810" height="689" alt="Only a single request is made when we click then mark all as complete link."/>
+</div>
+
+<p>If we change the status of a single task a new batch request is sent and any changes we make are persisted, which we can see by reloading the page. One of the killer features of doing this kind of thing is that it makes it easy to support an offline mode. We already have this partially set up with a &ldquo;Go Offline&rdquo; link. Clicking on this toggles the value of our <code>@offline</code> variable and the link&rsquo;s text.  If we add a call to <code>sync</code> here any changes we make will be synced when we go back online.</p>
+
+``` /app/assets/javascripts/tasks.js.coffee
+toggleOffline: (event) =>
+  event.preventDefault()
+  @offline = !@offline
+  $('#toggle_offline').text(if @offline then "Go Online" else "Go Offline")
+  @sync()
+```
+
+<p>If we go offline now and make changes to the tasks no requests are made to the server until we go back online when a single batch request will be made to sync everything that we did while offline. This is great for mobile apps that might have a a spotty data connection. If we&rsquo;re doing this we could store the requests array into the browser&rsquo;s internal database so that it can be persisted even when the user closes the session.</p>
+
+<p>Even though we have this batch API system in place there are sill advantages to going with a separate controller action such as the <code>update_many</code> action we considered earlier. We could easily optimize this into a single database query instead of having separate actions trigger different database queries. Our bulk update approach is fully compatible with the batch system, though. We just trigger the <code>update_many</code> path instead of <code>batch</code>.</p>
+
+<p>Before we finish we&rsquo;ll point out something called <a href="http://en.wikipedia.org/wiki/HTTP_pipelining">HTTP pipelining</a> which can be used as an alternative to our batch request system. This does have certain limitations, though. It isn&rsquo;t fully compatible across all web browsers and only supports GET requests. Adding a batch system is easy to do with Rack Middleware, although our code isn&rsquo;t really production-ready. To do so we&rsquo;d need to handle those cases where errors might occur and also limit the number of requests that we accept, among other things.</p> 
+
+<p>Batching the creation of records is tricky as we don&rsquo;t have an <code>id</code> to reference until we get a response back from the server. We could assign a unique identifier on the client-side and send this to the server to be stored in the database so that records can be uniquely identified before they&rsquo;ve been saved.</p>

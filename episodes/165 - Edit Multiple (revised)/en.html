@@ -1,0 +1,342 @@
+<p>Below is a screenshot that shows a list of products. We want to mark a number of these products as discontinued but to do this we currently have to modify each product separately by clicking the &ldquo;edit&rdquo; link next to each product, checking a checkbox on the edit form for that product and then submitting the form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1476/original/E165RI01.png" width="800" height="500" alt="The products page."/>
+</div>
+
+<p>Doing this for each product that we want to discontinue can get a little tedious. It would be much better if there was a way to update multiple records in a single form. In this episode we&rsquo;ll show you a few different ways to achieve this.</p>
+
+<h3>Using Checkboxes</h3>
+
+<p>One approach is to add a checkbox next to each product and a button at the bottom of the table which when clicked will mark all the selected products as discontinued. To do this we&rsquo;ll first modify the template for the list of products.</p>
+
+``` /app/views/products/index.html.erb
+<%= form_tag discontinue_products_path, method: :put do %>
+<table>
+  <tr>
+    <th>&nbsp;</th>
+    <th>Name</th>
+    <th>Category</th>
+    <th>Discontinued</th>
+    <th>Price</th>
+  </tr>
+  <% @products.each do |product| %>
+    <tr>
+      <td><%= check_box_tag "product_ids[]", product.id %></td>
+      <td><%= product.name %></td>
+      <td><%= product.category.name %></td>
+      <td><%= product.discontinued ? "Yes" : "No" %></td>
+      <td class="price"><%= number_to_currency product.price %></td>
+      <td><%= link_to 'Edit', edit_product_path(product) %></td>
+      <td><%= link_to 'Destroy', product, method: :delete %></td>
+    </tr>
+  <% end %>
+</table>
+<%= submit_tag "Discontinued Checked" %> 
+<% end %>
+```
+
+<p>We use the <code>check_box_tag</code> helper method to render each checkbox and give it a name of <code>product_ids[]</code>. The empty square brackets mean that checked values will be submitted as an array of values when the form is submitted. We&rsquo;ve also added a submit button under the table and wrapped the whole thing in a form. The form will be submitted to the <code>discontinue_products_path</code> path. This doesn&rsquo;t exist yet, but we&rsquo;ll write it shortly. As the form will be used to update models we&rsquo;ve set the method to <code>:put</code>. Before we write the action we&rsquo;ll modify the routes file to handle this new route.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  root to: 'products#index'
+  resources :products do
+    collection do
+      put :discontinue
+    end
+  end
+end
+```
+
+<p>This route will look for a <code>discontinue</code> action in the <code>ProductsController</code>. We&rsquo;ll write this action next.</p>
+
+``` /app/controllers/products_controller.rb
+def discontinue
+  Product.update_all({discontinued: true}, {id: params[:product_ids]})
+  redirect_to products_url
+end
+```
+
+<p>Here we use <code>update_all</code> to update the products that we&rsquo;ve marked to be discontinued. This method needs to be passed two arguments: the first is a hash of the values we want to set while the second is like a WHERE clause and to which we pass the <code>id</code>s of the products we want to update. We fetch the <code>id</code>s by reading the <code>product_ids</code> parameter, which returns them in an array. Note that <code>update_all</code> doesn&rsquo;t trigger any callbacks which isn&rsquo;t a problem for us, but which might be a problem in other scenarios. This code assumes that the user can update any of the records; in a production application we&rsquo;d need to add some authorization here.</p>
+
+<p>When we reload the page now we&rsquo;ll see checkboxes next to each item and if we  check some of products and submit the form they&rsquo;ll all be marked as discontinued.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1477/original/E165RI02.png" width="800" height="550" alt="Each product now has a checkbox that we can use to mark it as discontinued."/>
+</div>
+
+<h3>Editing Multiple Fields Through a Form</h3>
+
+<p>If we just want to modify a single field for a number of records using checkboxes works well but there are a number of of other ways that we can achieve the same thing. We&rsquo;ll show two of these, both of which involve using a separate form to edit the fields. Instead of just discontinuing products we might want to update the category for multiple products too. How can we do this?</p>
+
+<p>For the next solution we&rsquo;ll keep the checkboxes but have the button redirect to a new form that lists all the fields for the selected products so that we can pick and choose what we want to change. First we&rsquo;ll modify the product list template, changing the button&rsquo;s text and also the action that the form is submitted to. We&rsquo;ll also change the method so that the form makes a GET request as we&rsquo;re just going to display another page when the form is submitted. We could be submitting a lot of data through this form so it&rsquo;s worth considering using POST instead, but we&rsquo;ll stick with GET.</p>
+
+``` /app/views/products/index.html.erb
+<%= form_tag edit_multiple_products_path, method: :get do %>
+  <!-- table of products omitted -->
+  <%= submit_tag "Edit Checked" %> 
+<% end %>
+```
+
+<p>As with our previous solution we&rsquo;ll need to add this new route to the routes file. We&rsquo;ll also add a route for a PUT request to handle when the form is submitted.</p>
+
+``` /config/routes.rb
+Store::Application.routes.draw do
+  root to: 'products#index'
+  resources :products do
+    collection do
+      get :edit_multiple
+      put :update_multiple
+    end
+  end
+end
+```
+
+<p>We can now add these actions in the controller. We&rsquo;ll start with <code>edit_multiple</code>.</p>
+
+``` /app/controllers/products_controller.rb
+def edit_multiple
+  @products = Product.find(params[:product_ids])
+end
+```
+
+<p>We&rsquo;ll need a template to go with this. In it we want to display a form and we&rsquo;ll use <code>form_tag</code> for this. This will submit to the <code>update_products_path</code> and use the <code>put</code> method. In this form we want to loop through all the products that were selected and display fields for each one. The tricky part is displaying fields for multiple records. Normally we&rsquo;d do this through a form builder but we can&rsquo;t do that when we&rsquo;re using <code>form_tag</code>. The trick here is to use <code>fields_for</code>, which is usually something we call on a form builder object but which we can also call directly. This is great if we want to edit multiple models without having a parent model that we can use <code>form_for</code> with. We can pass in a prefix as the first argument to this and using a name with empty square brackets will mean that these are filled with the <code>id</code> of the product, if we pass the product in as a second argument.  This gives us a form builder object that we can call fields on. We already have all the product fields in a partial so we can copy and paste them from there into here then make a few modifications so that it works here. This form includes error messages and we&rsquo;ll cover validations shortly.</p>
+
+``` /app/views/products/edit_multiple.html.erb
+<h1>Edit Checked Products</h1>
+
+<%= form_tag update_multiple_products_path, method: :put do %>
+  <% @products.each do |product| %>
+    <h2><%= product.name %></h2>
+    <%= fields_for "products[]", product do |f| %>
+      <% if product.errors.any? %>
+        <div id="error_explanation">
+          <h2><%= pluralize(product.errors.count, "error") %> prohibited this product from being saved:</h2>
+          <ul>
+          <% product.errors.full_messages.each do |msg| %>
+            <li><%= msg %></li>
+          <% end %>
+          </ul>
+        </div>
+      <% end %>
+      <div class="field">
+        <%= f.label :name %><br />
+        <%= f.text_field :name %>
+      </div>
+      <div class="field">
+        <%= f.label :price %><br />
+        <%= f.text_field :price %>
+      </div>
+      <div class="field">
+        <%= f.label :category_id %><br />
+        <%= f.collection_select :category_id, Category.order("name"), :id, :name %>
+      </div>
+      <div class="field">
+        <%= f.check_box :discontinued %>
+        <%= f.label :discontinued %>
+      </div>
+    <% end %>
+  <% end %>
+  <div class="actions">
+    <%= submit_tag "Update" %>
+  </div>
+<% end %>
+```
+
+<p>If we reload the list page now, select a couple of products then click the button we&rsquo;ll be taken to our new form.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1478/original/E165RI03.png" width="800" height="550" alt="We now have a form for each product that we want to update."/>
+</div>
+
+<p>Note that all the fields for the selected products are filled in. When we submit this form we want the products to be updated with the changes we&rsquo;ve made. If we look at the source for the page we can see how the form is submitted by looking at the field names. Each form field has a name based on the <code>id</code> of the product and the attribute, for example <code>products[1][name]</code>. This means that the <code>products</code> parameter is submitted as a hash, with a key of the product&rsquo;s <code>id</code> and a value containing the attributes that are sent through the form. We&rsquo;ll handle the submission in the <code>ProductsController</code>. Instead of using <code>update_all</code> we&rsquo;ll use <code>update</code> this time. This accepts two arguments, the first being an array of <code>id</code>s and the second an array of attributes which map to these <code>id</code>s. We can fetch both of these from the <code>products</code> params.</p>
+
+``` /app/controllers/products_controller.rb
+def update_multiple
+  Product.update(params[:products].keys, params[:products].values)
+  redirect_to products_path
+end
+```
+
+<p>If we make changes to some of the fields in the form now and submit it the products will be updated.</p> 
+
+<p>Our form works but we still have to get validations working. If we submit invalid data we want the form to be displayed again with error messages visible so that we can fix them. Our <code>Product</code> model doesn&rsquo;t currently have any validations so we&rsquo;ll add one for the <code>price</code> attribute to check that it&rsquo;s a number.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :discontinued, :category_id
+  validates_numericality_of :price
+end
+```
+
+<p>In the controller we need to change the way our <code>update_multiple</code> action works so that it redisplays the form when there are validation errors. To do that we need to understand how <code>Product.update</code> works. This method returns all the products whether they were updated or not. We&rsquo;ll get these and use <code>reject!</code> to filter the list so that we&rsquo;re left with only those with errors. If this filtered list is empty we know that all the products are valid and we can redirect back to the list. Otherwise we&rsquo;ll display the form again, but with only the invalid products showing.</p>
+
+``` /app/controllers/products_controller.rb
+def update_multiple
+  @products = Product.update(params[:products].keys, params[:products].values)
+  @products.reject! { |p| p.errors.empty? }
+  if @products.empty?
+    redirect_to products_path
+  else
+    render "edit_multiple"
+  end
+end
+```
+
+<p>If we select a couple of products now and modify them, but make the price blank for one of them when we submit the form we&rsquo;re redirected back to it with just the invalid product&rsquo;s fields showing and an error message is displayed.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1479/original/E165RI04.png" width="800" height="600" alt="If there are any invalid products we&rsquo;re shown the form for them again."/>
+</div>
+
+<p>This solution is pretty much complete. We can now edit multiple products in a single form and we have validations working, too.</p> 
+
+<h3>Using a Single Set of Fields</h3>
+
+<p>Our third approach gives us the ability to edit multiple products using a single set of fields. We&rsquo;ll start by modifying our <code>edit_multiple</code> template and move our <code>fields_for</code> call outside of the products loop. This means that we&rsquo;ll need to remove any mention of the product in the code that we&rsquo;ve moved so we&rsquo;ll change the argument that we pass to <code>fields_for</code> to <code>:product</code> so that the fields are nested in a product hash. We&rsquo;ll also remove the validations for now.</p>
+
+``` /app/views/products/edit_multiple.html.erb
+<h1>Edit Checked Products</h1>
+
+<%= form_tag update_multiple_products_path, method: :put do %>
+  <ul>
+  <% @products.each do |product| %>
+    <li>
+      <%= hidden_field_tag "product_ids[]", product.id %>
+      <%= product.name %>
+    </li>
+  <% end %>
+  </ul>
+  <%= fields_for :product do |f| %>
+    <div class="field">
+      <%= f.label :name %><br />
+      <%= f.text_field :name %>
+    </div>
+    <div class="field">
+      <%= f.label :price %><br />
+      <%= f.text_field :price %>
+    </div>
+    <div class="field">
+      <%= f.label :category_id %><br />
+      <%= f.collection_select :category_id, Category.order("name"), :id, :name %>
+    </div>
+    <div class="field">
+      <%= f.check_box :discontinued %>
+      <%= f.label :discontinued %>
+    </div>
+  <% end %>
+  <div class="actions">
+    <%= submit_tag "Update" %>
+  </div>
+<% end %>
+```
+
+<p>Note that we&rsquo;re displaying a list of all the products that are being edited in an unordered list at the top of the page. The changes we&rsquo;ve made mean that we&rsquo;ll lose the <code>id</code>s of the products that we&rsquo;re updating so we&rsquo;ve added them back in hidden fields using the same loop we use to show the names.</p>
+
+<p>We can try this out now. If we select a couple of products from the list and click &ldquo;Edit Checked&rdquo; we&rsquo;re now taken to a form that shows a single set of fields and a list of the products that we&rsquo;re changing.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1480/original/E165RI05.png" width="800" height="500" alt="We now have a single form for updating multiple products"/>
+</div>
+
+<p>What we want to do next is have the ability to set any fields here and have all the relevant products update when we submit the form. We have a problem, though. Some fields will be changed even if we don&rsquo;t want them to be, such as the category. We don&rsquo;t have a way to select an option that will leave all the fields unchanged and there&rsquo;s a similar problem with the &ldquo;discontinued&rdquo; checkbox. We&rsquo;ll fix this by changing  &ldquo;discontinued&rdquo; to a select menu and adding a blank option to it and to the category field.</p>
+
+``` /app/views/products/edit_multiple.html.erb
+<div class="field">
+  <%= f.label :category_id %><br />
+  <%= f.collection_select :category_id, Category.order("name"), :id, :name, include_blank: true %>
+</div>
+<div class="field">
+  <%= f.label :discontinued %>
+  <%= f.select :discontinued, [["Yes", true], ["No", false]], include_blank: true %>
+</div>
+```
+
+<p>We now have the ability to select a blank option for the &ldquo;category&rdquo; and &ldquo;discontinued&rdquo; fields that we can use when we don&rsquo;t want to update those fields for the selected products. We&rsquo;ll need to modify our <code>update_multiple</code> action and <code>Product.update</code> won&rsquo;t do what we want to do now. Instead we&rsquo;ll fetch the products that match the <code>id</code>s and then in our <code>reject</code> call we&rsquo;ll update the non-blank attributes for each product. We do this by calling <code>reject</code> on the form&rsquo;s <code>params</code> and rejecting the blank ones.</p>
+
+``` /app/controllers/products_controller.rb
+def update_multiple
+  @products = Product.find(params[:product_ids])
+  @products.reject! do |product|
+    product.update_attributes(params[:product].reject { |k,v| v.blank? })
+  end
+  if @products.empty?
+    redirect_to :products_url
+  else
+    render "edit_multiple"
+  end
+end
+```
+
+<p>If the validations fail for any of the products then <code>update_attributes</code> will return <code>false</code> which will cause the product not to be rejected from the <code>@products</code> array. This means that the array will not be empty and the form will be redisplayed.  We removed the error message code from the template earlier but we&rsquo;ll replace it now with some code that will display the errors for the selected products where we list them out at the top of the page.</p>
+
+``` /app/views/products/edit_multiple.html.erb
+<ul>
+ <% @products.each do |product| %>
+   <li>
+    <%= hidden_field_tag "product_ids[]", product.id %>
+    <%= product.name %>
+    <ul class="errors">
+      <% product.errors.full_messages.each do |msg| %>
+        <li><%= msg %></li>
+      <% end %>
+    </ul>
+  </li>
+<% end %>
+</ul>
+```
+
+<p>If we enter an invalid value in one of the form fields now then click &ldquo;Update&rdquo; we&rsquo;ll be taken back to the form with an error message showing for each product.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1481/original/E165RI06.png" width="800" height="550" alt="Error messages are shown for each invalid product."/>
+</div>
+
+<p>This works, but we&rsquo;ve lost the data that we entered in the form. It would be better if it persisted. We can fix this by setting an instance variable called <code>@product</code> to a new <code>Product</code> and passing it the parameters from the form.</p> 
+
+``` /app/controllers/products_controller.rb
+if @products.empty?
+  redirect_to :products_url
+else
+  @product = Product.new(params[:product])
+  render "edit_multiple"
+end
+```
+
+<p>The call to <code>fields_for</code> in the template will pick up this variable and use it to populate the fields. </p>
+
+<h3>Relative Values</h3>
+
+<p>We&rsquo;ll finish off by showing one more trick. If we&rsquo;re editing multiple records through a single field we might want the ability to enter new relative values for the fields. For example we might want to put a number of products on sale and reduce their price by 20% by entering &ldquo;-20%&rdquo; in the price field. We can do this by using virtual attributes, which were covered back in <a href="http://railscasts.com/episodes/16-virtual-attributes-revised">episode 16</a>. We&rsquo;ll create a virtual attribute called <code>price_modification</code> in the <code>Product</code> model.</p>
+
+``` /app/models/product.rb
+class Product < ActiveRecord::Base
+  belongs_to :category
+  attr_accessible :name, :price, :discontinued, :category_id, :price_modification
+  validates_numericality_of :price
+
+  attr_reader :price_modification
+
+  def price_modification=(new_price)
+    @price_modification = new_price
+    if new_price.to_s.ends_with? "%"
+      self.price += (price * (new_price.to_d/100)).round(2)
+    else
+      self.price = new_price
+    end
+  end
+end
+```
+
+<p>When we set this field we&rsquo;ll also set the price, depending on whether or not the entered value ends with a percent sign. If it does we&rsquo;ll modify price based on the percentage that was entered and if not we&rsquo;ll set the value that was entered. We&rsquo;ll also need to adjust our template so that it uses our virtual attribute.</p>
+
+``` /app/views/products/edit_multiple.html.erb
+<div class="field">
+  <%= f.label :price_modification %><br />
+  <%= f.text_field :price_modification %>
+</div>
+```
+
+<p>We can now enter absolute or relative prices to modify products&rsquo; prices.</p>

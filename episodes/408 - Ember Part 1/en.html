@@ -1,0 +1,296 @@
+<p>In this episode we&rsquo;ll take a look at Ember.js, a JavaScript framework for building rich client-side applications that has recently hit Release Candidate 1. To demonstrate it we&rsquo;ll build the same Raffler application we&rsquo;ve built in the past with other frameworks so that we can compare it with Angular.js, Meteor and Backbone.  In this app we can add entries to a raffle and draw random winners, the most recent of which should be displayed in red.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1482/original/E408I00.png" width="800" height="500" alt="Our Raffler application."/>
+</div>
+
+<h3>Getting Started With Ember</h3>
+
+<p>We&rsquo;ll start by creating a new Rails application called <code>raffler</code>.</p>
+
+``` terminal
+$ rails new raffler
+```
+
+<p>As we&rsquo;re building a single page application we can use the  <code>ApplicationController</code> as the main page. We&rsquo;ll put the template for this page in a new <code>application</code> directory under <code>app/views</code>. We&rsquo;ll leave this <code>index.html.erb</code> template blank for now as it will be filled by Ember.js. In the routes file we&rsquo;ll create a new <code>root</code> route to point to our action.</p> 
+
+``` /config/routes.rb
+Raffler::Application.routes.draw do
+  root to: 'application#index'
+end
+```
+
+<p>We don&rsquo;t need to define the index action in the ApplicationController as the template will be used directly. We&rsquo;ll also remove the public/index.html file now. If this was a serious production application we&rsquo;d probably make a separate controller for this to avoid unwanted template inheritance but using the ApplicationController directly is a neat trick for our small example app. To complete the set up of our application we&rsquo;ll add some CSS to a new layout.css.scss file. There&rsquo;s too much code to show here, you can find the stylesheet on <a href="https://github.com/railscasts/408-ember-part-1/blob/master/raffler-after/app/assets/stylesheets/layout.css.scss">Github</a>.</p>
+
+<p>When we visit the home page of our application now we&rsquo;ll see a blank page which means that we&rsquo;re ready to start adding functionality through Ember. To do this we&rsquo;ll use the official <a href="https://github.com/emberjs/ember-rails">ember-rails gem</a>, which integrates nicely with the asset pipeline. (Alternatively we could download the source code from the site and include it manually.) The gem is added in the usual way, by adding it the the gemfile and running <code>bundle</code> to install it.</p>
+
+``` /Gemfile
+gem 'ember-rails'
+```
+
+<p>Next we&rsquo;ll need to run a generator that the gem supplies.</p>
+
+``` terminal
+$ rails g ember:bootstrap
+```
+
+<p>This generates a number of files and we&rsquo;ll look at some of these later. It also gives us instructions to add a line of code to the <code>configure</code> block of our application&rsquo;s environment files. </p>
+
+``` /config/environments/development.rb
+config.ember.variant = :development
+```
+
+<p>We&rsquo;ll add the same line to the <code>test.rb</code> file in case we add any integration-level tests later and a similar line in <code>production.rb</code> but with the value set to <code>:production</code>. The ember-rails gem is under active development so these steps may not be necessary in future versions. We now have a number of new files under <code>app/assets/javascripts</code> and we&rsquo;ll start by looking at <code>application.js</code>.</p>
+
+``` /app/assets/javascripts/application.js
+//= require jquery
+//= require jquery_ujs
+//= require handlebars
+//= require ember
+//= require ember-data
+//= require_self
+//= require raffler
+Raffler = Ember.Application.create();
+```
+
+<p>The generator has added some lines to this manifest file, including <code>ember</code>, <code>ember-data</code> and <code>handlebars</code> which it uses for templates. There is also a line for creating a new Ember app called <code>Raffler</code> and this name will be used as a namespace throughout our JavaScript application. This file has a <code>require_tree .</code> line at the end which we can remove as all the JavaScript files for our app are included in the <code>raffler</code> manifest file.</p>
+
+<p>All of the generated files are plain JavaScript files. There is a pull request for adding CoffeeScript support to the gem but this isn&rsquo;t yet in place. For now we&rsquo;ll convert the files we use to CoffeeScript as we go along. Looking at these files it seems that there&rsquo;s a lot to an Ember application so we&rsquo;ll take it one step at a time, starting with templates. An <code>application.handlebar</code> file was generated for us and will be rendered automatically by Ember and inserted into the page&rsquo;s <code>body</code> element. We&rsquo;ll remove the default content from the file and add a <code>div</code> with an <code>id</code> of <code>container</code> so that we can style the page. We&rsquo;ll also add a heading so that we have something to look at.</p>
+
+``` /app/assets/javascripts/templates/application.handlebars
+<div id="container">
+  <h1>Raffler</h1>
+</div>
+```
+
+<p>If we reload the page now the template is rendered and inserted into the page.</p>
+
+<div class="imageWrapper">
+    <img src="http://asciicasts.com/system/photos/1483/original/E408I01.png" width="800" height="400" alt="Our basic template is now rendered."/>
+</div>
+
+<p>Handlebars is a template language similar to Mustache, which we covered in <a href="http://railscasts.com/episodes/295-sharing-mustache-templates">episode 295</a> and we can use it to output dynamic content using pairs of double curly brackets. Ember provides some built-in helpers that we can use in the templates and we&rsquo;ll use one now to insert a text field at the top of our page. We call <code>view</code> to render a view object and we can use <code>Ember.Textfield</code> to render a text box. This takes a number of options, one useful one is called <code>valueBinding</code> and we can set this to a property that we want to bind the text box&rsquo;s value to.</p> 
+
+``` /app/assets/javascripts/templates/application.handlebars
+<div id="container">
+  <h1>Raffler</h1>
+  {{view Ember.TextField valueBinding="newEntryName"}}
+  {{newEntryName}}
+</div>
+```
+
+<p>Here we&rsquo;ve bound the value to a <code>newEntryName</code> property and we output the value of this property below the text box. If we reload the page now and start typing in the text box, whatever we type will be shown on the page.</p>  
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1484/original/E408I02.png" width="800" height="400" alt="Any text we type into the textbox is now instantly reflected."/>
+</div>
+
+<p>The context of an Ember template is the controller. In this case we have our application template with its <code>newEntryName</code> property and this will be set on the <code>ApplicationController</code> which is defined in the <code>application_controller.js.coffee</code> file. This also applies to any actions that we trigger from the template. We&rsquo;ll demonstrate this by adding an action called <code>addEntry</code> that will fire when we add a new entry.</p>
+
+``` /app/assets/javascripts/templates/application.handlebars
+<div id="container">
+  <h1>Raffler</h1>
+  {{view Ember.TextField valueBinding="newEntryName" action="addEntry"}}
+  {{newEntryName}}
+</div>
+```
+
+<p>Next we need to define this function in our controller. For now we&rsquo;ll just have it alert the <code>newEntryName</code> property and then reset it back to an empty string so that the form field is cleared.</p>
+
+``` /app/assets/javascripts/controllers/application_controller.js.coffee
+Raffler.ApplicationController = Ember.Controller.extend
+  addEntry: -> 
+    alert @newEntryName
+    @newEntryName = ""
+```
+
+<p>This won&rsquo;t work as Ember bindings will not automatically detect a property that it set this way. Instead we need to use the get and set functions for each property that we want to access or update, like this:</p>
+
+``` /app/assets/javascripts/controllers/application_controller.js.coffee
+Raffler.ApplicationController = Ember.Controller.extend
+  addEntry: -> 
+    alert @get('newEntryName')
+    @set('newEntryName', "")
+```
+
+<p>If we enter a name into the text box now and hit return we&rsquo;ll see the alert showing the name that we entered.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1485/original/E408I03.png" width="800" height="400" alt="An alert now shows when we submit the form."/>
+</div>
+
+<p>After we dismiss the alert the text field is cleared.</p>
+
+<p>Next we&rsquo;ll modify our application so that when we submit an entry it&rsquo;s added to a list below the text field. We&rsquo;ll add a new property to our controller called <code>entries</code> and give it a default value of an empty array. Instead of alerting an entry when it&rsquo;s submitted we&rsquo;ll add it to the list instead. We can&rsquo;t simply <code>push</code> the new entry on to the list as the won&rsquo;t update the binding to the view. Instead we need to use a function that Ember add to array objects called <code>pushObject</code>. This way Ember will detect the change and update the bindings.</p>
+
+``` /app/assets/javascripts/controllers/application_controller.js.coffee
+Raffler.ApplicationController = Ember.Controller.extend
+  entries: []
+
+  addEntry: -> 
+    @entries.pushObject name: @get('newEntryName')
+    @set('newEntryName', "")
+```
+
+<p>Next we need to modify our template and render the list. We&rsquo;ll render the items in an unordered list and we loop through each entry by calling <code>#each</code> and passing it the <code>entries</code> array. Each entry becomes the context within the block and we can just call name to render out each entry&rsquo;s name.</p>
+
+``` /app/assets/javascripts/templates/application.handlebars
+<ul>
+   {{#each entries}}
+   <li>{{name}}</li>
+   {{/each}}
+</ul>
+```
+
+<p>If we reload the page now then enter some names they&rsquo;ll be added to the list.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1486/original/E408I04.png" width="800" height="400" alt="Names we enter are now added to the list."/>
+</div>
+
+<h3>Using Different Templates</h3>
+
+<p>So far we&rsquo;ve been building everything through our application template and controller which Ember isn&rsquo;t really designed to do. The template should act more like a layout template in Rails where it should contain everything that is consistent through the different states of our application. Our application is so simple that it only really has one state, but it&rsquo;s still a good idea to move most of the code in the template out into a separate template and controller. To do this we&rsquo;ll start by making a new template and moving the text field and list of entries into it.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+{{view Ember.TextField valueBinding="newEntryName" action="addEntry"}}
+<ul>
+   {{#each entries}}
+   <li>{{name}}</li>
+   {{/each}}
+</ul>
+```
+
+<p>We also need to set up an entries controller to handle this behaviour. We&rsquo;ll move all the logic from the <code>ApplicationController</code> into it.</p>
+
+``` /app/assets/javascripts/controllers/entries_controller.js.coffee
+Raffler.EntriesController = Ember.Controller.extend
+  entries: []
+
+  addEntry: -> 
+    @entries.pushObject name: @get('newEntryName')
+    @set('newEntryName', "")
+```
+
+<p>We&rsquo;re not quite finished with this extraction yet as we still need to have Ember render out the entries from within the application template. We can do this by calling <code>outlet</code> which works in a similar way to <code>yield</code> in a layout template in Rails and which will render out a template and controller based on the current route.</p>
+
+``` /app/assets/javascripts/templates/application.handlebars
+<div id="container">
+  <h1>Raffler</h1>
+  {{outlet}}
+</div>
+```
+
+<p>This means that we&rsquo;ll need to define a route, which we can do in the router file.</p>
+
+``` /app/assets/javascripts/router.js.coffee
+Raffler.Router.map ->
+  @route 'entries', path: '/'
+```
+
+<p>Here&rsquo;s we&rsquo;ve added a new route and passed it the name of the template. We can pass an optional path argument here which we&rsquo;ve done to make this the root route. One benefit of making this extraction is that we can further customize our <code>EntriesController</code>. It&rsquo;s designed to manage entries, which are an array of records, and Ember provides a custom controller for doing just this called <code>ArrayController</code>. We&rsquo;ll  modify our <code>EntriesController</code> controller to inherit from this instead.</p>
+
+``` /app/assets/javascripts/controllers/entries_controller.js.coffee
+Raffler.EntriesController = Ember.ArrayController.extend
+  addEntry: -> 
+    @pushObject name: @get('newEntryName')
+    @set('newEntryName', "")
+```
+
+<p>This makes the controller itself behave like an array by delegating various function calls to its internal content array. We no longer need to set the <code>entries</code> array in the controller and we can now call pushObject directly on the controller to add it to the internal array. We do need to set the initial for this controller and this is often done in the router. We can customize what happens when we visit our entries route by defining an <code>Raffler.EntriesRoute</code> class and having it inherit from <code>Ember.Route</code>. If we define a <code>setupController</code> function here it will have the controller instance passed in to it which allows us to prepare it to be rendered. To set the internal array we set the content property and we&rsquo;ll set this to an internal array for now.</p>
+
+``` /app/assets/javascripts/router.js.coffee
+Raffler.Router.map ->
+  @route 'entries', path: '/'
+
+Raffler.EntriesRoute = Ember.Route.extend
+  setupController: (controller) -> controller.set('content', [])
+```
+
+<p>One possible point of confusion here is that a route in Ember is more like a controller action in Rails in that it prepares content to be rendered. Our application does have a <code>routes</code> directory where this class could go but we&rsquo;ll keep all the routing information in a single file until it becomes more complex and needs to be moved out into separate files. We&rsquo;re not quite done here yet. We have an <code>EntriesController</code> with an initial array but we still need to configure our entries template. This loops through an <code>entries</code> array that we no longer have. Instead we can now loop through the controller directly as it behaves like an array and we can access our entries through it.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<ul>
+   {{#each controller}}
+   <li>{{name}}</li>
+   {{/each}}
+</ul>
+```
+
+<p>When we try our application now it still works like it did before but the entries are being managed by the <code>ArrayController</code>.</p>
+
+<h3>Drawing Winners</h3>
+
+<p>Next we&rsquo;ll add a &ldquo;Draw Winner&rdquo; button to the form so that we can select a random entrant and mark them as the winner. To click a function on the controller when the button is clicked we use an <code>action</code> helper and pass it the name of the function that we want to trigger.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<button {{action drawWinner}}>Draw Winner</button>
+```
+
+<p>We can do write this function in the controller.</p>
+
+``` /app/assets/javascripts/controllers/entries_controller.js.coffee
+drawWinner: ->
+  pool = @rejectProperty('winner')
+  if pool.length > 0
+    entry = pool[Math.floor(Math.random()*pool.length)]
+    entry.winner = true
+```
+
+<p>Ember adds several enumerable functions to arrays and we use one of them here. The <code>@rejectProperty</code> function will loop through all the entries here and reject the ones whose <code>winner</code> property isn&rsquo;t truthy. If we find any matching entries then we pick one at random from the pool and mark it as a winner. We need to display the winning entries on the page so we&rsquo;ll modify our template to do this.</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<li>
+  {{name}}
+  {{#if winner}}
+    <span class="winner">WINNER</span>
+  {{/if}}
+</li>
+```
+
+<p>When we try this out, however, it doesn&rsquo;t work and clicking the button appears to do nothing. In these situations it&rsquo;s always a good idea to check the browser&rsquo;s console first for any errors. If there are none the next thing to check should be our bindings as we might have updated something in a way that the bindings can&rsquo;t detect. In this case the problem is in our controller. We set the winning entry&rsquo;s <code>winner</code> property directly here but we should use the <code>set</code> function instead so that the bindings are updated. That said, we can&rsquo;t just call set on the <code>entry</code> object as this is a plain JavaScript object, not an Ember object. When we use <code>@pushObject</code> in the controller we&rsquo;re creating a JavaScript object. We need to modify this to create an Ember object instead. We can use set on this to set properties and the bindings will keep track of it and update the view accordingly.</p>
+
+``` /app/assets/javascripts/controllers/entries_controller.js.coffee
+Raffler.EntriesController = Ember.ArrayController.extend
+  addEntry: -> 
+    @pushObject Ember.Object.create(name: @get('newEntryName'))
+    @set('newEntryName', "")
+
+  drawWinner: ->
+    pool = @rejectProperty('winner')
+    if pool.length > 0
+      entry = pool[Math.floor(Math.random()*pool.length)]
+      entry.set('winner', true)
+```
+
+<p>When we reload the page now and add some entrants clicking the button selects a winner, just like we want.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1487/original/E408I05.png" width="800" height="x00" alt="Clicking the button now selects a winner."/>
+</div>
+
+<p>We want the most recent winner to be displayed in a different colour. To do this we can add another CSS class to the &ldquo;WINNER&rdquo; text for that winner. To make HTML properties dynamic we can wrap them in a call to <code>bindAttr</code>, like this:</p>
+
+``` /app/assets/javascripts/templates/entries.handlebars
+<span {{bindAttr class="winner highlight"}}>WINNER</span>
+```
+
+<p>This will look for the <code>winner</code> and <code>highlight</code> properties on the entry object and only set these in the class if the property values are true. This means that if we add a <code>highlight</code> property to a winner this class will be included in the HTML. Of course we only want this to apply to the last picked winner so we&rsquo;ll remove that property from all the entries before picking a new winner. We can do this by using the <code>@setEach</code> function that Ember provides.</p>
+
+``` /app/assets/javascripts/controllers/entries_controller.js.coffee
+drawWinner: ->
+  @setEach('highlight', false)
+  pool = @rejectProperty('winner')
+  if pool.length > 0
+    entry = pool[Math.floor(Math.random()*pool.length)]
+    entry.set('winner', true)
+    entry.set('highlight', true)
+```
+
+<p>When we choose some winners now the most recent is highlighted.</p>
+
+<div class="imageWrapper">
+  <img src="http://asciicasts.com/system/photos/1488/original/E408I06.png" width="800" height="x00" alt="The most recent winner is now show in red."/>
+</div>
+
+<p>Our application is coming along nicely and we&rsquo;ve completed most of the functionality for the client-side. The data on the page isn&rsquo;t persisted at all, though, and if we reload the page it disappears. In part 2 we&rsquo;ll show how to persist this data to the Rails app using Ember data, along with some other things including view objects and computed properties.</p>
